@@ -59,8 +59,38 @@ python -m cfl sync                    # everything, in dependency order
 python -m cfl sync rosters matchups   # just the fast-changing bits
 ```
 
-Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `schedule`, `match`. Matchup scores
+Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `schedule`, `match`,
+`salaries`. Matchup scores
 for completed periods are fetched once and skipped after that. Every run is recorded in `sync_log`.
+
+## Salaries and the cap
+
+The league tracks contracts in a Google Sheet per team, not in Fantrax. List the sheets in
+`salary_sheets.json` (git-ignored; copy `salary_sheets.example.json`). Each key is a team id,
+a unique part of a team name, or `me`. Each value is the sheet URL with the tab's `gid`, or a
+path to a CSV export:
+
+```json
+{ "me": "https://docs.google.com/spreadsheets/d/<id>/edit?gid=0#gid=0" }
+```
+
+Sheets must be shared as "anyone with the link can view". `python -m cfl sync salaries` reads them.
+
+- **Layout:** a header row starting with `Player`, then season columns (`2026/2027`, …) read by
+  position from the current season. Labels like `BUYOUTS`, `Injured Reserve` and `Minor League`
+  start sections; rows without a name (totals, spacers) are skipped.
+- **Name matching:** names are matched to the team's Fantrax roster, fuzzily, because typos like
+  "Slavkofsky" are common. Other players match only on an exact, unique name. The sync reports
+  every fuzzy match, every unmatched name, and rostered players with no salary on the sheet.
+- **Cap rules:** $220 cap (from Fantrax). Active and bench salaries count, plus buyouts; minors and
+  IR don't. Cutting a player is free at $3 or less; otherwise it's a buyout of half the salary,
+  rounded down.
+- **Where it shows up:** salaries and contract years are on every player. The team profile has a
+  `cap` summary covering this season and the next four. Trade evaluations show cap space
+  before/after for each team that has a sheet, flag incoming players whose salary is unknown, and
+  include buyout costs for auto-dropped players.
+- **Contract years:** the summary reports the total seasons left on contracts. How that maps onto
+  the 50-year contract bank isn't settled yet, so no limit is applied.
 
 ## API
 
@@ -72,6 +102,7 @@ Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it
 | `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com |
 | `GET /league`, `/categories`, `/teams`, `/standings` | league data |
 | `GET /teams/{id}/roster` | roster with per-game projections and z-scores |
+| `GET /teams/{id}/contracts` | salary-sheet contracts, how each matched, and the cap summary |
 | `GET /matchups?period=N` | schedule + category scores for a week |
 | `GET /players?status=fa&position=D&sort=value` | search the player pool |
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |

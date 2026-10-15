@@ -187,6 +187,28 @@ def team_roster(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
             "players": [A.player_summary(p, ctx) for p in players]}
 
 
+@app.get("/teams/{team_id}/contracts")
+def team_contracts(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+    """Contracts from the team's salary sheet, how each line matched a Fantrax player, and the
+    cap summary. Empty when no sheet is configured for the team (see salary_sheets.json)."""
+    s = get_settings()
+    ctx = _ctx(conn, s)
+    team_id = _team(ctx, team_id, s)
+    contracts = rows(conn, """
+        SELECT c.sheet_name, c.section, c.salary, c.years_remaining, c.salaries, c.player_id, c.match_method,
+               p.name AS player_name, ri.team_id AS current_team_id, ri.status AS roster_status
+        FROM contracts c
+        LEFT JOIN players p ON p.fantrax_id = c.player_id
+        LEFT JOIN roster_items ri ON ri.player_id = c.player_id AND ri.league_id = c.league_id
+             AND ri.period = (SELECT MAX(period) FROM roster_items WHERE league_id = c.league_id)
+        WHERE c.league_id = ? AND c.team_id = ? ORDER BY c.section, c.salary DESC""", (s.league_id, team_id))
+    for c in contracts:
+        c["salaries"] = json.loads(c["salaries"] or "[]")
+        c["on_this_roster"] = c["current_team_id"] == team_id
+    return {"team_id": team_id, "team_name": ctx.teams[team_id], "cap": A.cap_summary(ctx, team_id),
+            "contracts": contracts}
+
+
 @app.get("/matchups")
 def matchups(period: Optional[int] = None, conn: sqlite3.Connection = Depends(get_conn)):
     s = get_settings()

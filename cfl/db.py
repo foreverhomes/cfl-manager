@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS teams (
     id              TEXT PRIMARY KEY,
     league_id       TEXT NOT NULL,
     name            TEXT NOT NULL,
-    short_name      TEXT
+    short_name      TEXT,
+    salary_cap      REAL                -- from Fantrax rosters
 );
 
 CREATE TABLE IF NOT EXISTS periods (
@@ -178,6 +179,23 @@ CREATE TABLE IF NOT EXISTS goalie_stats (
     PRIMARY KEY (nhl_id, season_id)
 );
 
+-- Contracts read from each team's salary sheet. One row per sheet line.
+CREATE TABLE IF NOT EXISTS contracts (
+    league_id       TEXT NOT NULL,
+    team_id         TEXT NOT NULL,      -- team whose sheet lists the contract
+    sheet_name      TEXT NOT NULL,      -- name as written on the sheet
+    player_id       TEXT,               -- matched Fantrax id (NULL if unmatched)
+    match_method    TEXT,
+    section         TEXT NOT NULL,      -- ROSTER / IR / MINORS / BUYOUT (from sheet section labels)
+    salary          REAL,               -- current season
+    years_remaining INTEGER,            -- seasons with a salary, counting the current one
+    salaries        TEXT,               -- JSON list, current season first
+    source          TEXT,
+    synced_at       TEXT,
+    PRIMARY KEY (league_id, team_id, sheet_name)
+);
+CREATE INDEX IF NOT EXISTS idx_contracts_player ON contracts(player_id);
+
 CREATE TABLE IF NOT EXISTS nhl_games (
     game_id         INTEGER PRIMARY KEY,
     game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
@@ -199,6 +217,13 @@ CREATE TABLE IF NOT EXISTS sync_log (
 """
 
 
+# Columns added after a table first shipped: CREATE TABLE IF NOT EXISTS won't add them to an
+# existing database, so connect() adds any that are missing.
+ADDED_COLUMNS = {
+    "teams": {"salary_cap": "REAL"},
+}
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -206,6 +231,12 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    for table, columns in ADDED_COLUMNS.items():
+        have = {r[1] for r in conn.execute("PRAGMA table_info({})".format(table))}
+        for column, sql_type in columns.items():
+            if column not in have:
+                conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, sql_type))
+    conn.commit()
     return conn
 
 
