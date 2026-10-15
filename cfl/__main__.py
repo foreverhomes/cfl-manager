@@ -1,4 +1,4 @@
-"""CLI: python -m cfl {sync,serve,teams,profile,targets}"""
+"""CLI: python -m cfl {sync,serve,publish,teams,profile,targets,watch}"""
 
 import argparse
 import json
@@ -141,6 +141,20 @@ def cmd_targets(args) -> None:
             p["gp_this_season"], p["gp_last_season"], ", ".join("{} {:+.1f}".format(c, z) for c, z in top), extra))
 
 
+def cmd_watch(args) -> None:
+    from pathlib import Path
+
+    from . import watch as W
+    from .config import ROOT
+
+    settings = get_settings()
+    conn = connect(settings.db_path)
+    ctx = A.load_context(conn, settings)
+    team = _team_arg(ctx, args.team)
+    result = W.run(conn, ctx, team, Path(args.state or ROOT / "data" / "watch_state.json"))
+    print(json.dumps(result, indent=1) if args.json else W.render(result))
+
+
 def _fmt(v) -> str:
     if v is None:
         return "-"
@@ -171,6 +185,12 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     p = sub.add_parser("teams", help="List team ids")
     p.set_defaults(func=cmd_teams)
+
+    p = sub.add_parser("watch", help="Compare your team with the last check: IR moves, roster and category changes")
+    p.add_argument("team", nargs="?", help="Team id or part of the name (default: FANTRAX_MY_TEAM_ID)")
+    p.add_argument("--state", help="Snapshot file (default data/watch_state.json)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_watch)
 
     for name, func in (("profile", cmd_profile), ("targets", cmd_targets)):
         p = sub.add_parser(name)
