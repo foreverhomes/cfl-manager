@@ -74,10 +74,10 @@ def test_blend_weights_current_season_and_shrinks():
     assert A._blend(0, 0, 0, 0, 0.5, 5, 0.3) == pytest.approx(0.3)
 
 
-def _ctx_with(players, cats=("G", "Hit")):
+def _ctx_with(players, cats=("G", "Hit"), slots=None):
     categories = [A.Category(c, c, "SKATER", 1.0, False) for c in cats]
     return A.Context(LEAGUE, {}, categories, {"t1": "One", "t2": "Two", "t3": "Three"}, 1,
-                     {p.fantrax_id: p for p in players}, {"C": 1, "D": 1, "F": 1, "G": 0},
+                     {p.fantrax_id: p for p in players}, slots or {"C": 1, "D": 1, "F": 1, "G": 0},
                      20262027, 20252026, [])
 
 
@@ -122,3 +122,140 @@ def test_settings_defaults(monkeypatch):
     from cfl.config import get_settings
     s = get_settings()
     assert isinstance(s, Settings) and s.league_id
+
+
+def test_trade_targets_from_one_team():
+    players = [
+        _p("mine", ["C", "F"], "F", 1, team="t1"),
+        _p("two_a", ["C", "F"], "F", 5, team="t2"),
+        _p("two_kid", ["C", "F"], "F", 9, team="t2", status="MINORS"),
+        _p("three_a", ["C", "F"], "F", 8, team="t3"),
+        _p("free", ["C", "F"], "F", 7, team=None, status=None),
+    ]
+    ctx = _ctx_with(players)
+    assert ctx.resolve_team("tw") == "t2" and ctx.resolve_team("t") is None  # "t" matches all three
+
+    res = A.targets(None, ctx, "t1", source="trade", from_team="t2", min_games=0)
+    assert [t["fantrax_id"] for t in res["targets"]] == ["two_a"]
+    assert res["from_team"] == {"team_id": "t2", "team_name": "Two"}
+    res = A.targets(None, ctx, "t1", source="trade", from_team="t2", min_games=0, include_minors=True)
+    assert [t["fantrax_id"] for t in res["targets"]] == ["two_kid", "two_a"]
+
+    with pytest.raises(ValueError):
+        A.targets(None, ctx, "t1", source="fa", from_team="t2")
+    with pytest.raises(ValueError):
+        A.targets(None, ctx, "t1", source="trade", from_team="t1")
+
+
+def test_comparable_band():
+    assert A.comparable_band(40, 0.25) == (32, 50)
+    assert A.comparable_band(1, 0.25) == (1, 4)       # elite players still get a ±3 window
+    assert A.comparable_band(200, 0.25) == (160, 250)
+
+
+def test_trade_ranks_put_goalies_on_the_skater_scale():
+    # 4 skater slots : 1 goalie slot -> the #1 goalie lines up with the #4 skater.
+    players = [_p("s{}".format(i), ["C", "F"], "F", 10 - i) for i in range(1, 7)]
+    goalie = _p("g1", ["G"], "G", 3)
+    goalie.z = {"G": 3, "Hit": 0}
+    ctx = _ctx_with(players + [goalie], slots={"C": 2, "D": 2, "G": 1})
+    ranks = ctx.trade_ranks()
+    assert ranks["s1"] == 1 and ranks["s4"] == 4 and ranks["g1"] == 5 and ranks["s5"] == 6
+
+
+def test_trade_targets_for_an_offered_player_stay_in_value_band():
+    players = [
+        _p("mine", ["C", "F"], "F", 5, team="t1"),
+        _p("a", ["C", "F"], "F", 4, team="t1"),
+        _p("close", ["C", "F"], "F", 5.5, team="t2"),
+        _p("star", ["C", "F"], "F", 100, team="t2"),
+    ] + [_p("fill{}".format(v), ["C", "F"], "F", v, team="t3") for v in range(90, 10, -10)]
+    for p in players:
+        p.rates["goals"] = p.z["G"] / 10   # production tracks value
+    ctx = _ctx_with(players)
+    # star #1, fillers #2-#9, close #10, mine #11 -> comparable ranks #8-#14.
+    res = A.targets(None, ctx, "t1", source="trade", offer="mine", min_games=0)
+    got = {t["fantrax_id"]: t for t in res["targets"]}
+    assert set(got) == {"fill30", "fill20", "close"}
+    assert res["offer"]["trade_rank"] == 11 and res["offer"]["comparable_trade_ranks"] == [8, 14]
+
+    # Two lineup spots per team (C + F flex). close starts for t2, so t2 loses out by swapping him
+    # for "mine"; fill30 is bench depth on t3, so t3 neither gains nor loses.
+    assert got["fill30"]["your_gain"] > got["close"]["your_gain"] > 0
+    assert got["close"]["their_gain"] < 0 and not got["close"]["win_win"]
+    assert got["fill30"]["their_gain"] == pytest.approx(0, abs=1e-9)
+    assert [t["fantrax_id"] for t in res["targets"]][0] == "fill30"
+    assert ctx.players["close"].team_id == "t2" and ctx.players["mine"].team_id == "t1"   # restored
+
+    assert ctx.resolve_player("min", "t1") == "mine" and ctx.resolve_player("close", "t1") is None
+    with pytest.raises(ValueError):
+        A.targets(None, ctx, "t1", source="trade", offer="close")   # not on your roster
+
+
+def test_daily_lineups_give_depth_goalies_the_off_nights():
+    g = []
+    for fid, team, value in (("g1", "BOS", 3), ("g2", "CAR", 2), ("g3", "SEA", 1)):
+        p = _p(fid, ["G"], "G", value)
+        p.nhl_team, p.start_share = team, 0.5
+        p.rates = {"wins": 0.25}
+        g.append(p)
+    ctx = _ctx_with(g, cats=(), slots={"G": 2})
+    ctx.categories = [A.Category("W", "W", "GOALIE", 1.0, False)]
+    # 14-day window, 4 game days: all three play once, then SEA plays alone on three nights.
+    ctx.schedule = [frozenset({"BOS", "CAR", "SEA"}), frozenset({"SEA"}), frozenset({"SEA"}), frozenset({"SEA"})]
+    ctx.horizon_days = 14
+    games = A.lineup_games(ctx, "t1")
+    assert games["g1"] == pytest.approx(0.5) and games["g2"] == pytest.approx(0.5)   # 1 game / 2 weeks
+    assert games["g3"] == pytest.approx(1.5)   # benched the night all three play, starts the other 3
+    assert A._team_totals(ctx, games)["W"] == pytest.approx((0.5 + 0.5 + 1.5) * 0.25)
+
+
+def _trade_ctx():
+    """Two teams at a 3-player cap; production tracks value so trades move the needle."""
+    players = [
+        _p("a1", ["C", "F"], "F", 9, team="t1"), _p("a2", ["C", "F"], "F", 6, team="t1"),
+        _p("a3", ["D"], "D", 2, team="t1"),
+        _p("b1", ["C", "F"], "F", 8, team="t2"), _p("b2", ["D"], "D", 5, team="t2"),
+        _p("b3", ["D"], "D", 1, team="t2"),
+        _p("c1", ["C", "F"], "F", 7, team="t3"),
+    ]
+    for p in players:
+        p.rates["goals"] = p.z["G"] / 10
+    ctx = _ctx_with(players)
+    ctx.roster_cap = 3
+    return ctx
+
+
+def test_market_values_are_additive_value_over_replacement():
+    ctx = _trade_ctx()
+    mv, ranks = ctx.market_values(), ctx.trade_ranks()
+    # Ordered like trade rank, never negative, and the replacement level (3 teams x 3 skater slots
+    # = rank 9, past the end of this tiny pool, so the worst player) is worth zero.
+    ordered = sorted(mv, key=ranks.get)
+    assert [round(mv[f], 6) for f in ordered] == sorted((round(v, 6) for v in mv.values()), reverse=True)
+    assert mv["b3"] == 0 and mv["a1"] == pytest.approx(9 - 1)
+    # A package is worth the single player with at most its summed value.
+    assert ctx.equivalent_rank(mv["b2"] + mv["a3"]) == ranks["a2"]   # 4 + 1 = 5 = a2; c1 (6) is too much
+    assert ctx.equivalent_rank(0) == ranks["b3"]
+
+
+def test_evaluate_trade_two_for_one_drops_to_the_cap():
+    ctx = _trade_ctx()
+    res = A.evaluate_trade(ctx, "t1", give=["a3"], other_team_id="t2", get=["b1", "b2"])
+    me, them = res["sides"]
+    # t1 sends 1 and receives 2 -> 4 players, over the cap of 3: it drops its weakest (not a newcomer).
+    assert me["roster"] == {"before": 3, "after": 3, "cap": 3}
+    assert [p["fantrax_id"] for p in me["auto_dropped"]] == ["a2"]
+    assert them["roster"]["after"] == 2 and not them["auto_dropped"]
+    assert me["expected_category_wins"]["delta"] > 0 > them["expected_category_wins"]["delta"]
+    assert res["market"]["you_get"] > res["market"]["you_give"]
+    assert {p.fantrax_id for p in ctx.roster("t1")} == {"a1", "a2", "a3"}   # rosters restored
+
+    # No partner: just the cost of losing a player.
+    solo = A.evaluate_trade(ctx, "t1", give=["a1"])
+    assert len(solo["sides"]) == 1 and solo["sides"][0]["expected_category_wins"]["delta"] < 0
+
+    with pytest.raises(ValueError):
+        A.evaluate_trade(ctx, "t1", give=["b1"], other_team_id="t2")        # not your player
+    with pytest.raises(ValueError):
+        A.evaluate_trade(ctx, "t1", give=[], get=["b1"])                    # partner required

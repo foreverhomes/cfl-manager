@@ -178,6 +178,16 @@ CREATE TABLE IF NOT EXISTS goalie_stats (
     PRIMARY KEY (nhl_id, season_id)
 );
 
+CREATE TABLE IF NOT EXISTS nhl_games (
+    game_id         INTEGER PRIMARY KEY,
+    game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
+    season_id       INTEGER,
+    game_type       INTEGER,            -- 1 preseason, 2 regular season, 3 playoffs
+    away            TEXT NOT NULL,
+    home            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nhl_games_date ON nhl_games(game_date);
+
 CREATE TABLE IF NOT EXISTS sync_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     resource        TEXT NOT NULL,

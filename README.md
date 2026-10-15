@@ -15,8 +15,25 @@ python3 -m venv .venv
 cp .env.example .env            # then set FANTRAX_MY_TEAM_ID
 .venv/bin/python -m cfl sync    # ~2s, writes data/league.db
 .venv/bin/python -m cfl teams   # find your team id for .env
-.venv/bin/python -m cfl serve   # http://127.0.0.1:8000/docs
+.venv/bin/python -m cfl serve   # app at http://127.0.0.1:8000, API docs at /docs
 ```
+
+## Web app
+
+`python -m cfl serve` (add `--reload` while developing) serves the app at http://127.0.0.1:8000.
+There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
+
+- **Dashboard.** Shows expected category wins per week, projected strength, standings, and
+  skater-game and goalie-start volume. A category profile charts your projected strength against
+  the league average, with actual weekly W-L-T and need weights. A league heatmap shows every
+  team's projected rank in every category. A sortable roster table rounds it out. The team picker
+  in the header lets you view any team.
+- **Trade builder.** Select any of your players. Optionally pick a trade partner and their players.
+  - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in
+    expected category wins, per-category before/after, games and starts volume, roster-limit
+    drops, and market value moving each way.
+  - **Suggestions:** comparable-value targets for your selection are listed league-wide, or from
+    the chosen partner. **Add** pulls a suggested player into the trade.
 
 macOS has no bare `python` command, and the dependencies live in `.venv`. Either prefix commands
 with `.venv/bin/python` as above, or activate the venv once per terminal session
@@ -28,6 +45,7 @@ with `.venv/bin/python` as above, or activate the venv once per terminal session
 |---|---|---|
 | Fantrax public API (`/fxea/general/*`) | league settings, scoring categories, teams, schedule, rosters, standings, weekly matchup category scores, player IDs/eligibility/ADP | none |
 | NHL.com stats API (`api.nhle.com/stats/rest`) | per-player season stats: G, A, Pt, +/-, PPP, SOG, Hits, Blocks; goalie W, GA, SA, saves, SO, TOI | none |
+| NHL.com schedule (`api-web.nhle.com/v1/schedule`) | every game day of the season, used to project daily lineups | none |
 
 The Fantrax public API has no per-player stats, and its internal stats endpoint needs a login for
 private leagues. So player stats come from NHL.com. They're linked to Fantrax IDs by name, with
@@ -41,7 +59,7 @@ python -m cfl sync                    # everything, in dependency order
 python -m cfl sync rosters matchups   # just the fast-changing bits
 ```
 
-Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `match`. Matchup scores
+Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `schedule`, `match`. Matchup scores
 for completed periods are fetched once and skipped after that. Every run is recorded in `sync_log`.
 
 ## API
@@ -61,7 +79,10 @@ Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | free agents ranked by upgrade over your weakest player at the position |
 | `GET /analysis/teams/me/targets?source=trade&position=G` | players on other teams that fit your needs |
+| `GET /analysis/teams/me/targets?from_team=Ruff` | only one team's players (team id or unique part of the name; implies `source=trade`) |
+| `GET /analysis/teams/me/targets?offer=Connor` | trade targets of comparable value to one of your players (see below) |
 | `GET /analysis/teams/me/trade-partners` | teams whose strengths match your weaknesses, players each way, your trade chips |
+| `POST /analysis/trade` | cost/benefit of any trade, e.g. `{"give": [ids], "other_team_id": "Ruff", "get": [ids]}`; omit the partner to price losing players |
 
 Common analysis parameters:
 - `strategy`: `marginal` (default), `weakness` or `even`
@@ -79,9 +100,14 @@ Common analysis parameters:
    vs. an average goalie, weighted by workload.
 2. **z-scores** for each category, measured against the fantasy-relevant pool: the top
    *teams × active slots* players.
-3. **Team profiles.** Each team's best legal lineup (2C/2LW/2RW/6F/6D/2G from non-minors, non-IR
-   players) gives projected weekly totals per category, ranked across the league. The actual
-   season-to-date category W-L-T comes from Fantrax matchup scores.
+3. **Team profiles.** Lineups are set daily, so the projection walks every remaining game day
+   of the NHL schedule. Each day it fills the 2C/2LW/2RW/6F/6D/2G slots with the best non-minors,
+   non-IR players whose NHL team plays that night. Depth players (a third goalie, a 13th forward)
+   get credit for the nights the regulars sit. A goalie in the lineup is credited in proportion
+   to how often he starts for his NHL team. Totals are converted to per-week figures and ranked
+   across the league. The team profile shows each player's `lineup_games_per_week`, plus
+   `expected_starts_per_week` for goalies. The actual season-to-date category W-L-T comes from
+   Fantrax matchup scores.
 4. **Need weights.** In H2H each-category, an extra unit matters most in categories where several
    opponents are close to you. It matters least where you're already far ahead, or so far behind
    it's a lost cause. `marginal` puts a Gaussian kernel on your z-gap to each opponent;
@@ -95,7 +121,8 @@ cfl/
   db.py         SQLite schema + helpers
   sync.py       ingest + Fantrax↔NHL id matching
   analysis.py   projections, z-scores, team profiles, targets, trade partners
-  api.py        FastAPI app
+  api.py        FastAPI app (also serves the web app)
+  web/          dashboard + trade builder (HTML/CSS/JS, no build)
   __main__.py   CLI (sync / serve / teams / profile / targets)
 tests/          offline unit tests (pytest)
 data/           league.db (git-ignored)
@@ -107,4 +134,30 @@ CLI shortcuts for quick looks without the server:
 python -m cfl profile                  # your team (or pass a team id / part of a name)
 python -m cfl targets --position D
 python -m cfl targets --source trade --punt Hit
+python -m cfl targets --from-team Ruff --position D
+python -m cfl targets --offer "Kyle Connor" --tolerance 0.15
 ```
+
+### Like-for-like trades (`offer`)
+
+Pass `offer` (one or more players on your roster, comma-separated ids or unique parts of names)
+and targets only returns players of similar market value, ranked by how much the swap improves
+*your* category needs.
+
+- **Market value** is `trade_rank`, shown on every player. Skaters and goalies are each ranked
+  by equal-weight value, and goalie ranks are scaled by skater slots ÷ goalie slots (18 ÷ 2), so
+  the #1 goalie sits level with the #9 skater.
+- **Comparable** means a trade rank within ±`tolerance` of the offered player's (default 0.25:
+  #40 → #32–#50), never narrower than ±3 ranks.
+- **Packages** use `market_value`, which is additive: value over a replacement-level starter,
+  so depth players are worth ~0 and two of them never add up to a star. A package is compared
+  as the single player with the same summed value ("≈ #N").
+- **Roster limit:** a team pushed over the 25-player limit (active plus bench) drops its weakest
+  player in the simulation, and the result lists who.
+- Each 1-for-1 swap is **simulated**: both teams re-run their daily lineups with the new rosters.
+  **`your_gain`** and **`their_gain`** are the change in *expected category wins per week* (out of
+  12) against the rest of the league. This counts depth properly: a bench skater who fills off
+  nights has real value, and a 3rd goalie still starts when the top two are idle. `win_win` flags
+  deals where both gains are positive, which are the ones most likely to get accepted.
+- Combine with `from_team` to ask "what could I get from this team for X?"
+

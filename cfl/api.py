@@ -2,10 +2,13 @@
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import analysis as A
 from .config import Settings, get_settings
@@ -19,6 +22,15 @@ app = FastAPI(
 )
 
 # "+" in an unencoded query string arrives as a space, so "+/-" shows up as "/-" after stripping.
+WEB_DIR = Path(__file__).resolve().parent / "web"
+app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(str(WEB_DIR / "index.html"))
+
+
 CATEGORY_ALIASES = {"pm": "+/-", "plusminus": "+/-", "/-": "+/-", "svpct": "SV%"}
 
 
@@ -94,7 +106,8 @@ STRATEGY = Query("marginal", description="marginal (swing categories), weakness 
 SPREAD = Query(1.5, gt=0, description="marginal strategy only: wider = flatter weights")
 PUNT = Query(None, description="Comma-separated categories to ignore, e.g. Hit,PM")
 WEIGHTS = Query(None, description="Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)")
-LINEUP = Query("best", description="best = optimal lineup from non-minors/IR players; active = today's Fantrax lineup")
+LINEUP = Query("best", description="best = daily best lineups from non-minors/IR players over the rest-of-season "
+                                    "NHL schedule; active = only players currently ACTIVE in Fantrax")
 
 
 # --------------------------------------------------------------------------- sync & raw data
@@ -279,7 +292,16 @@ def profile(team_id: str, strategy: str = STRATEGY, spread: float = SPREAD, punt
 
 
 @app.get("/analysis/teams/{team_id}/targets")
-def targets(team_id: str, source: str = Query("fa", description="fa (waivers/free agents) or trade"),
+def targets(team_id: str,
+            source: Optional[str] = Query(None, description="fa (waivers/free agents) or trade. "
+                                                             "Defaults to trade when from_team/offer is set, else fa"),
+            from_team: Optional[str] = Query(None, description="Only players on this team: team id or a unique "
+                                                                "part of its name (implies source=trade)"),
+            offer: Optional[str] = Query(None, description="Player(s) on your roster to trade away, comma-separated "
+                                                            "ids or unique parts of names. Returns only players of "
+                                                            "comparable market value (implies source=trade)"),
+            tolerance: float = Query(0.25, gt=0, description="With offer: how far the trade rank may differ, as a "
+                                                              "fraction (0.25 = within 25%, at least ±3 ranks)"),
             position: Optional[str] = Query(None, description="F, D, G, C, LW or RW"),
             limit: int = 25, min_games: int = Query(5, description="Min NHL games (this + last season)"),
             include_minors: bool = False, strategy: str = STRATEGY, spread: float = SPREAD,
@@ -289,10 +311,30 @@ def targets(team_id: str, source: str = Query("fa", description="fa (waivers/fre
     s = get_settings()
     ctx = _ctx(conn, s)
     team_id = _team(ctx, team_id, s)
+    if from_team is not None:
+        resolved = ctx.resolve_team(from_team)
+        if resolved is None:
+            raise HTTPException(404, detail={"error": "No single team matches from_team '{}'".format(from_team),
+                                             "teams": [{"id": t, "name": n} for t, n in ctx.teams.items()]})
+        from_team = resolved
+    offer_ids: List[str] = []
+    for part in (offer.split(",") if offer else []):
+        resolved = ctx.resolve_player(part.strip(), team_id)
+        if resolved is None:
+            raise HTTPException(404, detail={
+                "error": "No single player on {} matches offer '{}'".format(ctx.teams[team_id], part.strip()),
+                "roster": sorted(p.name for p in ctx.roster(team_id) if p.z)})
+        offer_ids.append(resolved)
+    source = source or ("trade" if from_team or offer_ids else "fa")
     if source not in ("fa", "trade"):
         raise HTTPException(400, detail="source must be fa or trade")
-    return A.targets(conn, ctx, team_id, source=source, position=position, limit=limit, min_games=min_games,
-                     include_minors=include_minors, **_need_kwargs(ctx, strategy, spread, punt, weights, lineup))
+    try:
+        return A.targets(conn, ctx, team_id, source=source, position=position, limit=limit, min_games=min_games,
+                         include_minors=include_minors, from_team=from_team, offer=offer_ids or None,
+                         tolerance=tolerance,
+                         **_need_kwargs(ctx, strategy, spread, punt, weights, lineup))
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
 
 
 @app.get("/analysis/teams/{team_id}/trade-partners")
@@ -305,3 +347,33 @@ def trade_partners(team_id: str, per_team: int = 3, strategy: str = STRATEGY, sp
     team_id = _team(ctx, team_id, s)
     return A.trade_partners(conn, ctx, team_id, per_team=per_team,
                             **_need_kwargs(ctx, strategy, spread, punt, weights, lineup))
+
+
+class TradeRequest(BaseModel):
+    team_id: str = "me"
+    give: List[str] = []
+    other_team_id: Optional[str] = None
+    get: List[str] = []
+    lineup: str = "best"
+    spread: float = 1.5
+
+
+@app.post("/analysis/trade")
+def trade(req: TradeRequest, conn: sqlite3.Connection = Depends(get_conn)):
+    """Cost/benefit of a trade for both teams: change in expected category wins per week, per-category
+    before/after, games and starts volume, roster-limit drops and the market value moving each way.
+    Leave other_team_id empty to see what losing the `give` players costs you."""
+    s = get_settings()
+    ctx = _ctx(conn, s)
+    team_id = _team(ctx, req.team_id, s)
+    other = None
+    if req.other_team_id:
+        other = ctx.resolve_team(req.other_team_id)
+        if other is None:
+            raise HTTPException(404, detail="No single team matches '{}'".format(req.other_team_id))
+    if req.lineup not in ("best", "active"):
+        raise HTTPException(400, detail="lineup must be best or active")
+    try:
+        return A.evaluate_trade(ctx, team_id, req.give, other, req.get, lineup=req.lineup, spread=req.spread)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))

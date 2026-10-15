@@ -14,7 +14,7 @@ from .db import row, rows, transaction, upsert
 
 LOWER_IS_BETTER = {"GAA", "GA", "L"}
 TEAM_PSEUDO_POSITIONS = {"Tm", "TmS", "TmG"}
-RESOURCES = ("league", "players", "rosters", "standings", "matchups", "stats", "match")
+RESOURCES = ("league", "players", "rosters", "standings", "matchups", "stats", "schedule", "match")
 
 
 def now_iso() -> str:
@@ -281,6 +281,34 @@ def sync_stats(conn: sqlite3.Connection, nhl: NHLStatsClient, seasons: Sequence[
     return out
 
 
+def sync_schedule(conn: sqlite3.Connection, nhl: NHLStatsClient, league_id: str) -> Dict[str, Any]:
+    """NHL games between the league's start and end dates (drives daily-lineup projections)."""
+    lg = row(conn, "SELECT start_date, end_date FROM league WHERE id=?", (league_id,))
+    if not lg or not lg["start_date"] or not lg["end_date"]:
+        raise RuntimeError("League not synced yet; sync 'league' first")
+    start, end = lg["start_date"], lg["end_date"]
+    games, day = [], start
+    for _ in range(80):  # ~26 weeks in a season; guards against a non-advancing cursor
+        data = nhl.schedule_week(day)
+        for d in data.get("gameWeek", []):
+            if not (start <= d["date"] <= end):
+                continue
+            for g in d.get("games", []):
+                games.append({"game_id": g["id"], "game_date": d["date"], "season_id": g.get("season"),
+                              "game_type": g.get("gameType"), "away": g["awayTeam"]["abbrev"],
+                              "home": g["homeTeam"]["abbrev"]})
+        nxt = data.get("nextStartDate")
+        if not nxt or nxt <= day or nxt > end:
+            break
+        day = nxt
+    with transaction(conn):
+        # Replace the window wholesale so postponed / moved games don't linger.
+        conn.execute("DELETE FROM nhl_games WHERE game_date BETWEEN ? AND ?", (start, end))
+        upsert(conn, "nhl_games", games, ["game_id"])
+    return {"games": len(games), "regular_season": sum(1 for g in games if g["game_type"] == 2),
+            "from": start, "to": end}
+
+
 # --------------------------------------------------------------------------- id matching
 
 
@@ -413,6 +441,7 @@ def sync_all(conn: sqlite3.Connection, settings: Settings, resources: Optional[S
         "standings": lambda: sync_standings(conn, fx),
         "matchups": lambda: sync_matchups(conn, fx),
         "stats": lambda: sync_stats(conn, nhl, stat_seasons(conn, settings.league_id)),
+        "schedule": lambda: sync_schedule(conn, nhl, settings.league_id),
         "match": lambda: match_players(conn, settings.league_id),
     }
     # Always run in dependency order regardless of the order requested.

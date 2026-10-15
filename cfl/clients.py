@@ -78,6 +78,7 @@ class NHLStatsClient:
 
     def __init__(self):
         self.http = _Http("https://api.nhle.com/stats/rest/en")
+        self.web = _Http("https://api-web.nhle.com/v1")
 
     def _report(self, report: str, season_id: int) -> List[Dict[str, Any]]:
         data = self.http.get(
@@ -102,3 +103,7 @@ class NHLStatsClient:
 
     def goalie_stats(self, season_id: int) -> List[Dict[str, Any]]:
         return self._report("goalie/summary", season_id)
+
+    def schedule_week(self, day: str) -> Dict[str, Any]:
+        """League schedule for the week starting at `day` (YYYY-MM-DD); includes nextStartDate."""
+        return self.web.get("schedule/{}".format(day))

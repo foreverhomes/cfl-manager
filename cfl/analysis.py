@@ -5,8 +5,8 @@ Pipeline:
      season (weighted), shrunk slightly toward the league average for tiny samples.
   2. Convert each scoring category into a z-score against the fantasy-relevant pool
      (roughly the top N players, N = league-wide active roster slots).
-  3. Build each fantasy team's projected weekly category totals from its best lineup,
-     and rank teams per category.
+  3. Build each fantasy team's projected weekly category totals by filling every remaining
+     day's lineup with the best players whose NHL team plays that day, and rank teams per category.
   4. Turn a team's category standing into "need" weights and rank free agents /
      other teams' players by need-weighted value.
 """
@@ -15,8 +15,9 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from datetime import date
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .config import Settings
 from .db import row, rows
@@ -35,9 +36,10 @@ GOALIE_RATIOS = {"GAA", "SV%"}
 GOALIE_COLUMNS = ["wins", "losses", "shutouts", "goals_against", "saves", "shots_against", "toi_seconds"]
 
 PRIOR_SEASON_GAMES = 82
-GAMES_PER_WEEK = 3.5          # used only to express team projections as weekly totals
+GAMES_PER_WEEK = 3.5          # fallback when no NHL schedule is synced
 MIN_POOL_GAMES = 10           # games (this + last season) to count toward z-score baselines
 NON_LINEUP_STATUSES = {"MINORS", "INJURED_RESERVE"}
+CAPPED_STATUSES = {"ACTIVE", "RESERVE"}   # what counts against the roster limit
 
 
 class NotSynced(RuntimeError):
@@ -94,6 +96,13 @@ class Context:
     cur_season: int
     prior_season: int
     unsupported_categories: List[str]
+    _trade_ranks: Optional[Dict[str, int]] = field(default=None, repr=False)
+    # NHL teams playing on each remaining game day, and the calendar days in that window.
+    schedule: List[frozenset] = field(default_factory=list)
+    horizon_days: int = 0
+    roster_cap: Optional[int] = None
+    _equiv_ranks: Dict[str, float] = field(default_factory=dict, repr=False)
+    _market: Optional[Dict[str, float]] = field(default=None, repr=False)
 
     def cats(self, grp: str) -> List[Category]:
         return [c for c in self.categories if c.grp == grp and c.short_name not in self.unsupported_categories]
@@ -105,6 +114,86 @@ class Context:
         wanted = set(statuses) if statuses else None
         return [p for p in self.players.values()
                 if p.team_id == team_id and (wanted is None or p.roster_status in wanted)]
+
+    def resolve_team(self, value: str) -> Optional[str]:
+        """Team id from an exact id or a unique, case-insensitive piece of the team name."""
+        if value in self.teams:
+            return value
+        matches = [t for t, name in self.teams.items() if value.lower() in name.lower()]
+        return matches[0] if len(matches) == 1 else None
+
+    def resolve_player(self, value: str, team_id: str) -> Optional[str]:
+        """Player id on `team_id` from an exact id or a unique, case-insensitive piece of the name."""
+        roster = self.roster(team_id)
+        if any(p.fantrax_id == value for p in roster):
+            return value
+        matches = [p.fantrax_id for p in roster if value.lower() in p.name.lower()]
+        return matches[0] if len(matches) == 1 else None
+
+    def trade_ranks(self) -> Dict[str, int]:
+        """League-wide market rank (1 = best) on one scale for skaters and goalies.
+
+        Each group is ranked by equal-weight value; a goalie's rank is then multiplied by
+        skater slots / goalie slots, so the last starting goalie lines up with the last starting
+        skater (with 18 skater and 2 goalie slots, the #1 goalie sits level with the #9 skater).
+        """
+        if self._trade_ranks is None:
+            goalie_slots = max(self.slots.get("G", 0), 1)
+            ratio = max(sum(self.slots.values()) - self.slots.get("G", 0), 1) / goalie_slots
+            weights = {"S": self.league_weights("SKATER"), "G": self.league_weights("GOALIE")}
+            equiv = {}
+            for is_goalie in (False, True):
+                group = sorted((p for p in self.players.values() if p.z and (p.group == "G") == is_goalie),
+                               key=lambda p: player_value(p, weights), reverse=True)
+                for i, p in enumerate(group, 1):
+                    equiv[p.fantrax_id] = (i * ratio if is_goalie else i, is_goalie)
+            self._equiv_ranks = {fid: e[0] for fid, e in equiv.items()}
+            self._trade_ranks = {fid: i for i, fid in enumerate(sorted(equiv, key=equiv.get), 1)}
+        return self._trade_ranks
+
+    def market_values(self) -> Dict[str, float]:
+        """Additive market value: value over replacement on one curve for skaters and goalies.
+
+        A player's value is the equal-weight skater value at his skater-equivalent rank (goalies
+        mapped as in trade_ranks), minus the value of the last fantasy starter (rank = teams x
+        skater slots), floored at 0. Depth players are worth ~0, so a pile of them never adds
+        up to a star.
+        """
+        if self._market is None:
+            self.trade_ranks()
+            weights = {"S": self.league_weights("SKATER"), "G": self.league_weights("GOALIE")}
+            curve = sorted((player_value(p, weights) for p in self.players.values() if p.z and p.group != "G"),
+                           reverse=True)
+            if not curve:
+                self._market = {}
+                return self._market
+            skater_slots = max(sum(self.slots.values()) - self.slots.get("G", 0), 1)
+            replacement = curve[min(len(self.teams) * skater_slots, len(curve)) - 1]
+
+            def at(rank: float) -> float:
+                i = min(max(rank, 1.0), float(len(curve))) - 1
+                lo = int(math.floor(i))
+                hi = min(lo + 1, len(curve) - 1)
+                return curve[lo] + (curve[hi] - curve[lo]) * (i - lo)
+
+            self._market = {fid: max(0.0, at(r) - replacement) for fid, r in self._equiv_ranks.items()}
+        return self._market
+
+    def equivalent_rank(self, market_value: float) -> int:
+        """Trade rank of the best player whose market value doesn't exceed `market_value`."""
+        ranks, market = self.trade_ranks(), self.market_values()
+        for fid in sorted(ranks, key=ranks.get):
+            if market.get(fid, 0.0) <= market_value + 1e-9:
+                return ranks[fid]
+        return len(ranks)
+
+
+def comparable_band(rank: int, tolerance: float, min_window: int = 3) -> Tuple[int, int]:
+    """Trade ranks within ±tolerance of `rank` (multiplicative, so #40 at 0.25 -> #32-#50),
+    never narrower than ±min_window ranks so elite players still have comparables."""
+    lo = min(rank / (1 + tolerance), rank - min_window)
+    hi = max(rank * (1 + tolerance), rank + min_window)
+    return max(1, math.floor(lo)), math.ceil(hi)
 
 
 # --------------------------------------------------------------------------- projection
@@ -264,7 +353,18 @@ def load_context(conn: sqlite3.Connection, settings: Settings) -> Context:
     slots = {pos: c.get("maxActive", 0) for pos, c in (roster_info.get("positionConstraints") or {}).items()}
     cur_season, prior_season = stat_seasons(conn, league_id)
     ctx = Context(league_id, league, categories, teams, roster_period, players, slots, cur_season, prior_season,
-                  unsupported)
+                  unsupported, roster_cap=roster_info.get("maxTotalPlayers"))
+
+    # Rest-of-season schedule: from today (or the league start) to the league's end date.
+    start = max(date.today().isoformat(), league["start_date"] or "")
+    end = league["end_date"] or ""
+    by_day: Dict[str, set] = defaultdict(set)
+    for g in rows(conn, "SELECT game_date, away, home FROM nhl_games WHERE game_type=2 AND game_date BETWEEN ? AND ?",
+                  (start, end)):
+        by_day[g["game_date"]].update((g["away"], g["home"]))
+    if by_day:
+        ctx.schedule = [frozenset(by_day[d]) for d in sorted(by_day)]
+        ctx.horizon_days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
 
     _project_skaters(conn, ctx, settings)
     _project_goalies(conn, ctx, settings)
@@ -280,15 +380,11 @@ def load_context(conn: sqlite3.Connection, settings: Settings) -> Context:
 # --------------------------------------------------------------------------- lineups & team profiles
 
 
-def best_lineup(ctx: Context, team_id: str) -> List[Player]:
-    """Greedy best active lineup from the team's non-minors, non-IR players by league-weight value."""
-    candidates = [p for p in ctx.roster(team_id) if p.roster_status not in NON_LINEUP_STATUSES and p.impact]
-    weights = {"S": ctx.league_weights("SKATER"), "G": ctx.league_weights("GOALIE")}
-    candidates.sort(key=lambda p: player_value(p, weights), reverse=True)
+def _fill_slots(ctx: Context, ordered: Iterable[Player]) -> List[Player]:
+    """Greedy lineup from players sorted best-first: specific positions first, then the F flex."""
     open_slots = dict(ctx.slots)
     lineup = []
-    for p in candidates:
-        # Specific positions first, then flex (F); a skater fills at most one slot.
+    for p in ordered:
         specific = [e for e in p.eligible if e != "F" and open_slots.get(e, 0) > 0]
         flex = ["F"] if "F" in p.eligible and open_slots.get("F", 0) > 0 else []
         for slot in specific + flex:
@@ -298,30 +394,75 @@ def best_lineup(ctx: Context, team_id: str) -> List[Player]:
     return lineup
 
 
-def _team_totals(ctx: Context, lineup: List[Player]) -> Dict[str, Optional[float]]:
+def _lineup_pool(ctx: Context, team_id: str, lineup: str) -> List[Player]:
+    """Players a team can start, best first: everyone but minors/IR ('best') or today's ACTIVE ('active')."""
+    if lineup == "active":
+        pool = ctx.roster(team_id, ["ACTIVE"])
+    else:
+        pool = [p for p in ctx.roster(team_id) if p.roster_status not in NON_LINEUP_STATUSES]
+    weights = {"S": ctx.league_weights("SKATER"), "G": ctx.league_weights("GOALIE")}
+    return sorted((p for p in pool if p.impact), key=lambda p: player_value(p, weights), reverse=True)
+
+
+def best_lineup(ctx: Context, team_id: str) -> List[Player]:
+    """Best lineup if every player had a game that day (ignores the schedule)."""
+    return _fill_slots(ctx, _lineup_pool(ctx, team_id, "best"))
+
+
+def lineup_games(ctx: Context, team_id: str, lineup: str = "best") -> Dict[str, float]:
+    """Projected games per week each player spends in the lineup.
+
+    Lineups are set daily, so each remaining game day is filled with the best players whose NHL
+    team plays that night: depth players (a third goalie, a bench skater) start on the nights
+    the regulars are idle. Without a synced schedule, the best lineup plays GAMES_PER_WEEK.
+    """
+    pool = _lineup_pool(ctx, team_id, lineup)
+    games: Dict[str, float] = defaultdict(float)
+    if not ctx.schedule:
+        for p in _fill_slots(ctx, pool):
+            games[p.fantrax_id] = GAMES_PER_WEEK
+        return games
+    per_day = 7 / ctx.horizon_days
+    for playing in ctx.schedule:
+        for p in _fill_slots(ctx, (p for p in pool if p.nhl_team in playing)):
+            games[p.fantrax_id] += per_day
+    return games
+
+
+def _team_totals(ctx: Context, games: Dict[str, float]) -> Dict[str, Optional[float]]:
+    """Weekly category totals from lineup games per week (goalie rates are per team game, so a
+    goalie in the lineup is credited in proportion to his start share)."""
     totals: Dict[str, Optional[float]] = {}
-    skaters = [p for p in lineup if p.group != "G"]
-    goalies = [p for p in lineup if p.group == "G"]
+    played = [(ctx.players[fid], n) for fid, n in games.items()]
+    skaters = [(p, n) for p, n in played if p.group != "G"]
+    goalies = [(p, n) for p, n in played if p.group == "G"]
     for c in ctx.cats("SKATER"):
-        totals[c.short_name] = sum(p.rates[SKATER_STATS[c.short_name]] for p in skaters) * GAMES_PER_WEEK
-    g = lambda col: sum(p.rates[col] for p in goalies)  # noqa: E731
+        col = SKATER_STATS[c.short_name]
+        totals[c.short_name] = sum(p.rates[col] * n for p, n in skaters)
+    g = lambda col: sum(p.rates[col] * n for p, n in goalies)  # noqa: E731
     for c in ctx.cats("GOALIE"):
         if c.short_name == "GAA":
             totals["GAA"] = g("goals_against") / g("toi_seconds") * 3600 if g("toi_seconds") else None
         elif c.short_name == "SV%":
             totals["SV%"] = g("saves") / g("shots_against") if g("shots_against") else None
         else:
-            totals[c.short_name] = g(GOALIE_COUNTING[c.short_name]) * GAMES_PER_WEEK
+            totals[c.short_name] = g(GOALIE_COUNTING[c.short_name])
     return totals
 
 
-def _rank_and_z(ctx: Context, values: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Dict[str, Dict]]:
-    """values: team_id -> category -> value. Returns team -> category -> {value, rank, z} (z: higher = better)."""
+def _rank_and_z(ctx: Context, values: Dict[str, Dict[str, Optional[float]]],
+                baseline: Optional[Dict[str, Dict[str, Optional[float]]]] = None) -> Dict[str, Dict[str, Dict]]:
+    """values: team_id -> category -> value. Returns team -> category -> {value, rank, z} (z: higher = better).
+
+    z is measured against `baseline`'s league mean/spread (default: `values` itself), so a simulated
+    trade can be scored on the pre-trade scale.
+    """
+    baseline = baseline or values
     out: Dict[str, Dict[str, Dict]] = {t: {} for t in values}
     for c in ctx.cats("SKATER") + ctx.cats("GOALIE"):
         present = {t: v[c.short_name] for t, v in values.items() if v.get(c.short_name) is not None}
         sign = -1.0 if c.lower_is_better else 1.0
-        m, s = _mean_std([sign * v for v in present.values()])
+        m, s = _mean_std([sign * v[c.short_name] for v in baseline.values() if v.get(c.short_name) is not None])
         ordered = sorted(present, key=lambda t: sign * present[t], reverse=True)
         for t in values:
             v = values[t].get(c.short_name)
@@ -335,17 +476,80 @@ def _rank_and_z(ctx: Context, values: Dict[str, Dict[str, Optional[float]]]) -> 
 
 def projected_profiles(ctx: Context, lineup: str = "best") -> Dict[str, Dict]:
     """Projected weekly category totals and league rank for every team."""
-    values, lineups = {}, {}
+    values, games = {}, {}
     for team_id in ctx.teams:
-        if lineup == "active":
-            players = [p for p in ctx.roster(team_id, ["ACTIVE"]) if p.impact]
-        else:
-            players = best_lineup(ctx, team_id)
-        lineups[team_id] = players
-        values[team_id] = _team_totals(ctx, players)
+        games[team_id] = lineup_games(ctx, team_id, lineup)
+        values[team_id] = _team_totals(ctx, games[team_id])
     ranked = _rank_and_z(ctx, values)
-    return {t: {"team_id": t, "team_name": ctx.teams[t], "categories": ranked[t], "lineup": lineups[t]}
+    return {t: {"team_id": t, "team_name": ctx.teams[t], "categories": ranked[t], "games": games[t]}
             for t in ctx.teams}
+
+
+def capped_count(ctx: Context, team_id: str) -> int:
+    return sum(1 for p in ctx.roster(team_id) if p.roster_status in CAPPED_STATUSES)
+
+
+def simulate_moves(ctx: Context, projected: Dict[str, Dict], moves: Dict[str, Optional[str]],
+                   lineup: str = "best") -> Dict[str, Dict]:
+    """Every team's projected profile after moving players ({player_id: new_team_id or None}).
+
+    Affected teams re-run their daily lineups, so a player only counts for the nights he'd
+    actually start. A team pushed over the roster limit drops its lowest-value players (never
+    the ones it just received); those show up in the team's `dropped` list. z-scores stay on
+    the pre-trade league scale. Rosters are restored afterwards.
+    """
+    previous = {fid: ctx.players[fid].team_id for fid in moves}
+    affected = {t for t in set(previous.values()) | set(moves.values()) if t}
+    before = {t: {c: v["value"] for c, v in p["categories"].items()} for t, p in projected.items()}
+    values = dict(before)
+    games = {t: p.get("games", {}) for t, p in projected.items()}
+    dropped: Dict[str, List[str]] = {}
+    weights = {"S": ctx.league_weights("SKATER"), "G": ctx.league_weights("GOALIE")}
+    try:
+        for fid, team in moves.items():
+            ctx.players[fid].team_id = team
+        for t in affected:
+            over = capped_count(ctx, t) - ctx.roster_cap if ctx.roster_cap else 0
+            if over > 0:
+                incoming = {fid for fid, team in moves.items() if team == t}
+                cuttable = sorted((p for p in ctx.roster(t)
+                                   if p.roster_status in CAPPED_STATUSES and p.fantrax_id not in incoming),
+                                  key=lambda p: player_value(p, weights) if p.z else -1e9)
+                dropped[t] = [p.fantrax_id for p in cuttable[:over]]
+                for fid in dropped[t]:
+                    previous.setdefault(fid, t)
+                    ctx.players[fid].team_id = None
+            games[t] = lineup_games(ctx, t, lineup)
+            values[t] = _team_totals(ctx, games[t])
+    finally:
+        for fid, team in previous.items():
+            ctx.players[fid].team_id = team
+    ranked = _rank_and_z(ctx, values, baseline=before)
+    return {t: {"team_id": t, "team_name": ctx.teams[t], "categories": ranked[t], "games": games[t],
+                "dropped": dropped.get(t, [])} for t in ctx.teams}
+
+
+def expected_category_wins(ctx: Context, profiles: Dict[str, Dict], team_id: str, spread: float = 1.5,
+                           importance: Optional[Dict[str, float]] = None,
+                           opponents: Optional[Dict[str, Dict]] = None) -> float:
+    """Expected categories won per week against an average opponent.
+
+    For each category and opponent, P(win) = Phi(z gap / spread): the same noise model behind the
+    marginal need weights. `importance` scales categories (0 = punted); default is the league weight.
+    `opponents` (default: `profiles`) lets a simulated roster face the unchanged league, so the
+    result reflects only that team's own change.
+    """
+    me = profiles[team_id]["categories"]
+    total = 0.0
+    for c in ctx.cats("SKATER") + ctx.cats("GOALIE"):
+        z_me = me[c.short_name]["z"]
+        gaps = [z_me - p["categories"][c.short_name]["z"] for t, p in (opponents or profiles).items()
+                if t != team_id and z_me is not None and p["categories"][c.short_name]["z"] is not None]
+        if not gaps:
+            continue
+        weight = importance.get(c.short_name, c.weight) if importance else c.weight
+        total += weight * sum(0.5 * (1 + math.erf(g / spread / math.sqrt(2))) for g in gaps) / len(gaps)
+    return total
 
 
 def actual_profiles(conn: sqlite3.Connection, ctx: Context) -> Dict[str, Dict]:
@@ -454,6 +658,8 @@ def player_summary(p: Player, ctx: Context, weights: Optional[Dict[str, Dict[str
         "per_game": {c: round(v, 3) for c, v in p.display.items()},
         "z": {c: round(v, 2) for c, v in p.z.items()},
         "value": round(player_value(p, generic), 2) if p.z else None,
+        "trade_rank": ctx.trade_ranks().get(p.fantrax_id),
+        "market_value": round(ctx.market_values().get(p.fantrax_id, 0.0), 2) if p.z else None,
     }
     if p.start_share is not None:
         out["start_share"] = round(p.start_share, 2)
@@ -485,19 +691,28 @@ def team_profile(conn: sqlite3.Connection, ctx: Context, team_id: str, **need_kw
     # Skaters then goalies; players without NHL stats (prospects) last.
     roster = sorted(ctx.roster(team_id),
                     key=lambda p: (p.group == "G", not p.z, -player_value(p, w_split) if p.z else 0))
-    lineup_ids = {p.fantrax_id for p in projected[team_id]["lineup"]}
+    games = projected[team_id]["games"]
     return {
         "team_id": team_id, "team_name": ctx.teams[team_id], "roster_period": ctx.roster_period,
         "lineup_mode": lineup_mode,
         "projected_total_z": round(sum(v["z"] or 0 for v in projected[team_id]["categories"].values()), 2),
         "projected_overall_rank": _overall_rank(projected, team_id),
+        "expected_category_wins": round(expected_category_wins(ctx, projected, team_id,
+                                                               need_kwargs.get("spread", 1.5)), 2),
         "categories": cats,
         "strengths": [c["category"] for c in sorted(cats, key=lambda c: c["projected_rank"] or n)[:3]],
         "weaknesses": [c["category"] for c in sorted(cats, key=lambda c: -(c["projected_rank"] or 0))[:3]],
-        "roster": [dict(player_summary(p, ctx, w_split), in_projected_lineup=p.fantrax_id in lineup_ids)
+        "roster": [dict(player_summary(p, ctx, w_split), **_games_fields(p, games.get(p.fantrax_id, 0.0)))
                    for p in roster],
         "unsupported_categories": ctx.unsupported_categories,
     }
+
+
+def _games_fields(p: Player, lineup_games_per_week: float) -> Dict[str, float]:
+    out = {"lineup_games_per_week": round(lineup_games_per_week, 2)}
+    if p.start_share is not None:
+        out["expected_starts_per_week"] = round(lineup_games_per_week * p.start_share, 2)
+    return out
 
 
 def league_overview(conn: sqlite3.Connection, ctx: Context, lineup: str = "best") -> List[Dict]:
@@ -509,7 +724,11 @@ def league_overview(conn: sqlite3.Connection, ctx: Context, lineup: str = "best"
             "team_id": t, "team_name": ctx.teams[t],
             "projected_total_z": round(sum(v["z"] or 0 for v in projected[t]["categories"].values()), 2),
             "projected_overall_rank": _overall_rank(projected, t),
+            "expected_category_wins": round(expected_category_wins(ctx, projected, t), 2),
             "projected_ranks": {c: v["rank"] for c, v in projected[t]["categories"].items()},
+            "projected": {c: {"rank": v["rank"], "z": _r(v["z"], 2),
+                              "value": _r(v["value"], 3 if c in GOALIE_RATIOS else 2)}
+                          for c, v in projected[t]["categories"].items()},
             "actual_records": {c: v["record"] for c, v in actual[t]["categories"].items()},
         })
     return sorted(out, key=lambda r: r["projected_overall_rank"])
@@ -521,16 +740,44 @@ def _overall_rank(projected: Dict[str, Dict], team_id: str) -> int:
 
 
 def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = "fa", position: Optional[str] = None,
-            limit: int = 25, min_games: int = 5, include_minors: bool = False, **need_kwargs) -> Dict:
+            limit: int = 25, min_games: int = 5, include_minors: bool = False, from_team: Optional[str] = None,
+            offer: Union[None, str, Sequence[str]] = None, tolerance: float = 0.25, **need_kwargs) -> Dict:
     """Players to go after, ranked by value to `team_id` given its category needs.
 
     source="fa": unrostered players, each paired with the weakest droppable player in the same
                  position group on your roster ("upgrade" = need value gained by the swap).
-    source="trade": players on other teams.
+    source="trade": players on other teams; `from_team` narrows that to one team's roster.
+    offer: one or more players on your roster to trade away. Only players of comparable market
+           value are returned: trade rank within `tolerance` (see comparable_band) of the offered
+           player, or of the package's equivalent rank (summed market value). Each swap is
+           simulated (both teams re-run daily lineups, over-limit rosters drop their worst) and
+           scored as the change in expected category wins per week, for you (`your_gain`) and
+           the other team (`their_gain`).
     """
+    offer_ids = [offer] if isinstance(offer, str) else list(offer or [])
+    if from_team is not None or offer_ids:
+        if source != "trade":
+            raise ValueError("from_team and offer only apply to source=trade")
+        if from_team == team_id:
+            raise ValueError("from_team is the team you're finding targets for")
     lineup_mode = need_kwargs.pop("lineup", "best")
     projected = projected_profiles(ctx, lineup_mode)
     weights = _split(need_weights(ctx, team_id, projected, **need_kwargs), ctx)
+
+    ranks, market = ctx.trade_ranks(), ctx.market_values()
+    offered: List[Player] = []
+    for fid in offer_ids:
+        p = ctx.players.get(fid)
+        if p is None or p.team_id != team_id:
+            raise ValueError("offer must be players on your roster")
+        if not p.z:
+            raise ValueError("{} has no NHL stats, so there's no value to compare against".format(p.name))
+        offered.append(p)
+    band, anchor, package_value = (0, 0), 0, 0.0
+    if offered:
+        package_value = sum(market[p.fantrax_id] for p in offered)
+        anchor = ranks[offered[0].fantrax_id] if len(offered) == 1 else ctx.equivalent_rank(package_value)
+        band = comparable_band(anchor, tolerance)
 
     def eligible(p: Player) -> bool:
         if not p.z or p.gp_cur + p.gp_prior < min_games or not _matches_position(p, position):
@@ -538,7 +785,9 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
         if source == "fa":
             return p.team_id is None
         if source == "trade":
-            return p.team_id not in (None, team_id) and (include_minors or p.roster_status != "MINORS")
+            return (p.team_id not in (None, team_id) and (from_team is None or p.team_id == from_team)
+                    and (include_minors or p.roster_status != "MINORS")
+                    and (not offered or band[0] <= ranks.get(p.fantrax_id, 0) <= band[1]))
         raise ValueError("source must be 'fa' or 'trade'")
 
     mine = [p for p in ctx.roster(team_id) if p.roster_status != "MINORS" and p.z]
@@ -549,12 +798,34 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
             weakest[grp] = min(group, key=lambda p: player_value(p, weights))
 
     def rank_key(p: Player) -> float:
-        # For pickups, rank by gain over the player you'd drop: that compares skaters and
-        # goalies on the same footing (their z-sums cover different numbers of categories).
-        drop = weakest.get(p.group) if source == "fa" else None
-        return player_value(p, weights) - (player_value(drop, weights) if drop else 0.0)
+        # Rank by gain over the player leaving your roster (the drop for pickups, the offered
+        # player for trades): that compares skaters and goalies on the same footing, since
+        # their z-sums cover different numbers of categories.
+        outgoing = weakest.get(p.group) if source == "fa" else None
+        return player_value(p, weights) - (player_value(outgoing, weights) if outgoing else 0.0)
 
-    pool = sorted((p for p in ctx.players.values() if eligible(p)), key=rank_key, reverse=True)[:limit]
+    candidates = [p for p in ctx.players.values() if eligible(p)]
+    swaps: Dict[str, Tuple[float, float]] = {}
+    if offered:
+        # Your punts / manual weights decide what counts as a gain for you; the other team is
+        # scored on plain category wins.
+        spread = need_kwargs.get("spread", 1.5)
+        importance = {c.short_name: c.weight for c in ctx.categories}
+        importance.update({c: 0.0 for c in need_kwargs.get("punt") or ()})
+        importance.update(need_kwargs.get("overrides") or {})
+        base_me = expected_category_wins(ctx, projected, team_id, spread, importance)
+        base = {t: expected_category_wins(ctx, projected, t, spread) for t in ctx.teams}
+        for p in candidates:
+            moves: Dict[str, Optional[str]] = {o.fantrax_id: p.team_id for o in offered}
+            moves[p.fantrax_id] = team_id
+            after = simulate_moves(ctx, projected, moves, lineup_mode)
+            swaps[p.fantrax_id] = (
+                expected_category_wins(ctx, after, team_id, spread, importance, opponents=projected) - base_me,
+                expected_category_wins(ctx, after, p.team_id, spread, opponents=projected) - base[p.team_id],
+            )
+        rank_key = lambda p: swaps[p.fantrax_id][0]  # noqa: E731
+
+    pool = sorted(candidates, key=rank_key, reverse=True)[:limit]
     results = []
     for p in pool:
         item = player_summary(p, ctx, weights)
@@ -563,11 +834,114 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
             item["replaces"] = {"fantrax_id": drop.fantrax_id, "name": drop.name,
                                 "need_value": round(player_value(drop, weights), 2)}
             item["upgrade"] = round(rank_key(p), 2)
+        if offered:
+            yours, theirs = swaps[p.fantrax_id]
+            item["your_gain"] = round(yours, 3)      # expected category wins per week
+            item["their_gain"] = round(theirs, 3)
+            item["win_win"] = yours > 0 and theirs > 0
         results.append(item)
     return {
         "team_id": team_id, "team_name": ctx.teams[team_id], "source": source,
+        "from_team": {"team_id": from_team, "team_name": ctx.teams[from_team]} if from_team else None,
+        "offer": None if not offered else {
+            "players": [{"fantrax_id": o.fantrax_id, "name": o.name, "trade_rank": ranks[o.fantrax_id],
+                         "market_value": round(market[o.fantrax_id], 2)} for o in offered],
+            "name": " + ".join(o.name for o in offered),
+            # For a package: the rank of a single player worth the same summed market value.
+            "trade_rank": anchor,
+            "market_value": round(package_value, 2),
+            "need_value": round(sum(player_value(o, weights) for o in offered), 2),
+            "comparable_trade_ranks": list(band), "tolerance": tolerance,
+        },
         "need_weights": {c: round(w, 2) for c, w in {**weights["S"], **weights["G"]}.items()},
         "targets": results,
+    }
+
+
+def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_id: Optional[str] = None,
+                   get: Sequence[str] = (), lineup: str = "best", spread: float = 1.5) -> Dict:
+    """Cost/benefit of a trade for both sides (or, with no other team, the cost of losing `give`).
+
+    The trade is simulated with daily lineups over the rest of the season; each side's effect is
+    the change in expected category wins per week against the unchanged rest of the league, with
+    per-category before/after values and ranks, games/starts volume, roster-limit drops, and the
+    summed market value moving each way.
+    """
+    if team_id not in ctx.teams:
+        raise ValueError("Unknown team {}".format(team_id))
+    if other_team_id is not None and (other_team_id not in ctx.teams or other_team_id == team_id):
+        raise ValueError("other_team_id must be a different team in the league")
+    if get and other_team_id is None:
+        raise ValueError("Pick the other team to receive players from")
+    if not give and not get:
+        raise ValueError("Select at least one player")
+    for fid in give:
+        if fid not in ctx.players or ctx.players[fid].team_id != team_id:
+            raise ValueError("{} is not on {}".format(fid, ctx.teams[team_id]))
+    for fid in get:
+        if fid not in ctx.players or ctx.players[fid].team_id != other_team_id:
+            raise ValueError("{} is not on {}".format(fid, ctx.teams[other_team_id]))
+
+    projected = projected_profiles(ctx, lineup)
+    moves: Dict[str, Optional[str]] = {fid: other_team_id for fid in give}
+    moves.update({fid: team_id for fid in get})
+    counts = {t: capped_count(ctx, t) for t in (team_id, other_team_id) if t}
+    after = simulate_moves(ctx, projected, moves, lineup)
+    market = ctx.market_values()
+
+    def brief(fid: str) -> Dict:
+        p = ctx.players[fid]
+        return {"fantrax_id": fid, "name": p.name, "position": ",".join(e for e in p.eligible if e != "F"),
+                "nhl_team": p.nhl_team, "roster_status": p.roster_status,
+                "trade_rank": ctx.trade_ranks().get(fid), "market_value": round(market.get(fid, 0.0), 2)}
+
+    def volume(games: Dict[str, float]) -> Dict[str, float]:
+        return {"skater_games": round(sum(n for f, n in games.items() if ctx.players[f].group != "G"), 2),
+                "goalie_starts": round(sum(n * (ctx.players[f].start_share or 0) for f, n in games.items()
+                                           if ctx.players[f].group == "G"), 2)}
+
+    sides = []
+    for t, out_ids, in_ids in ((team_id, give, get), (other_team_id, get, give)):
+        if t is None:
+            continue
+        before_ecw = expected_category_wins(ctx, projected, t, spread)
+        after_ecw = expected_category_wins(ctx, after, t, spread, opponents=projected)
+        cats = []
+        for c in ctx.cats("SKATER") + ctx.cats("GOALIE"):
+            b, a = projected[t]["categories"][c.short_name], after[t]["categories"][c.short_name]
+            nd = 3 if c.short_name in GOALIE_RATIOS else 2
+            cats.append({
+                "category": c.short_name, "name": c.name, "group": c.grp, "lower_is_better": c.lower_is_better,
+                "before": {"value": _r(b["value"], nd), "rank": b["rank"], "z": _r(b["z"], 2)},
+                "after": {"value": _r(a["value"], nd), "rank": a["rank"], "z": _r(a["z"], 2)},
+                "delta_value": _r(a["value"] - b["value"], nd) if a["value"] is not None and b["value"] is not None
+                else None,
+                "delta_z": _r(a["z"] - b["z"], 2) if a["z"] is not None and b["z"] is not None else None,
+            })
+        gives_value = sum(market.get(f, 0.0) for f in out_ids)
+        gets_value = sum(market.get(f, 0.0) for f in in_ids)
+        n_out = sum(1 for f in out_ids if ctx.players[f].roster_status in CAPPED_STATUSES)
+        n_in = sum(1 for f in in_ids if ctx.players[f].roster_status in CAPPED_STATUSES)
+        sides.append({
+            "team_id": t, "team_name": ctx.teams[t], "role": "you" if t == team_id else "partner",
+            "gives": [brief(f) for f in out_ids], "gets": [brief(f) for f in in_ids],
+            "expected_category_wins": {"before": round(before_ecw, 3), "after": round(after_ecw, 3),
+                                       "delta": round(after_ecw - before_ecw, 3)},
+            "categories": cats,
+            "volume": {"before": volume(projected[t]["games"]), "after": volume(after[t]["games"])},
+            "roster": {"before": counts[t], "after": counts[t] - n_out + n_in - len(after[t]["dropped"]),
+                       "cap": ctx.roster_cap},
+            "auto_dropped": [brief(f) for f in after[t]["dropped"]],
+            "market_value": {"gives": round(gives_value, 2), "gets": round(gets_value, 2),
+                             "net": round(gets_value - gives_value, 2)},
+        })
+    give_value = sum(market.get(f, 0.0) for f in give)
+    get_value = sum(market.get(f, 0.0) for f in get)
+    return {
+        "lineup_mode": lineup, "horizon_days": ctx.horizon_days, "sides": sides,
+        "market": {"you_give": round(give_value, 2), "you_get": round(get_value, 2),
+                   "you_give_equiv_rank": ctx.equivalent_rank(give_value) if give else None,
+                   "you_get_equiv_rank": ctx.equivalent_rank(get_value) if get else None},
     }
 
 
