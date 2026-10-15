@@ -109,7 +109,9 @@ CREATE TABLE IF NOT EXISTS players (
     sportradar_id   TEXT,
     adp             REAL,
     nhl_id          INTEGER,            -- matched NHL.com player id
-    match_method    TEXT
+    match_method    TEXT,
+    birth_date      TEXT,               -- YYYY-MM-DD
+    birth_date_source TEXT              -- 'nhl' (synced) or 'manual' (entered in the app; never overwritten)
 );
 CREATE INDEX IF NOT EXISTS idx_players_nhl ON players(nhl_id);
 
@@ -196,6 +198,17 @@ CREATE TABLE IF NOT EXISTS contracts (
 );
 CREATE INDEX IF NOT EXISTS idx_contracts_player ON contracts(player_id);
 
+-- Contract edits made in the app. They take precedence over the salary sheets and survive syncs.
+CREATE TABLE IF NOT EXISTS contract_overrides (
+    league_id       TEXT NOT NULL,
+    player_id       TEXT NOT NULL,
+    salaries        TEXT NOT NULL,      -- JSON list, current season first
+    contract_type   TEXT NOT NULL DEFAULT 'STANDARD',   -- STANDARD / ELC / IN_SEASON_UFA
+    note            TEXT,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (league_id, player_id)
+);
+
 CREATE TABLE IF NOT EXISTS nhl_games (
     game_id         INTEGER PRIMARY KEY,
     game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
@@ -205,6 +218,13 @@ CREATE TABLE IF NOT EXISTS nhl_games (
     home            TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_nhl_games_date ON nhl_games(game_date);
+
+-- Small app-level state (e.g. what was last published to each team's sheet).
+CREATE TABLE IF NOT EXISTS app_state (
+    key             TEXT PRIMARY KEY,
+    value           TEXT NOT NULL,      -- JSON
+    updated_at      TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS sync_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -221,6 +241,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
 # existing database, so connect() adds any that are missing.
 ADDED_COLUMNS = {
     "teams": {"salary_cap": "REAL"},
+    "players": {"birth_date": "TEXT", "birth_date_source": "TEXT"},
 }
 
 

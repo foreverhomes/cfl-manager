@@ -275,13 +275,47 @@ def test_parse_salary_sheet_handles_sections_totals_and_mislabeled_seasons():
         ["Hurt Guy", "", "8", "8", "", ""],
         ["Minor League", "", "", "", "", ""],
     ]
-    got = {c["sheet_name"]: c for c in parse_salary_sheet(rows, 2026)}
+    parsed = parse_salary_sheet(rows, 2026)
+    assert parsed["layout"] == "seasons"
+    got = {c["sheet_name"]: c for c in parsed["contracts"]}
     assert set(got) == {"Morgan Geekie", "Alex Ovechkin", "Old Guy", "Hurt Guy"}
     assert got["Morgan Geekie"]["salaries"] == [5, 5, 5] and got["Morgan Geekie"]["years_remaining"] == 3
     assert got["Alex Ovechkin"]["salary"] == 4 and got["Alex Ovechkin"]["years_remaining"] == 1
     assert got["Old Guy"]["section"] == "BUYOUT" and got["Hurt Guy"]["section"] == "IR"
     # A sheet that still shows last season starts reading at the current one.
-    assert parse_salary_sheet([["Player", "2025/26", "2026/27"], ["X", "9", "7"]], 2026)[0]["salaries"] == [7]
+    assert parse_salary_sheet([["Player", "2025/26", "2026/27"], ["X", "9", "7"]], 2026)["contracts"][0]["salaries"] == [7]
+
+
+def test_parse_salary_sheet_other_gm_layouts():
+    # Two-digit seasons, UFA/RFA markers, later seasons in unlabeled columns, "Last, First" names,
+    # prospects and totals rows, and a repeated player.
+    rows = [
+        ["PLAYER", "TEAM", "2025-2026", "UFA", "2026-27"],
+        ["Makar, Cale", "COL", "34", "34", "34", "UFA"],
+        ["Rossi, Marco", "MIN", "3", "3", "6", "6", "6", "UFA"],
+        ["Nikishin, Alexander", "CAR", "", "", "3", "3"],
+        ["Nikishin, Alexander", "CAR", "", "", "3", "RFA"],
+        ["TOTAL", "", "", "", "43"],
+        ["PROSPECTS", "", "", "", ""],
+        ["Tyson Foerster - PHI", "RW", "166", "23", ""],
+    ]
+    parsed = parse_salary_sheet(rows, 2026)
+    got = {c["sheet_name"]: c["salaries"] for c in parsed["contracts"]}
+    assert got == {"Cale Makar": [34], "Marco Rossi": [6, 6, 6], "Alexander Nikishin": [3, 3]}
+    assert parsed["duplicates"] == ["Alexander Nikishin"]
+
+    # No season columns: contract price x contract length (years left).
+    flat = parse_salary_sheet([["PLAYER", "TEAM", "CONTRACT PRICE $", "CONTRACT LENGTH"],
+                               ["Larkin, Dylan", "DET", "$14", "3"], ["CAP PUNISHMENT", "", "", ""],
+                               ["Cut Guy", "", "$2", "1"]], 2026)
+    assert flat["layout"] == "salary_years"
+    assert [(c["sheet_name"], c["salaries"], c["section"]) for c in flat["contracts"]] == [
+        ("Dylan Larkin", [14, 14, 14], "ROSTER"), ("Cut Guy", [2], "BUYOUT")]
+
+    # Explicit column hints (letters) for sheets whose header doesn't line up with the data.
+    pairs = [["PLAYER", "AGE"], ["McDavid, Connor", "29", "41", "2", "55", "4"]]
+    hinted = parse_salary_sheet(pairs, 2026, salary_column="E", years_column="F")
+    assert hinted["contracts"][0]["salaries"] == [55, 55, 55, 55]
 
 
 def test_match_sheet_names_fuzzy_on_roster_exact_elsewhere():
@@ -316,6 +350,7 @@ def test_cap_summary_follows_league_rules():
     assert cap["committed"] == 20 + 10 + 2          # IR and minors don't count; the buyout does
     assert cap["space"] == 18 and cap["ir_relief"] == 8 and cap["minors_relief"] == 3
     assert cap["unknown_salary"] == ["new"]
+    assert cap["contract_years"] == 2 + 1 and cap["contract_year_bank"] == 50   # minors and IR excluded
     assert cap["future"][0] == {"season": "2027/28", "committed": 20 + 8 + 2, "space": 20}   # IR returns
     assert A.cap_summary(ctx, "t2") is None
     assert [A.release_cost(p) for p in players] == [10, 5, 4, 0, 0]   # $3 or less is a free release
@@ -336,3 +371,214 @@ def test_evaluate_trade_cap_effect_includes_drop_buyouts_and_flags_unknown_salar
     assert cap["salary_out"] == 2 and cap["drop_buyouts"] == 3
     assert cap["unknown_incoming"] == ["b1", "b2"] and not cap["over_cap"]
     assert them["cap"] is None
+
+
+def test_contract_edits_override_the_sheet_and_follow_league_rules(conn, tmp_path):
+    from cfl import contracts as C
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    _player(conn, "f2", "Snuggerud, Jimmy", "STL", "RW")
+    for fid, pos in (("f1", "G"), ("f2", "RW,F")):
+        conn.execute("INSERT INTO league_players VALUES (?, ?, ?, 'T')", (LEAGUE, fid, pos))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', 'ACTIVE')", (LEAGUE, fid))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', 3, 5, '[3,3,3,3,3]')",
+                 (LEAGUE,))
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+
+    ctx = A.load_context(conn, settings)
+    assert (ctx.players["f1"].contract_source, ctx.players["f1"].contract_years) == ("sheet", 5)
+    assert ctx.players["f2"].salary is None
+    assert A.cap_summary(ctx, "t1")["unknown_salary"] == ["Jimmy Snuggerud"]
+
+    with pytest.raises(ValueError):
+        C.save_override(conn, LEAGUE, "f2", [3, 3, 3, 3], "ELC")          # ELCs run at most 3 seasons
+    with pytest.raises(ValueError):
+        C.save_override(conn, LEAGUE, "f2", [4, 4], "ELC")                # ... at $3
+    with pytest.raises(ValueError):
+        C.save_override(conn, LEAGUE, "f2", [3, None, 3])                 # no gaps
+    with pytest.raises(ValueError):
+        C.save_override(conn, LEAGUE, "f2", [5, 5], "IN_SEASON_UFA")      # pickups get 1 year
+
+    C.save_override(conn, LEAGUE, "f2", [3, 3], "ELC", "year 2 of ELC")
+    C.save_override(conn, LEAGUE, "f1", [3], "IN_SEASON_UFA")
+    ctx = A.load_context(conn, settings)
+    p2 = ctx.players["f2"]
+    assert (p2.salary, p2.contract_years, p2.contract_type, p2.contract_source) == (3, 2, "ELC", "override")
+    cap = A.cap_summary(ctx, "t1")
+    assert cap["committed"] == 6 and cap["unknown_salary"] == []
+    assert cap["contract_years"] == 2                                     # in-season UFA deals don't use the bank
+    detail = C.contract_detail(conn, ctx, "f1")
+    assert detail["sheet"]["salaries"] == [3, 3, 3, 3, 3] and detail["override"]["contract_type"] == "IN_SEASON_UFA"
+
+    assert C.delete_override(conn, LEAGUE, "f1")
+    ctx = A.load_context(conn, settings)
+    assert (ctx.players["f1"].contract_source, ctx.players["f1"].contract_years) == ("sheet", 5)
+
+
+def test_contract_edit_api_sets_years_and_keeps_the_salary(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    _player(conn, "f2", "Snuggerud, Jimmy", "STL", "RW")
+    for fid in ("f1", "f2"):
+        conn.execute("INSERT INTO league_players VALUES (?, ?, 'F', 'T')", (LEAGUE, fid))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', 'ACTIVE')", (LEAGUE, fid))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', 8, 5, '[8,8,8,8,8]')",
+                 (LEAGUE,))
+    conn.commit()
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+    client = TestClient(app)
+
+    res = client.put("/players/f1/contract", json={"years": 2})
+    assert res.status_code == 200 and res.json()["effective"]["salaries"] == [8, 8]   # sheet salary kept
+    assert client.put("/players/f2/contract", json={"years": 2}).status_code == 400  # no salary on file
+    res = client.put("/players/f2/contract", json={"years": 2, "contract_type": "ELC"})
+    assert res.json()["effective"]["salaries"] == [3, 3]                              # ELC is $3
+    assert client.put("/players/f1/contract", json={"years": 0}).status_code == 400
+    assert client.delete("/players/f1/contract").json()["effective"]["salaries"] == [8] * 5
+
+
+def _owned_league(conn, tmp_path):
+    """t1 is app-owned per a salary_sheets.json; returns Settings pointing at it."""
+    import json as _json
+    conn.execute("INSERT INTO teams (id, league_id, name, salary_cap) VALUES ('t1', ?, 'One', 220)", (LEAGUE,))
+    sheets = tmp_path / "salary_sheets.json"
+    sheets.write_text(_json.dumps({"t1": {"url": "https://example.invalid/sheet", "owner": "app"}}))
+    return Settings(LEAGUE, None, tmp_path / "t.db", 0.5, 5, sheets, "https://example.invalid/publish", "tok")
+
+
+def test_app_owned_team_adopts_its_sheet_contracts_once(conn, tmp_path):
+    from cfl.sync import sync_salaries
+    settings = _owned_league(conn, tmp_path)
+    _player(conn, "f1", "Geekie, Morgan", "BOS", "C")
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, years_remaining,"
+                 " salaries) VALUES (?, 't1', 'Morgan Geekie', 'f1', 'ROSTER', 5, 3, '[5,5,5]')", (LEAGUE,))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, years_remaining,"
+                 " salaries) VALUES (?, 't1', 'Typo Name', NULL, 'ROSTER', 2, 1, '[2]')", (LEAGUE,))
+    conn.commit()
+    first = sync_salaries(conn, settings)["One"]
+    assert first["adopted"] == 1 and first["unmatched_dropped"] == ["Typo Name"] and not first["sheet_read"]
+    import json as _json
+    assert _json.loads(conn.execute("SELECT salaries FROM contract_overrides WHERE player_id='f1'").fetchone()[0]) == [5, 5, 5]
+    assert conn.execute("SELECT COUNT(*) FROM contracts WHERE team_id='t1'").fetchone()[0] == 0
+    assert sync_salaries(conn, settings)["One"]["adopted"] == 0      # the sheet is never read again
+
+
+def test_published_sheet_layout_and_formulas():
+    from cfl.publish import build_roster_sheet
+    players = [
+        _with_contract(_p("Fwd A", ["C", "F"], "F", 5), [10, 10]),
+        _with_contract(_p("Fwd Pickup", ["LW", "F"], "F", 1), [2]),
+        _with_contract(_p("Def B", ["D"], "D", 3, status="RESERVE"), [6]),
+        _with_contract(_p("Goalie C", ["G"], "G", 2), [8, 8, 8]),
+        _with_contract(_p("Hurt D", ["RW", "F"], "F", 2, status="INJURED_RESERVE"), [4, 4]),
+        _with_contract(_p("Kid E", ["C", "F"], "F", 1, status="MINORS"), [3, 3, 3]),
+        _p("Kid F", ["D"], "D", 0, status="MINORS"),
+    ]
+    for p in players:
+        if p.fantrax_id == "Goalie C":
+            p.position, p.group = "G", "G"
+    players[1].contract_type = "IN_SEASON_UFA"
+    players[5].contract_type = "ELC"
+    ctx = _ctx_with(players)
+    ctx.league, ctx.salary_caps = {"season_year": 2026}, {"t1": 220}
+    sheet = build_roster_sheet(ctx, "t1")
+    v = sheet["values"]
+    assert v[0][:3] == ["Player", "Pos", "'2026/2027"] and v[0][6] == "'2030/2031"
+    names = [r[0] for r in v if r]
+    assert names.index("Forwards") < names.index("Fwd A") < names.index("Defense") < names.index("Def B") \
+        < names.index("Goalies") < names.index("Goalie C") < names.index("Committed") \
+        < names.index("Injured Reserve") < names.index("Hurt D") < names.index("Minor League") < names.index("Kid E")
+    row = {r[0]: (i + 1, r) for i, r in enumerate(v) if r}
+    committed = row["Committed"][1]
+    ir_row = row["Hurt D"][0]
+    assert "{}".format(ir_row) not in committed[2]                       # IR relief this season...
+    assert "D{}:D{}".format(ir_row, ir_row) in committed[3]              # ...but it counts next season
+    years = row["Contract years"][1][2]
+    for name in ("Fwd A", "Def B", "Goalie C"):
+        assert "G{}".format(row[name][0]) in years                       # counted rows end in column G
+    for name in ("Fwd Pickup", "Hurt D", "Kid E"):                       # in-season UFA, IR, minors: no bank years
+        assert ":G{}".format(row[name][0]) not in years and "C{}:".format(row[name][0]) not in years
+    assert row["Kid E"][1][-1] == "ELC" and row["Fwd A"][1][2:4] == [10, 10]
+    assert row["Cap space"][1][2] == "=C{}-C{}".format(row["Salary cap"][0], row["Committed"][0])
+
+
+def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):
+    from cfl import publish as P
+    settings = _owned_league(conn, tmp_path)
+    _player(conn, "f1", "Geekie, Morgan", "BOS", "C")
+    conn.execute("INSERT INTO league_players VALUES (?, 'f1', 'C,F', 'T')", (LEAGUE,))
+    conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f1', 'C', 'ACTIVE')", (LEAGUE,))
+    conn.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[5,5,5]', 'STANDARD', NULL, 'x')", (LEAGUE,))
+    conn.commit()
+    sent = []
+
+    class Reply:
+        status_code = 200
+
+        def __init__(self, n):
+            self.n = n
+
+        def json(self):
+            return {"ok": True, "rows": self.n}
+
+    monkeypatch.setattr(P.requests, "post", lambda url, json, timeout: sent.append((url, json)) or Reply(len(json["values"])))
+    assert P.publish(conn, settings)["One"]["published"]
+    url, payload = sent[0]
+    assert url == "https://example.invalid/publish" and payload["token"] == "tok" and payload["tab"] == "roster"
+    assert any(r and r[0] == "Morgan Geekie" and r[2:5] == [5, 5, 5] for r in payload["values"])
+    assert not P.publish(conn, settings)["One"]["published"] and len(sent) == 1      # unchanged: nothing sent
+    assert P.publish(conn, settings, force=True)["One"]["published"] and len(sent) == 2
+    assert P.publish_status(conn, settings)["configured"]
+
+
+def test_contract_end_status_follows_the_july_1_age_rule():
+    ctx = _ctx_with([])
+    ctx.league = {"season_year": 2026}
+    p = _with_contract(_p("x", ["C", "F"], "F", 1), [5, 5])          # last season 2027/28 -> July 1, 2028
+    for born, status, age in (("2001-07-01", "UFA", 27),            # turns 27 on July 1: UFA
+                              ("2001-07-02", "RFA", 26),            # turns 27 the next day: RFA
+                              ("1995-01-01", "UFA", 33)):
+        p.birth_date = born
+        end = A.contract_end(ctx, p)
+        assert (end["status"], end["age_at_expiry"], end["year"], end["after_season"]) == (status, age, 2028, "2027/28")
+    p.birth_date = None
+    assert A.contract_end(ctx, p)["status"] is None                  # unknown until a birth date is known
+    p.contract_type, p.birth_date = "IN_SEASON_UFA", "2005-01-01"
+    assert A.contract_end(ctx, p)["status"] == "UFA"                 # pickups go back to the auction
+    assert A.contract_end(ctx, _p("y", ["C", "F"], "F", 1)) is None   # no contract, nothing to expire
+
+
+def test_bios_sync_fills_birth_dates_and_keeps_manual_ones(conn):
+    from cfl.sync import sync_bios
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "vet", "Karlsson, Erik", "PIT", "D")
+    _player(conn, "kid", "Surin, Yegor", "NSH", "RW")              # NHL.com spells it "Egor"
+    _player(conn, "set", "Hand, Entered", "TOR", "C")
+    conn.execute("UPDATE players SET nhl_id=1 WHERE fantrax_id='vet'")
+    conn.execute("UPDATE players SET nhl_id=3, birth_date='2000-01-01', birth_date_source='manual' WHERE fantrax_id='set'")
+    for fid in ("vet", "kid", "set"):
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', 'ACTIVE')", (LEAGUE, fid))
+    conn.commit()
+
+    class FakeNHL:
+        def bios(self, kind, season):
+            return [{"playerId": 1, "birthDate": "1990-05-31"}, {"playerId": 3, "birthDate": "1999-09-09"}] \
+                if kind == "skater" else []
+
+        def search_players(self, q):
+            return [{"playerId": "8484993", "name": "Egor Surin", "positionCode": "C", "teamAbbrev": "NSH",
+                     "active": True}] if q == "Surin" else []
+
+        def player_landing(self, nhl_id):
+            return {"birthDate": "2006-08-01"} if nhl_id == 8484993 else {}
+
+    result = sync_bios(conn, FakeNHL(), LEAGUE)
+    dates = dict(conn.execute("SELECT fantrax_id, birth_date FROM players").fetchall())
+    assert dates == {"vet": "1990-05-31", "kid": "2006-08-01", "set": "2000-01-01"}   # manual date kept
+    assert result["looked_up"] == 1 and result["still_missing"] == []

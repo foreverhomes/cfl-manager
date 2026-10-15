@@ -18,7 +18,7 @@ from .db import row, rows, transaction, upsert
 
 LOWER_IS_BETTER = {"GAA", "GA", "L"}
 TEAM_PSEUDO_POSITIONS = {"Tm", "TmS", "TmG"}
-RESOURCES = ("league", "players", "rosters", "standings", "matchups", "stats", "schedule", "match", "salaries")
+RESOURCES = ("league", "players", "rosters", "standings", "matchups", "stats", "schedule", "match", "bios", "salaries")
 
 
 def now_iso() -> str:
@@ -413,12 +413,90 @@ def match_players(conn: sqlite3.Connection, league_id: str) -> Dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- birth dates
+
+
+def _split_search_name(name: str) -> Tuple[str, str]:
+    """("Haoxi", "Wang") from NHL.com's "Haoxi (Simon) Wang"."""
+    parts = re.sub(r"\([^)]*\)", " ", name or "").split()
+    return (parts[0] if parts else ""), (parts[-1] if parts else "")
+
+
+def _search_nhl_id(nhl: NHLStatsClient, name: str, position: Optional[str], team: Optional[str],
+                   first: Optional[str] = None, last: Optional[str] = None) -> Optional[int]:
+    """NHL id for a player by name, using position and team to break ties. Falls back to a
+    last-name search with a close first name, for transliterations (Yegor/Egor, Artyom/Artem)."""
+    key = normalize_name(name)
+    hits = [h for h in nhl.search_players(name) if normalize_name(h.get("name")) == key]
+    if not hits and last:
+        want_first = normalize_name(first)
+        for h in nhl.search_players(last):
+            h_first, h_last = _split_search_name(h.get("name"))
+            if normalize_name(h_last) == normalize_name(last) and \
+                    difflib.SequenceMatcher(None, normalize_name(h_first), want_first).ratio() >= 0.6:
+                hits.append(h)
+    group = _pos_group(position)
+    same_group = [h for h in hits if _pos_group({"L": "LW", "R": "RW"}.get(h.get("positionCode"), h.get("positionCode"))) == group]
+    hits = same_group or hits
+    if len(hits) > 1 and team:
+        on_team = [h for h in hits if h.get("teamAbbrev") == team]
+        hits = on_team or hits
+    if len(hits) > 1:
+        hits = [h for h in hits if h.get("active")] or hits
+    return int(hits[0]["playerId"]) if len(hits) == 1 else None
+
+
+def sync_bios(conn: sqlite3.Connection, nhl: NHLStatsClient, league_id: str, lookup_limit: int = 400) -> Dict[str, Any]:
+    """Birth dates: one bios report per season, then a per-player lookup for rostered players still
+    missing one (prospects without NHL games). Dates entered in the app ('manual') are never replaced."""
+    found: Dict[int, str] = {}
+    for season in stat_seasons(conn, league_id):
+        for kind in ("skater", "goalie"):
+            for r in nhl.bios(kind, season):
+                if r.get("birthDate"):
+                    found[r["playerId"]] = r["birthDate"]
+    with transaction(conn):
+        conn.executemany("UPDATE players SET birth_date=?, birth_date_source='nhl' WHERE nhl_id=? "
+                         "AND COALESCE(birth_date_source, '') != 'manual'", [(d, i) for i, d in found.items()])
+    period = (row(conn, "SELECT MAX(period) AS p FROM roster_items WHERE league_id=?", (league_id,)) or {}).get("p")
+    missing = rows(conn, "SELECT DISTINCT p.fantrax_id, p.name, p.first_name, p.last_name, p.nhl_id, p.position, "
+                         "p.nhl_team FROM players p "
+                         "JOIN roster_items ri ON ri.player_id = p.fantrax_id "
+                         "WHERE ri.league_id=? AND ri.period=? AND p.birth_date IS NULL", (league_id, period))
+    looked_up, still_missing = 0, []
+    for m in missing[:lookup_limit]:
+        nhl_id = m["nhl_id"] or _search_nhl_id(nhl, m["name"], m["position"], m["nhl_team"],
+                                               m["first_name"], m["last_name"])
+        birth = nhl.player_landing(nhl_id).get("birthDate") if nhl_id else None
+        if birth:
+            with transaction(conn):
+                conn.execute("UPDATE players SET birth_date=?, birth_date_source='nhl' WHERE fantrax_id=?",
+                             (birth, m["fantrax_id"]))
+            looked_up += 1
+        else:
+            still_missing.append(m["name"])
+    return {"from_bios": len(found), "looked_up": looked_up, "still_missing": still_missing,
+            "deferred": max(0, len(missing) - lookup_limit)}
+
+
 # --------------------------------------------------------------------------- salaries
 
-SEASON_HEADER = re.compile(r"(\d{4})\s*/\s*\d{2,4}")
-# Sheet rows whose name cell is one of these start a new section (compared lowercase, ':' stripped).
-SECTION_LABELS = {"buyouts": "BUYOUT", "buyout": "BUYOUT", "ir cap relief": "IR_RELIEF",
-                  "injured reserve": "IR", "ir": "IR", "minor league": "MINORS", "minors": "MINORS"}
+# A whole cell naming a season: 2026/2027, 2026-27, 26/27, 26-27.
+SEASON_CELL = re.compile(r"^\s*(\d{2}|\d{4})\s*[/-]\s*(\d{2}|\d{4})\s*$")
+NAME_HEADERS = {"player", "players", "name", "skaters"}
+PRICE_HEADERS = ("salary", "contract price", "bid price", "price")
+LENGTH_HEADERS = ("years left", "contract length", "years")
+MAX_CONTRACT_YEARS = 5   # league rule
+# Rows whose name cell is one of these start a section (compared lowercase, trailing ':' stripped).
+SECTION_LABELS = {
+    "buyouts": "BUYOUT", "buyout": "BUYOUT", "cap punishment": "BUYOUT",
+    "injured reserve": "IR", "injury reserve": "IR", "ir": "IR", "ir guys": "IR",
+    "minors": "MINORS", "minor league": "MINORS", "minors/ir": "MINORS",
+    "prospects": "PROSPECTS", "ir cap relief": "SKIP",
+    "forwards": "ROSTER", "defence": "ROSTER", "defense": "ROSTER", "goalies": "ROSTER",
+}
+# Summary rows (totals, cap space, ...) to ignore wherever they appear.
+SUMMARY_PREFIXES = ("total", "salary spend", "cap space", "cap room", "payroll", "players signed")
 
 
 def _money(cell: str) -> Optional[float]:
@@ -429,47 +507,104 @@ def _money(cell: str) -> Optional[float]:
         return None
 
 
-def parse_salary_sheet(rows: List[List[str]], season_year: int) -> List[Dict[str, Any]]:
-    """Contracts from a team salary sheet.
+def _season_start(cell: str) -> Optional[int]:
+    """Start year of a season header cell (2026 for "2026/2027", "26-27"), else None."""
+    m = SEASON_CELL.match(cell or "")
+    if not m:
+        return None
+    first, second = m.groups()
+    year = int(first) if len(first) == 4 else 2000 + int(first)
+    return year if (year + 1) % 100 == int(second[-2:]) else None
 
-    Expected layout: a header row whose first cell is "Player" (or "Name") and whose later cells
-    include seasons like "2026/2027"; then one player per row with a salary under each season
-    (blank = contract over). Rows named BUYOUTS / Injured Reserve / Minor League start a section;
-    rows without a name (spacers, totals) are skipped. Seasons are read by column position from
-    the current one onward, because sheets tend to repeat or mislabel later season headers.
+
+def column_index(ref: Any) -> int:
+    """0-based column from a spreadsheet letter ("A", "AE") or an int."""
+    if isinstance(ref, int):
+        return ref
+    n = 0
+    for ch in str(ref).strip().upper():
+        n = n * 26 + (ord(ch) - 64)
+    return n - 1
+
+
+def _find_column(header: List[str], names: Sequence[str]) -> Optional[int]:
+    lowered = [(c or "").strip().lower() for c in header]
+    for name in names:   # in priority order
+        for j, cell in enumerate(lowered):
+            if cell == name or cell.startswith(name):
+                return j
+    return None
+
+
+def parse_salary_sheet(rows: List[List[str]], season_year: int, salary_column: Any = None,
+                       years_column: Any = None) -> Dict[str, Any]:
+    """Contracts from one GM's salary sheet. Every GM keeps a different layout, so:
+
+    - The header row is the first whose first cell is "Player" / "Name" / "Skaters".
+    - "seasons" layout: a header cell names the current season (2026/2027, 26-27, ...). Salaries
+      are read from that column rightward, through unlabeled columns too, until a blank or a
+      marker like UFA/RFA (max 5 seasons).
+    - "salary_years" layout: no season columns, or explicit `salary_column` / `years_column`
+      hints (letters like "AE" or 0-based ints): the salary repeats for the years left.
+    - Rows named BUYOUTS / Injured Reserve / Minors / PROSPECTS start sections (prospects are
+      unsigned and skipped); totals and other summary rows, and rows with no salary, are skipped.
+    - "Last, First" names are flipped; repeated names keep their first row.
+    Returns {"layout", "contracts", "duplicates"}.
     """
-    header_at = next((i for i, r in enumerate(rows) if r and r[0].strip().lower() in ("player", "name")), None)
+    header_at = next((i for i, r in enumerate(rows)
+                      if r and r[0].strip().lower().rstrip(":") in NAME_HEADERS), None)
     if header_at is None:
         raise ValueError("No header row starting with 'Player'")
     header = rows[header_at]
-    season_cols = [j for j, cell in enumerate(header) if SEASON_HEADER.search(cell or "")]
-    if not season_cols:
-        raise ValueError("No season columns (like 2026/2027) in the header row")
-    start = next((j for j in season_cols if int(SEASON_HEADER.search(header[j]).group(1)) == season_year),
-                 season_cols[0])
-    columns = [j for j in season_cols if j >= start]
+    hinted = salary_column is not None
+    season_col = None if hinted else next((j for j, c in enumerate(header) if _season_start(c) == season_year), None)
+    price_col = column_index(salary_column) if hinted else _find_column(header, PRICE_HEADERS)
+    years_col = column_index(years_column) if years_column is not None else _find_column(header, LENGTH_HEADERS)
+    if season_col is None and price_col is None:
+        raise ValueError("No {}/{:02d} season column and no salary column; add salary_column / years_column "
+                         "hints for this sheet".format(season_year, (season_year + 1) % 100))
+    layout = "seasons" if season_col is not None else "salary_years"
 
-    section = "ROSTER"
-    contracts = []
+    def cell(r: List[str], j: Optional[int]) -> str:
+        return r[j] if j is not None and j < len(r) else ""
+
+    def salaries_for(r: List[str]) -> List[float]:
+        if layout == "seasons":
+            out: List[float] = []
+            for j in range(season_col, season_col + MAX_CONTRACT_YEARS):
+                amount = _money(cell(r, j))
+                if amount is None:
+                    break
+                out.append(amount)
+            return out
+        salary = _money(cell(r, price_col))
+        if salary is None:
+            return []
+        years = int(_money(cell(r, years_col)) or 1)
+        return [salary] * max(1, min(years, MAX_CONTRACT_YEARS))
+
+    section, seen, duplicates, contracts = "ROSTER", set(), [], []
     for r in rows[header_at + 1:]:
-        name = (r[0] if r else "").strip()
-        if not name:
+        raw = (r[0] if r else "").strip()
+        if not raw:
             continue
-        label = name.lower().rstrip(":").strip()
+        label = raw.lower().rstrip(":").strip()
         if label in SECTION_LABELS:
             section = SECTION_LABELS[label]
             continue
-        if section == "IR_RELIEF":
-            continue  # relief is derived from Fantrax IR status instead
-        salaries = []
-        for j in columns:
-            amount = _money(r[j] if j < len(r) else "")
-            if amount is None:
-                break
-            salaries.append(amount)
-        contracts.append({"sheet_name": name, "section": section, "salary": salaries[0] if salaries else None,
+        if label.startswith(SUMMARY_PREFIXES) or section in ("PROSPECTS", "SKIP"):
+            continue
+        salaries = salaries_for(r)
+        if not salaries:
+            continue
+        name = split_fantrax_name(raw)[2] if "," in raw else raw
+        if name.lower() in seen:
+            duplicates.append(name)
+            continue
+        seen.add(name.lower())
+        contracts.append({"sheet_name": name, "section": section, "salary": salaries[0],
                           "years_remaining": len(salaries), "salaries": salaries})
-    return contracts
+    return {"layout": layout, "contracts": contracts, "duplicates": duplicates}
 
 
 def match_sheet_names(names: Sequence[str], roster: Sequence[Tuple[str, str]],
@@ -501,12 +636,17 @@ def match_sheet_names(names: Sequence[str], roster: Sequence[Tuple[str, str]],
     return out
 
 
-def load_salary_sources(settings: Settings) -> Dict[str, str]:
+def load_salary_sources(settings: Settings) -> Dict[str, Dict[str, Any]]:
+    """salary_sheets.json: {team: "url"} or {team: {"url": ..., "salary_column": "AE", "years_column": "AF"}}.
+
+    `"owner": "app"` marks a team whose contracts live in this app: its sheet is never read again
+    (it is published to instead; see publish.py).
+    """
     path = settings.salary_sheets_path
     if not path.exists():
         return {}
     data = json.loads(path.read_text())
-    return {str(k): str(v) for k, v in data.items() if not str(k).startswith("_")}
+    return {str(k): (v if isinstance(v, dict) else {"url": v}) for k, v in data.items() if not str(k).startswith("_")}
 
 
 def _resolve_team(conn: sqlite3.Connection, league_id: str, ref: str, my_team_id: Optional[str]) -> str:
@@ -521,8 +661,43 @@ def _resolve_team(conn: sqlite3.Connection, league_id: str, ref: str, my_team_id
     return matches[0]
 
 
+def app_owned_teams(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Dict[str, Any]]:
+    """{team_id: sheet spec} for teams whose contracts are managed in this app."""
+    out = {}
+    for ref, spec in load_salary_sources(settings).items():
+        if spec.get("owner") != "app":
+            continue
+        try:
+            out[_resolve_team(conn, settings.league_id, ref, settings.my_team_id)] = spec
+        except ValueError:
+            continue
+    return out
+
+
+def adopt_sheet_contracts(conn: sqlite3.Connection, league_id: str, team_id: str) -> Dict[str, Any]:
+    """Move a team's sheet contracts into the app's own contract records (contract_overrides), once.
+
+    Players who already have an app record keep it. Buyout rows stay in `contracts`, since they
+    have no player to attach to. Returns what was adopted.
+    """
+    sheet_rows = rows(conn, "SELECT * FROM contracts WHERE league_id=? AND team_id=? AND section != 'BUYOUT'",
+                      (league_id, team_id))
+    have = {r["player_id"] for r in rows(conn, "SELECT player_id FROM contract_overrides WHERE league_id=?",
+                                         (league_id,))}
+    adopt = [r for r in sheet_rows if r["player_id"] and r["player_id"] not in have]
+    ts = now_iso()
+    with transaction(conn):
+        upsert(conn, "contract_overrides", [{
+            "league_id": league_id, "player_id": r["player_id"], "salaries": r["salaries"],
+            "contract_type": "STANDARD", "note": None, "updated_at": ts} for r in adopt], ["league_id", "player_id"])
+        conn.execute("DELETE FROM contracts WHERE league_id=? AND team_id=? AND section != 'BUYOUT'", (league_id, team_id))
+    return {"adopted": len(adopt), "already_in_app": sum(1 for r in sheet_rows if r["player_id"] in have),
+            "unmatched_dropped": [r["sheet_name"] for r in sheet_rows if not r["player_id"]]}
+
+
 def sync_salaries(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
-    """Read each configured team salary sheet into `contracts`."""
+    """Read each configured team salary sheet into `contracts`. Teams owned by the app are skipped
+    (their sheet contracts are adopted the first time)."""
     sources = load_salary_sources(settings)
     if not sources:
         return {"skipped": "no salary sheets configured ({})".format(settings.salary_sheets_path.name)}
@@ -534,9 +709,17 @@ def sync_salaries(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any
     pool = [(r["fantrax_id"], r["name"]) for r in rows(conn, "SELECT p.fantrax_id, p.name FROM players p "
             "JOIN league_players lp ON lp.player_id = p.fantrax_id WHERE lp.league_id=?", (league_id,))]
     out = {}
-    for ref, source in sources.items():
+    for ref, spec in sources.items():
         team_id = _resolve_team(conn, league_id, ref, settings.my_team_id)
-        contracts = parse_salary_sheet(list(csv.reader(io.StringIO(fetch_sheet_csv(source)))), lg["season_year"])
+        team = row(conn, "SELECT name FROM teams WHERE id=?", (team_id,))
+        if spec.get("owner") == "app":
+            out[team["name"] if team else team_id] = dict(
+                {"owner": "app", "sheet_read": False}, **adopt_sheet_contracts(conn, league_id, team_id))
+            continue
+        source = spec["url"]
+        parsed = parse_salary_sheet(list(csv.reader(io.StringIO(fetch_sheet_csv(source)))), lg["season_year"],
+                                    salary_column=spec.get("salary_column"), years_column=spec.get("years_column"))
+        contracts = parsed["contracts"]
         roster = rows(conn, "SELECT p.fantrax_id, p.name, ri.status FROM roster_items ri "
                             "JOIN players p ON p.fantrax_id = ri.player_id "
                             "WHERE ri.league_id=? AND ri.period=? AND ri.team_id=?", (league_id, period, team_id))
@@ -555,9 +738,11 @@ def sync_salaries(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any
             conn.execute("DELETE FROM contracts WHERE league_id=? AND team_id=?", (league_id, team_id))
             upsert(conn, "contracts", records, ["league_id", "team_id", "sheet_name"])
         on_sheet = {r["player_id"] for r in records if r["player_id"]}
-        team = row(conn, "SELECT name FROM teams WHERE id=?", (team_id,))
         out[team["name"] if team else team_id] = {
+            "layout": parsed["layout"],
             "contracts": len(records),
+            "committed_now": sum(r["salary"] or 0 for r in records if r["section"] in ("ROSTER", "BUYOUT")),
+            "duplicates_skipped": parsed["duplicates"],
             "matched": len(on_sheet),
             "fuzzy_matches": {c: m[1] for c, m in matched.items() if "fuzzy" in m[1]},
             "unmatched": [r["sheet_name"] for r in records if r["section"] != "BUYOUT" and not r["player_id"]],
@@ -603,6 +788,7 @@ def sync_all(conn: sqlite3.Connection, settings: Settings, resources: Optional[S
         "stats": lambda: sync_stats(conn, nhl, stat_seasons(conn, settings.league_id)),
         "schedule": lambda: sync_schedule(conn, nhl, settings.league_id),
         "match": lambda: match_players(conn, settings.league_id),
+        "bios": lambda: sync_bios(conn, nhl, settings.league_id),
         "salaries": lambda: sync_salaries(conn, settings),
     }
     # Always run in dependency order regardless of the order requested.

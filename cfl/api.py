@@ -5,15 +5,17 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import analysis as A
+from . import contracts as C
+from . import publish as P
 from .config import Settings, get_settings
 from .db import connect, row, rows
-from .sync import RESOURCES, current_period, sync_all
+from .sync import RESOURCES, _logged, current_period, sync_all
 
 app = FastAPI(
     title="CFL Manager",
@@ -121,14 +123,46 @@ def health(conn: sqlite3.Connection = Depends(get_conn)):
             "last_sync": last}
 
 
+def auto_publish() -> None:
+    """Background job: republish app-owned teams' sheets if anything changed. Logged in sync_log."""
+    settings = get_settings()
+    conn = connect(settings.db_path)
+    try:
+        if P.publish_status(conn, settings)["configured"]:
+            _logged(conn, "publish", lambda: P.publish(conn, settings))
+    finally:
+        conn.close()
+
+
 @app.post("/sync")
-def sync(resources: Optional[List[str]] = Query(None, description="Subset of: " + ", ".join(RESOURCES)),
+def sync(background: BackgroundTasks,
+         resources: Optional[List[str]] = Query(None, description="Subset of: " + ", ".join(RESOURCES)),
          conn: sqlite3.Connection = Depends(get_conn)):
     try:
         results = sync_all(conn, get_settings(), resources)
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
+    background.add_task(auto_publish)
     return {"ok": all(r["status"] == "ok" for r in results), "results": results}
+
+
+@app.get("/publish")
+def publish_status(conn: sqlite3.Connection = Depends(get_conn)):
+    """Whether sheet publishing is set up, and when each app-owned team's sheet was last written."""
+    out = P.publish_status(conn, get_settings())
+    last = row(conn, "SELECT finished_at, status, detail FROM sync_log WHERE resource='publish' ORDER BY id DESC LIMIT 1")
+    if last:
+        last["detail"] = json.loads(last["detail"]) if last["detail"] else None
+    out["last_run"] = last
+    return out
+
+
+@app.post("/publish")
+def publish_now(force: bool = Query(False, description="Write even if nothing changed"),
+                conn: sqlite3.Connection = Depends(get_conn)):
+    """Write app-owned teams' contracts to their Google Sheets now."""
+    s = get_settings()
+    return _logged(conn, "publish", lambda: P.publish(conn, s, force=force))
 
 
 @app.get("/sync/log")
@@ -291,6 +325,85 @@ def player(fantrax_id: str, conn: sqlite3.Connection = Depends(get_conn)):
         out["season_stats"] = rows(conn, "SELECT * FROM {} WHERE nhl_id=? ORDER BY season_id DESC".format(table),
                                    (p.nhl_id,))
     return out
+
+
+class ContractEdit(BaseModel):
+    years: int                          # seasons left, this one included
+    salary: Optional[float] = None      # per season; defaults to the player's current salary ($3 for an ELC)
+    contract_type: str = "STANDARD"     # STANDARD / ELC / IN_SEASON_UFA
+    note: Optional[str] = None
+
+
+def _player_or_404(ctx: A.Context, fantrax_id: str) -> A.Player:
+    p = ctx.players.get(fantrax_id)
+    if not p:
+        raise HTTPException(404, detail="Unknown player id {}".format(fantrax_id))
+    return p
+
+
+@app.get("/players/{fantrax_id}/contract")
+def player_contract(fantrax_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+    """The player's contract as the app uses it, what his salary sheet says, and any edit made here."""
+    ctx = _ctx(conn, get_settings())
+    _player_or_404(ctx, fantrax_id)
+    return C.contract_detail(conn, ctx, fantrax_id)
+
+
+@app.put("/players/{fantrax_id}/contract")
+def edit_player_contract(fantrax_id: str, edit: ContractEdit, background: BackgroundTasks,
+                         conn: sqlite3.Connection = Depends(get_conn)):
+    """Set how many years are left on a contract (and its type). It overrides the salary sheet, and
+    survives syncs, until reverted. The salary stays as it is unless one is given."""
+    s = get_settings()
+    p = _player_or_404(_ctx(conn, s), fantrax_id)
+    salary = edit.salary
+    if salary is None:
+        salary = C.ELC_SALARY if edit.contract_type == "ELC" else p.salary
+    if salary is None:
+        raise HTTPException(400, detail="{} has no salary on file yet; include one".format(p.name))
+    try:
+        C.save_override(conn, s.league_id, fantrax_id, [salary] * max(edit.years, 0), edit.contract_type, edit.note)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    background.add_task(auto_publish)
+    return C.contract_detail(conn, _ctx(conn, s), fantrax_id)
+
+
+class BirthDateEdit(BaseModel):
+    birth_date: Optional[str] = None    # YYYY-MM-DD; null drops a manual date so syncs can fill it again
+
+
+@app.put("/players/{fantrax_id}/birth-date")
+def set_birth_date(fantrax_id: str, edit: BirthDateEdit, background: BackgroundTasks,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    """Set a player's birth date by hand (it decides RFA vs UFA). Syncs never overwrite it."""
+    from datetime import date
+    s = get_settings()
+    _player_or_404(_ctx(conn, s), fantrax_id)
+    if edit.birth_date:
+        try:
+            born = date.fromisoformat(edit.birth_date)
+        except ValueError:
+            raise HTTPException(400, detail="birth_date must look like 2004-03-30")
+        if not 1960 <= born.year <= date.today().year - 15:
+            raise HTTPException(400, detail="That birth date doesn't look right")
+        conn.execute("UPDATE players SET birth_date=?, birth_date_source='manual' WHERE fantrax_id=?",
+                     (born.isoformat(), fantrax_id))
+    else:
+        conn.execute("UPDATE players SET birth_date=NULL, birth_date_source=NULL WHERE fantrax_id=?", (fantrax_id,))
+    conn.commit()
+    background.add_task(auto_publish)
+    return C.contract_detail(conn, _ctx(conn, s), fantrax_id)
+
+
+@app.delete("/players/{fantrax_id}/contract")
+def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: sqlite3.Connection = Depends(get_conn)):
+    """Drop the app's contract for this player (for a sheet-read team, the sheet applies again)."""
+    s = get_settings()
+    _player_or_404(_ctx(conn, s), fantrax_id)
+    C.delete_override(conn, s.league_id, fantrax_id)
+    background.add_task(auto_publish)
+    return C.contract_detail(conn, _ctx(conn, s), fantrax_id)
 
 
 # --------------------------------------------------------------------------- analysis

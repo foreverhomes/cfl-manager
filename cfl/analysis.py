@@ -17,11 +17,11 @@ import sqlite3
 from collections import defaultdict
 from datetime import date
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .config import Settings
 from .db import row, rows
-from .sync import stat_seasons
+from .sync import MAX_CONTRACT_YEARS, app_owned_teams, stat_seasons
 
 # Fantrax category short name -> skater_stats column.
 SKATER_STATS = {
@@ -41,9 +41,14 @@ MIN_POOL_GAMES = 10           # games (this + last season) to count toward z-sco
 NON_LINEUP_STATUSES = {"MINORS", "INJURED_RESERVE"}
 CAPPED_STATUSES = {"ACTIVE", "RESERVE"}   # what counts against the roster limit and the salary cap
 
-# League rules: cap fallback when Fantrax doesn't report one, and the release / buyout threshold.
+# League rules: cap fallback when Fantrax doesn't report one, the contract-year bank, and the
+# release / buyout threshold.
 DEFAULT_SALARY_CAP = 220.0
+CONTRACT_YEAR_BANK = 50
 FREE_RELEASE_MAX_SALARY = 3.0
+# A player whose contract ends becomes a UFA if he is this old on July 1 after his last season,
+# otherwise an RFA. In-season UFA pickups go back to the auction as UFAs whatever their age.
+UFA_AGE = 27
 
 
 class NotSynced(RuntimeError):
@@ -73,11 +78,14 @@ class Player:
     team_id: Optional[str] = None
     roster_status: Optional[str] = None
     adp: Optional[float] = None
+    birth_date: Optional[str] = None           # YYYY-MM-DD
     # From the team salary sheet, when loaded: current salary, seasons left (incl. this one),
     # and the salary for each of those seasons.
     salary: Optional[float] = None
     contract_years: Optional[int] = None
     contract_salaries: List[float] = field(default_factory=list)
+    contract_type: str = "STANDARD"            # STANDARD / ELC / IN_SEASON_UFA
+    contract_source: Optional[str] = None      # "sheet", "override" (app edit over a sheet), "app" (app-owned team)
     # Per game for skaters; per *team* game for goalies (already scaled by start share).
     rates: Dict[str, float] = field(default_factory=dict)
     start_share: Optional[float] = None
@@ -112,6 +120,7 @@ class Context:
     roster_cap: Optional[int] = None
     salary_caps: Dict[str, float] = field(default_factory=dict)
     contract_teams: set = field(default_factory=set)          # teams with a salary sheet loaded
+    app_owned: set = field(default_factory=set)               # teams whose contracts live in this app
     buyouts: Dict[str, List[List[float]]] = field(default_factory=dict)   # team -> per-season dead cap
     _equiv_ranks: Dict[str, float] = field(default_factory=dict, repr=False)
     _market: Optional[Dict[str, float]] = field(default=None, repr=False)
@@ -358,7 +367,7 @@ def load_context(conn: sqlite3.Connection, settings: Settings) -> Context:
         players[fid] = Player(
             fantrax_id=fid, name=r["name"], nhl_team=r["nhl_team"], position=r["position"], eligible=eligible,
             group=_group_for(r["position"]), nhl_id=r["nhl_id"], team_id=ri.get("team_id"),
-            roster_status=ri.get("status"), adp=r["adp"],
+            roster_status=ri.get("status"), adp=r["adp"], birth_date=r["birth_date"],
         )
 
     roster_info = json.loads(league["roster_info"] or "{}")
@@ -381,6 +390,20 @@ def load_context(conn: sqlite3.Connection, settings: Settings) -> Context:
         # sheet of the team that rosters him.
         if p is not None and (p.salary is None or p.team_id == c["team_id"]):
             p.salary, p.contract_years, p.contract_salaries = c["salary"], c["years_remaining"], salaries
+            p.contract_source = "sheet"
+    # Contracts kept in the app (edits, or every contract of an app-owned team) win over the sheets.
+    ctx.app_owned = set(app_owned_teams(conn, settings))
+    ctx.contract_teams |= ctx.app_owned
+    for o in rows(conn, "SELECT * FROM contract_overrides WHERE league_id=?", (league_id,)):
+        p = players.get(o["player_id"])
+        if p is None:
+            continue
+        salaries = json.loads(o["salaries"])
+        p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), salaries
+        p.contract_type = o["contract_type"]
+        p.contract_source = "app" if p.team_id in ctx.app_owned else "override"
+        if p.team_id:
+            ctx.contract_teams.add(p.team_id)
 
     # Rest-of-season schedule: from today (or the league start) to the league's end date.
     start = max(date.today().isoformat(), league["start_date"] or "")
@@ -689,6 +712,11 @@ def player_summary(p: Player, ctx: Context, weights: Optional[Dict[str, Dict[str
         "market_value": round(ctx.market_values().get(p.fantrax_id, 0.0), 2) if p.z else None,
         "salary": p.salary,
         "contract_years": p.contract_years,
+        "contract_type": p.contract_type if p.salary is not None else None,
+        "contract_source": p.contract_source,
+        "birth_date": p.birth_date,
+        "age": age_on(p.birth_date, date.today()) if p.birth_date else None,
+        "contract_end": contract_end(ctx, p),
     }
     if p.start_share is not None:
         out["start_share"] = round(p.start_share, 2)
@@ -697,7 +725,7 @@ def player_summary(p: Player, ctx: Context, weights: Optional[Dict[str, Dict[str
     return out
 
 
-def _season_label(ctx: Context, offset: int) -> str:
+def season_label(ctx: Context, offset: int) -> str:
     year = (ctx.league.get("season_year") or 0) + offset
     return "{}/{:02d}".format(year, (year + 1) % 100)
 
@@ -723,18 +751,52 @@ def cap_summary(ctx: Context, team_id: str, players: Optional[List[Player]] = No
         total = sum(p.contract_salaries[i] for p in players
                     if p.roster_status != "MINORS" and len(p.contract_salaries) > i)
         total += sum(b[i] for b in buyouts if len(b) > i)
-        future.append({"season": _season_label(ctx, i), "committed": total, "space": cap - total})
+        future.append({"season": season_label(ctx, i), "committed": total, "space": cap - total})
     return {
         "cap": cap, "committed": committed, "space": cap - committed, "dead_cap": dead,
         "ir_relief": sum(p.salary or 0 for p in players if p.roster_status == "INJURED_RESERVE"),
         "minors_relief": sum(p.salary or 0 for p in players if p.roster_status == "MINORS"),
         "unknown_salary": sorted(p.name for p in counting if p.salary is None),
-        # Seasons left on every contract, this one included. (How this maps onto the league's
-        # 50-year contract bank is still to be confirmed, so no limit is applied.)
-        "contract_years": sum(p.contract_years or 0 for p in players),
-        "season": _season_label(ctx, 0),
+        # Contract-year bank: seasons left on every contract, this one included, for active and
+        # bench players. Minors and IR don't count; in-season UFA pickups are exempt by rule.
+        "contract_years": contract_years(players),
+        "contract_year_bank": CONTRACT_YEAR_BANK,
+        "season": season_label(ctx, 0),
         "future": future,
     }
+
+
+def contract_years(players: Iterable[Player]) -> int:
+    return sum(p.contract_years or 0 for p in players
+               if p.roster_status in CAPPED_STATUSES and p.contract_type != "IN_SEASON_UFA")
+
+
+def age_on(birth_date: str, on: date) -> int:
+    born = date.fromisoformat(birth_date)
+    return on.year - born.year - ((on.month, on.day) < (born.month, born.day))
+
+
+def contract_end(ctx: Context, p: Player) -> Optional[Dict[str, Any]]:
+    """What the player becomes when his contract runs out: UFA or RFA, per league rules.
+
+    The contract ends after its last season; free agency is decided by age on July 1 that summer.
+    Returns None for a player with no contract on file.
+    """
+    if p.salary is None or not p.contract_years:
+        return None
+    season_year = ctx.league.get("season_year") or date.today().year
+    july1 = date(season_year + p.contract_years, 7, 1)
+    out: Dict[str, Any] = {"after_season": season_label(ctx, p.contract_years - 1), "year": july1.year,
+                           "status": None, "age_at_expiry": None, "reason": None}
+    if p.contract_type == "IN_SEASON_UFA":
+        out.update(status="UFA", reason="In-season pickups return to the auction as UFAs")
+    elif not p.birth_date:
+        out["reason"] = "Birth date unknown"
+    else:
+        age = age_on(p.birth_date, july1)
+        out.update(status="UFA" if age >= UFA_AGE else "RFA", age_at_expiry=age,
+                   reason="{} on July 1, {}".format(age, july1.year))
+    return out
 
 
 def release_cost(p: Player) -> float:
@@ -981,7 +1043,10 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
         leaving = set(out_ids) | set(dropped)
         roster_after = [p for p in ctx.roster(t) if p.fantrax_id not in leaving] + [ctx.players[f] for f in in_ids]
         buyouts = sum(release_cost(ctx.players[f]) for f in dropped)
-        after = cap_summary(ctx, t, roster_after, extra_dead_cap=buyouts)
+        # With no trade partner the players are released: $4+ contracts cost a buyout.
+        released = list(out_ids) if other_team_id is None else []
+        release_buyouts = sum(release_cost(ctx.players[f]) for f in released)
+        after = cap_summary(ctx, t, roster_after, extra_dead_cap=buyouts + release_buyouts)
         incoming = [ctx.players[f] for f in in_ids if ctx.players[f].roster_status in CAPPED_STATUSES]
         outgoing = [ctx.players[f] for f in out_ids if ctx.players[f].roster_status in CAPPED_STATUSES]
         return {
@@ -989,10 +1054,13 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
             "space_before": before["space"], "space_after": after["space"],
             "salary_out": sum(p.salary or 0 for p in outgoing), "salary_in": sum(p.salary or 0 for p in incoming),
             "drop_buyouts": buyouts,
+            "release_buyouts": release_buyouts,
             # Incoming players with no known salary (their team's sheet isn't loaded): space_after
             # is overstated by whatever they earn.
             "unknown_incoming": sorted(p.name for p in incoming if p.salary is None),
             "over_cap": after["space"] < 0,
+            "contract_years_before": before["contract_years"], "contract_years_after": after["contract_years"],
+            "contract_year_bank": CONTRACT_YEAR_BANK,
         }
 
     def volume(games: Dict[str, float]) -> Dict[str, float]:

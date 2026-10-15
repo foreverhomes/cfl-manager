@@ -33,6 +33,9 @@ class Settings:
     shrink_games: float
     # JSON file mapping teams to their salary sheets (see salary_sheets.example.json).
     salary_sheets_path: Path
+    # Apps Script web app that writes an app-owned team's sheet (see cfl/sheet_publisher.gs).
+    sheet_publish_url: Optional[str] = None
+    sheet_publish_token: Optional[str] = None
 
 
 def get_settings() -> Settings:
@@ -45,4 +48,6 @@ def get_settings() -> Settings:
         prior_season_weight=float(os.environ.get("CFL_PRIOR_SEASON_WEIGHT", "0.5")),
         shrink_games=float(os.environ.get("CFL_SHRINK_GAMES", "5")),
         salary_sheets_path=Path(os.environ.get("CFL_SALARY_SHEETS", ROOT / "salary_sheets.json")),
+        sheet_publish_url=os.environ.get("CFL_SHEET_PUBLISH_URL") or None,
+        sheet_publish_token=os.environ.get("CFL_SHEET_PUBLISH_TOKEN") or None,
     )

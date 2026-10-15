@@ -48,9 +48,10 @@ def fetch_sheet_csv(source: str) -> str:
     m = re.search(r"/spreadsheets/d/([\w-]+)", source)
     url = source
     if m and "/export" not in source:
+        # Without a gid Google exports the first tab, which is what a bare sheet link means.
         gid = re.search(r"[#?&]gid=(\d+)", source)
-        url = "https://docs.google.com/spreadsheets/d/{}/export?format=csv&gid={}".format(
-            m.group(1), gid.group(1) if gid else "0")
+        url = "https://docs.google.com/spreadsheets/d/{}/export?format=csv{}".format(
+            m.group(1), "&gid=" + gid.group(1) if gid else "")
     resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
     resp.raise_for_status()
     if "text/html" in resp.headers.get("Content-Type", ""):
@@ -126,6 +127,18 @@ class NHLStatsClient:
 
     def goalie_stats(self, season_id: int) -> List[Dict[str, Any]]:
         return self._report("goalie/summary", season_id)
+
+    def bios(self, kind: str, season_id: int) -> List[Dict[str, Any]]:
+        """Birth dates (and draft info) for every skater or goalie who played that season."""
+        return self._report("{}/bios".format(kind), season_id)
+
+    def search_players(self, name: str) -> List[Dict[str, Any]]:
+        """NHL.com player search, which also covers prospects who haven't played an NHL game."""
+        return _Http("https://search.d3.nhle.com/api/v1").get(
+            "search/player", {"culture": "en-us", "limit": 10, "q": name}) or []
+
+    def player_landing(self, nhl_id: int) -> Dict[str, Any]:
+        return self.web.get("player/{}/landing".format(nhl_id))
 
     def schedule_week(self, day: str) -> Dict[str, Any]:
         """League schedule for the week starting at `day` (YYYY-MM-DD); includes nextStartDate."""
