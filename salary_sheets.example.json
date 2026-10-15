@@ -1,4 +1,13 @@
 {
-  "_comment": "Copy to salary_sheets.json. Keys: a team id, a unique part of a team name, or \"me\". Values: a Google Sheets URL for the tab (shared 'anyone with the link can view'; the gid picks the tab), or a path to a CSV export.",
-  "me": "https://docs.google.com/spreadsheets/d/<sheet-id>/edit?gid=0#gid=0"
+  "_comment": "Copy to salary_sheets.json. Keys: a team id, a unique part of a team name, or \"me\". Values: a Google Sheets URL (shared 'anyone with the link can view'; add #gid=... for a tab other than the first) or a CSV path, or an object with column hints for sheets the parser can't read on its own. \"owner\": \"app\" makes the app the source of truth for that team: its sheet is adopted once, then only written to (see README).",
+  "me": {
+    "url": "https://docs.google.com/spreadsheets/d/<sheet-id>/edit?gid=0#gid=0",
+    "owner": "app",
+    "publish_tab": "roster"
+  },
+  "Some Team": {
+    "url": "https://docs.google.com/spreadsheets/d/<sheet-id>/edit",
+    "salary_column": "AE",
+    "years_column": "AF"
+  }
 }

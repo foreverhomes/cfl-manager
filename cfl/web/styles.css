@@ -21,6 +21,9 @@
   --good-text: #006300;
   --bad: #d03b3b;
   --warn: #fab219;
+  --prospect: #4a3aa7;        /* categorical violet: prospects are an identity, not a good/bad state */
+  --rfa: #2a78d6;             /* categorical blue / orange (validated pair) for contract-end status */
+  --ufa: #eb6834;
   --shadow: 0 1px 2px rgba(11, 11, 11, 0.06);
   --radius: 12px;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -42,6 +45,9 @@
     --div-neg: #e66767;
     --div-mid: #383835;
     --good-text: #0ca30c;
+    --prospect: #9085e9;
+    --rfa: #3987e5;
+    --ufa: #d95926;
     --shadow: none;
   }
 }
@@ -61,6 +67,9 @@
   --div-neg: #e66767;
   --div-mid: #383835;
   --good-text: #0ca30c;
+  --prospect: #9085e9;
+  --rfa: #3987e5;
+  --ufa: #d95926;
   --shadow: none;
 }
 
@@ -108,6 +117,10 @@ input[type="search"] { width: 100%; }
 .btn:disabled { opacity: 0.6; cursor: progress; }
 .btn.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--border); }
 .btn.small { padding: 4px 10px; min-height: 28px; font-size: 13px; }
+/* Danger: status-critical color, always with a label that says what happens. */
+.btn.danger { background: var(--bad); color: #ffffff; }
+.btn.danger-ghost { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
+.btn.danger-ghost:hover { background: color-mix(in oklab, var(--bad) 10%, transparent); }
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px; cursor: pointer; white-space: nowrap; }
 
 .filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; margin-bottom: 16px; }
@@ -135,6 +148,8 @@ input[type="search"] { width: 100%; }
 .tile-value.hero { font-size: 48px; }
 .tile-value small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 4px; }
 .tile-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.tile-sub.warn { color: var(--ink-2); }
+.tile-sub .down { color: var(--bad); }
 .tile.hero-tile { grid-column: span 2; }
 
 /* ---------------------------------------------------------------- legend */
@@ -264,6 +279,74 @@ input[type="search"] { width: 100%; }
 .meter-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 0 4px 4px 0; }
 .meter-fill.over { background: var(--bad); }
 
+.publish-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.publish-status a { color: var(--ink); }
+.warn-text { color: var(--ink-2); }
+.warn-text::before { content: "⚠ "; color: var(--bad); }
+
+/* ---------------------------------------------------------------- sectioned player tables */
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.segmented button { border: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; min-height: 34px; cursor: pointer; font-weight: 500; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.data-table.sectioned tbody.seg + tbody.group .group-row th { padding-top: 6px; }
+.data-table .seg-row th { text-align: left; font-size: 14px; font-weight: 600; color: var(--ink); padding: 18px 8px 6px;
+  border-bottom: 2px solid var(--ink); }
+.data-table tbody.seg:first-of-type .seg-row th { padding-top: 6px; }
+.data-table .group-row th { text-align: left; font-size: 12px; font-weight: 600; color: var(--ink-2); text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 12px 8px 4px; border-bottom: 1px solid var(--axis); background: var(--surface); }
+.data-table .seg-sub { font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.data-table .seg-meta { float: right; font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.data-table tbody.group tr:hover th { background: var(--surface); }
+.pill { --pill: var(--muted); display: inline-block; font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 999px; margin-left: 8px;
+  vertical-align: 1px; border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; }
+.pill { border-color: color-mix(in oklab, var(--pill) 55%, transparent);
+  background: color-mix(in oklab, var(--pill) 14%, transparent); color: var(--ink); }
+.pill::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--pill);
+  margin-right: 5px; vertical-align: 1px; }
+.pill.active { --pill: var(--good); }
+/* Bench is still a rostered player (counts for the cap and lineups): a lighter step of Active's green. */
+.pill.bench { --pill: color-mix(in oklab, var(--good) 45%, var(--surface)); }
+.pill.ir { --pill: var(--bad); }
+.pill.prospect { --pill: var(--prospect); }
+.pill.fa { --pill: var(--axis); background: transparent; color: var(--ink-2); }
+.pill.end { margin-left: 0; font-variant-numeric: tabular-nums; }
+.pill.rfa { --pill: var(--rfa); }
+.pill.ufa { --pill: var(--ufa); }
+.pill.unknown { --pill: var(--axis); background: transparent; color: var(--ink-2); }
+.expiry-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--ink-2); margin: -4px 0 10px; }
+.birth-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
+.date-input { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; min-height: 30px; }
+
+/* ---------------------------------------------------------------- players + contract editor */
+.field.grow { flex: 1 1 240px; }
+.player-link { background: none; border: 0; padding: 0; font: inherit; font-weight: 500; color: var(--ink);
+  cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--axis); text-underline-offset: 3px; }
+.player-link:hover { text-decoration-color: var(--ink); }
+.dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--ink);
+  padding: 18px; width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; }
+.dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.dialog h2 { font-size: 18px; }
+.dialog h3 { margin-top: 4px; }
+.dialog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
+.dialog-row input { width: 100%; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 8px; min-height: 34px; }
+.stepper-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.stepper { display: inline-flex; align-items: stretch; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.stepper-btn { width: 34px; min-height: 34px; border: 0; background: var(--wash); color: var(--ink); font-size: 16px; cursor: pointer; }
+.stepper-btn:disabled { color: var(--muted); cursor: default; }
+.dialog-row .stepper .stepper-value { width: 52px; border: 0; border-radius: 0; text-align: center; padding: 0;
+  font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+.stepper-value::-webkit-inner-spin-button, .stepper-value::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.dialog-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.dialog-actions { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+.dialog-actions .spacer { flex: 1; }
+.dialog .banner { margin: 12px 0 0; }
+.dialog.narrow { width: min(460px, calc(100vw - 32px)); }
+.dialog-text { color: var(--ink-2); margin-top: 10px; }
+.dialog-list { color: var(--ink-2); margin: 8px 0 0; padding-left: 20px; }
+.dialog-list li { margin: 4px 0; }
+
 /* ---------------------------------------------------------------- tooltip */
 .tooltip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14); max-width: 260px; }
 .tooltip .tt-value { font-size: 14px; font-weight: 600; }
@@ -283,6 +366,9 @@ input[type="search"] { width: 100%; }
   .topbar-actions { margin-left: 0; width: 100%; }
   .topbar-actions .field { flex: 1; min-width: 0; }
   .topbar-actions select { flex: 1; min-width: 0; width: 100%; }
+  .topbar-actions { flex-wrap: wrap; }
+  .topbar-actions .field { flex: 1 1 100%; }
+  .topbar-actions .btn { flex: 1; }
   .brand-league { max-width: 220px; }
   .card { padding: 14px 12px; }
   .kpis { gap: 8px; }

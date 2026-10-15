@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from typing import List, Optional
 
@@ -39,6 +40,35 @@ def cmd_sync(args) -> None:
         print("{:<10} {:<6} {}".format(r["resource"], r["status"], json.dumps(detail)))
     print("db:", settings.db_path)
     if not ok:
+        sys.exit(1)
+
+
+def cmd_publish(args) -> None:
+    import secrets
+
+    from . import publish as P
+    from .config import ROOT
+    from .sync import _logged
+
+    settings = get_settings()
+    if args.script:
+        if not settings.sheet_publish_token:
+            env = ROOT / ".env"
+            with open(env, "a") as f:
+                f.write("\n# Shared secret for the sheet publisher (cfl/sheet_publisher.gs)\n"
+                        "CFL_SHEET_PUBLISH_TOKEN={}\n".format(secrets.token_urlsafe(24)))
+            os.environ.pop("CFL_SHEET_PUBLISH_TOKEN", None)
+            settings = get_settings()
+            print("Added CFL_SHEET_PUBLISH_TOKEN to .env")
+        print("Apps Script written to {} (it contains your token; don't commit or share it).".format(
+            P.write_script(settings)))
+        print("Paste it into your sheet: Extensions > Apps Script. Then Deploy > New deployment > Web app,\n"
+              "Execute as: Me, Who has access: Anyone. Put the web app URL in .env as CFL_SHEET_PUBLISH_URL.")
+        return
+    conn = connect(settings.db_path)
+    result = _logged(conn, "publish", lambda: P.publish(conn, settings, force=args.force))
+    print(json.dumps(result, indent=2))
+    if result["status"] != "ok":
         sys.exit(1)
 
 
@@ -133,6 +163,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("publish", help="Write app-owned teams' contracts to their Google Sheets")
+    p.add_argument("--force", action="store_true", help="Write even if nothing changed")
+    p.add_argument("--script", action="store_true", help="Write the Apps Script (with your token) to set up publishing")
+    p.set_defaults(func=cmd_publish)
 
     p = sub.add_parser("teams", help="List team ids")
     p.set_defaults(func=cmd_teams)

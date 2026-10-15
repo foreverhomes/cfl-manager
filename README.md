@@ -28,6 +28,8 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   the league average, with actual weekly W-L-T and need weights. A league heatmap shows every
   team's projected rank in every category. A sortable roster table rounds it out. The team picker
   in the header lets you view any team.
+- **Players.** Search the league or browse a team, filter to players missing a salary, and edit
+  any player's contract.
 - **Trade builder.** Select any of your players. Optionally pick a trade partner and their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in
     expected category wins, per-category before/after, games and starts volume, roster-limit
@@ -54,31 +56,52 @@ sync step reports anything it couldn't link.
 
 ## Sync
 
+In the app, **Refresh rosters & stats** pulls today's Fantrax rosters and NHL.com stats
+(`rosters`, `stats`, `match`, plus `bios` for any new player's birth date). **Full sync…** re-reads every source after a confirmation, and
+replaces each team's salary-sheet contracts with what the sheets say now. Neither touches contract
+edits made in the app, and neither writes to Fantrax or Google.
+
 ```bash
 python -m cfl sync                    # everything, in dependency order
 python -m cfl sync rosters matchups   # just the fast-changing bits
 ```
 
 Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `schedule`, `match`,
-`salaries`. Matchup scores
+`bios`, `salaries`. `bios` loads birth dates. Season bios reports cover everyone who has played,
+and rostered prospects are looked up one by one through NHL.com's player search, which also
+handles transliterations like Yegor/Egor. Lookups happen only for players still missing a date. Matchup scores
 for completed periods are fetched once and skipped after that. Every run is recorded in `sync_log`.
 
 ## Salaries and the cap
 
-The league tracks contracts in a Google Sheet per team, not in Fantrax. List the sheets in
-`salary_sheets.json` (git-ignored; copy `salary_sheets.example.json`). Each key is a team id,
-a unique part of a team name, or `me`. Each value is the sheet URL with the tab's `gid`, or a
-path to a CSV export:
+The league tracks contracts in a Google Sheet per GM (shared from the CFL Drive folder), not in
+Fantrax. List the sheets in `salary_sheets.json` (git-ignored; copy `salary_sheets.example.json`).
+
+- **Keys:** a team id, a unique part of a team name, or `me`.
+- **Values:** a sheet URL or a CSV path. A URL without a `gid` reads the first tab. A value can
+  also be an object with column hints:
 
 ```json
-{ "me": "https://docs.google.com/spreadsheets/d/<id>/edit?gid=0#gid=0" }
+{
+  "me": "https://docs.google.com/spreadsheets/d/<id>/edit?gid=0#gid=0",
+  "linseman": { "url": "https://docs.google.com/spreadsheets/d/<id>/edit",
+                "salary_column": "AE", "years_column": "AF" }
+}
 ```
 
 Sheets must be shared as "anyone with the link can view". `python -m cfl sync salaries` reads them.
+A Drive shortcut doesn't work; use the URL of the sheet it points to.
 
-- **Layout:** a header row starting with `Player`, then season columns (`2026/2027`, …) read by
-  position from the current season. Labels like `BUYOUTS`, `Injured Reserve` and `Minor League`
-  start sections; rows without a name (totals, spacers) are skipped.
+- **Layouts:** every GM's sheet is different, so the parser looks for:
+  - **Seasons:** a header cell naming the current season in any common form (`2026/2027`,
+    `2026-27`, `26/27`, `26-27`). Salaries are read from that column rightward, including
+    unlabeled columns, until a blank or `UFA`/`RFA`.
+  - **Salary + years:** no season columns, but salary/price and years-left/length columns.
+  - **Hints:** for anything else (e.g. salary/years column pairs per season), set `salary_column`
+    and `years_column` as column letters.
+- **Rows:** `Last, First` names are flipped. Section labels (`BUYOUTS`/`CAP PUNISHMENT`,
+  `Injured Reserve`/`IR GUYS`, `Minors`, `PROSPECTS`) are recognised. Totals and other summary
+  rows, unsigned prospects, and duplicate rows are skipped.
 - **Name matching:** names are matched to the team's Fantrax roster, fuzzily, because typos like
   "Slavkofsky" are common. Other players match only on an exact, unique name. The sync reports
   every fuzzy match, every unmatched name, and rostered players with no salary on the sheet.
@@ -89,8 +112,53 @@ Sheets must be shared as "anyone with the link can view". `python -m cfl sync sa
   `cap` summary covering this season and the next four. Trade evaluations show cap space
   before/after for each team that has a sheet, flag incoming players whose salary is unknown, and
   include buyout costs for auto-dropped players.
-- **Contract years:** the summary reports the total seasons left on contracts. How that maps onto
-  the 50-year contract bank isn't settled yet, so no limit is applied.
+- **Editing contracts:** the **Players** tab (or a click on any name in the roster table) opens a
+  contract editor. It sets the years left on a contract, plus its type and a note; the salary stays
+  as the sheet has it. A player on no sheet also needs a salary. Edits are stored locally as
+  overrides. They win over the sheets, survive syncs, and can be reverted to the sheet. Contract
+  types follow the rules: **ELC** is $3 for at most 3 years, and an **in-season UFA** gets 1 year
+  and doesn't use contract-bank years.
+  API: `GET/DELETE /players/{id}/contract`, and `PUT` with
+  `{"years": 2, "contract_type": "ELC", "note": "..."}` (optional `salary`).
+- **Coverage:** the sync reports, per team, rostered players with no salary on the sheet. A high
+  count usually means that GM's sheet is out of date.
+- **RFA or UFA at expiry:** a player is a **UFA** if he's 27 or older on July 1 after his
+  contract's last season, otherwise an **RFA**. In-season UFA pickups are always UFAs. Every player
+  shows this as a badge, e.g. "RFA '29", along with his age. The published sheet has an
+  **At expiry** column. Birth dates come from NHL.com; enter a missing or wrong one in the player
+  editor. Hand-entered dates are never overwritten by a sync.
+- **Contract-year bank (50):** seasons left on every contract, this one included, for active and
+  bench players. Minors and IR don't count, and in-season UFA deals are exempt. The dashboard
+  flags a team over the bank, and trades show contract years before → after.
+
+## Publishing your team to its Google Sheet
+
+For teams marked `"owner": "app"` in `salary_sheets.json` (yours), the app is the source of truth:
+
+- **One-time adoption:** the first `sync salaries` copies that team's sheet contracts into the app.
+  After that the sheet is never read again.
+- **The sheet becomes a published view.** After every contract edit and every sync, the app
+  rewrites the team's `roster` tab: Forwards / Defense / Goalies by Fantrax status, buyouts,
+  totals, Injured Reserve, and Minor League. Committed, cap space and contract years are live
+  formulas. Nothing is sent when nothing changed.
+- **The cap card shows the last publish** and has a **Publish now** button. From the command
+  line, run `python -m cfl publish --force`.
+
+The app writes through a small Apps Script attached to the sheet, so no Google Cloud project is
+needed. Set it up once:
+
+1. Run `python -m cfl publish --script`. It adds a random `CFL_SHEET_PUBLISH_TOKEN` to `.env` and
+   writes `data/sheet_publisher.gs`, the script with your token filled in. It's git-ignored;
+   don't share it.
+2. In the sheet, open **Extensions > Apps Script** and replace the editor's contents with that
+   file. Save.
+3. Choose **Deploy > New deployment**, type **Web app**. Set **Execute as: Me** and **Who has
+   access: Anyone**. Authorize when asked, then copy the web app URL.
+4. Add it to `.env` as `CFL_SHEET_PUBLISH_URL=...` and restart the server. Then click
+   **Publish now** (or run `python -m cfl publish --force`).
+
+"Anyone" means anyone with the URL can call the script, but every write must carry your token.
+The template is `cfl/sheet_publisher.gs`. After changing it, redeploy with a new version.
 
 ## API
 
@@ -113,6 +181,7 @@ Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it
 | `GET /analysis/teams/me/targets?from_team=Ruff` | only one team's players (team id or unique part of the name; implies `source=trade`) |
 | `GET /analysis/teams/me/targets?offer=Connor` | trade targets of comparable value to one of your players (see below) |
 | `GET /analysis/teams/me/trade-partners` | teams whose strengths match your weaknesses, players each way, your trade chips |
+| `GET /publish`, `POST /publish?force=true` | sheet publishing status; publish app-owned teams now |
 | `POST /analysis/trade` | cost/benefit of any trade, e.g. `{"give": [ids], "other_team_id": "Ruff", "get": [ids]}`; omit the partner to price losing players |
 
 Common analysis parameters:
