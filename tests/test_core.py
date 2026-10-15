@@ -8,7 +8,7 @@ import pytest
 from cfl import analysis as A
 from cfl.config import Settings
 from cfl.db import connect, upsert
-from cfl.sync import match_players, normalize_name, split_fantrax_name
+from cfl.sync import match_players, match_sheet_names, normalize_name, parse_salary_sheet, split_fantrax_name
 
 LEAGUE = "L1"
 
@@ -259,3 +259,80 @@ def test_evaluate_trade_two_for_one_drops_to_the_cap():
         A.evaluate_trade(ctx, "t1", give=["b1"], other_team_id="t2")        # not your player
     with pytest.raises(ValueError):
         A.evaluate_trade(ctx, "t1", give=[], get=["b1"])                    # partner required
+
+
+def test_parse_salary_sheet_handles_sections_totals_and_mislabeled_seasons():
+    rows = [
+        ["Player", "Pos", "2026/2027", "2027/2028", "2027/2028", "2028/2029"],   # 3rd season mislabeled
+        ["", "", "", "", "", ""],
+        ["Morgan Geekie", "", "5", "5", "5", ""],
+        ["Alex Ovechkin", "", "$4", "", "", ""],
+        ["BUYOUTS", "", "", "", "", ""],
+        ["Old Guy", "", "3", "3", "", ""],
+        ["IR Cap relief", "", "-8", "", "", ""],
+        ["", "", "189", "135", "77", "53"],                                        # totals: no name
+        ["Injured Reserve", "", "", "", "", ""],
+        ["Hurt Guy", "", "8", "8", "", ""],
+        ["Minor League", "", "", "", "", ""],
+    ]
+    got = {c["sheet_name"]: c for c in parse_salary_sheet(rows, 2026)}
+    assert set(got) == {"Morgan Geekie", "Alex Ovechkin", "Old Guy", "Hurt Guy"}
+    assert got["Morgan Geekie"]["salaries"] == [5, 5, 5] and got["Morgan Geekie"]["years_remaining"] == 3
+    assert got["Alex Ovechkin"]["salary"] == 4 and got["Alex Ovechkin"]["years_remaining"] == 1
+    assert got["Old Guy"]["section"] == "BUYOUT" and got["Hurt Guy"]["section"] == "IR"
+    # A sheet that still shows last season starts reading at the current one.
+    assert parse_salary_sheet([["Player", "2025/26", "2026/27"], ["X", "9", "7"]], 2026)[0]["salaries"] == [7]
+
+
+def test_match_sheet_names_fuzzy_on_roster_exact_elsewhere():
+    roster = [("a", "Juraj Slafkovsky"), ("b", "Shayne Gostisbehere"), ("c", "Shane Pinto")]
+    pool = roster + [("d", "Connor McDavid"), ("e", "Sebastian Aho"), ("f", "Sebastian Aho")]
+    got = match_sheet_names(["Juraj Slavkofsky", "Shane Gostibehere", "Shane Pinto", "Connor McDavid",
+                             "Sebastian Aho", "Somebody Else"], roster, pool)
+    assert got["Juraj Slavkofsky"][0] == "a" and "fuzzy" in got["Juraj Slavkofsky"][1]
+    assert got["Shane Gostibehere"][0] == "b"
+    assert got["Shane Pinto"] == ("c", "roster")
+    assert got["Connor McDavid"] == ("d", "league")
+    assert "Sebastian Aho" not in got and "Somebody Else" not in got   # ambiguous / unknown
+
+
+def _with_contract(p, salaries):
+    p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), list(salaries)
+    return p
+
+
+def test_cap_summary_follows_league_rules():
+    players = [
+        _with_contract(_p("a", ["C", "F"], "F", 5), [20, 20]),
+        _with_contract(_p("b", ["D"], "D", 4, status="RESERVE"), [10]),
+        _with_contract(_p("ir", ["C", "F"], "F", 3, status="INJURED_RESERVE"), [8, 8]),
+        _with_contract(_p("kid", ["C", "F"], "F", 1, status="MINORS"), [3, 3]),
+        _p("new", ["C", "F"], "F", 1),                                   # no salary on the sheet
+    ]
+    ctx = _ctx_with(players)
+    ctx.league = {"season_year": 2026}
+    ctx.contract_teams, ctx.salary_caps, ctx.buyouts = {"t1"}, {"t1": 50}, {"t1": [[2, 2]]}
+    cap = A.cap_summary(ctx, "t1")
+    assert cap["committed"] == 20 + 10 + 2          # IR and minors don't count; the buyout does
+    assert cap["space"] == 18 and cap["ir_relief"] == 8 and cap["minors_relief"] == 3
+    assert cap["unknown_salary"] == ["new"]
+    assert cap["future"][0] == {"season": "2027/28", "committed": 20 + 8 + 2, "space": 20}   # IR returns
+    assert A.cap_summary(ctx, "t2") is None
+    assert [A.release_cost(p) for p in players] == [10, 5, 4, 0, 0]   # $3 or less is a free release
+
+
+def test_evaluate_trade_cap_effect_includes_drop_buyouts_and_flags_unknown_salaries():
+    ctx = _trade_ctx()
+    for fid, salary in (("a1", 30), ("a2", 6), ("a3", 2)):
+        _with_contract(ctx.players[fid], [salary])
+    ctx.league = {"season_year": 2026}
+    ctx.contract_teams, ctx.salary_caps = {"t1"}, {"t1": 40}
+    res = A.evaluate_trade(ctx, "t1", give=["a3"], other_team_id="t2", get=["b1", "b2"])
+    me, them = res["sides"]
+    assert [p["fantrax_id"] for p in me["auto_dropped"]] == ["a2"]
+    cap = me["cap"]
+    # a2 ($6) is cut to make room: a $3 buyout. a3's $2 leaves; t2's players have no known salary.
+    assert (cap["space_before"], cap["space_after"]) == (2, 40 - 30 - 3)
+    assert cap["salary_out"] == 2 and cap["drop_buyouts"] == 3
+    assert cap["unknown_incoming"] == ["b1", "b2"] and not cap["over_cap"]
+    assert them["cap"] is None

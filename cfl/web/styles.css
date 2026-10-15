@@ -253,6 +253,17 @@ input[type="search"] { width: 100%; }
 .chip.drop::before { content: "✕ "; }
 .delta { white-space: nowrap; }
 
+/* ---------------------------------------------------------------- salary cap */
+.cap-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 170px; gap: 12px; align-items: center; padding: 5px 0; }
+.cap-season { color: var(--ink-2); font-size: 13px; }
+.cap-figures { text-align: right; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+.cap-figures strong { color: var(--ink); font-weight: 600; }
+.cap-figures .down { color: var(--bad); }
+/* Meter: fill and track from the same ramp; over the cap switches to the status color + icon. */
+.meter { height: 12px; border-radius: 0 4px 4px 0; background: color-mix(in oklab, var(--accent) 16%, var(--surface)); position: relative; }
+.meter-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 0 4px 4px 0; }
+.meter-fill.over { background: var(--bad); }
+
 /* ---------------------------------------------------------------- tooltip */
 .tooltip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14); max-width: 260px; }
 .tooltip .tt-value { font-size: 14px; font-weight: 600; }
@@ -285,4 +296,5 @@ input[type="search"] { width: 100%; }
   .tile-value.hero { font-size: 40px; }
   .cat-full { display: none; }
   .market-row { grid-template-columns: 70px minmax(0, 1fr) 96px; }
+  .cap-row { grid-template-columns: 78px minmax(0, 1fr) 128px; gap: 8px; }
 }

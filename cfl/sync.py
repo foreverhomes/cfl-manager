@@ -1,20 +1,24 @@
 """Pull data from Fantrax + NHL.com into the local SQLite store."""
 
+import csv
+import difflib
+import io
 import json
+import re
 import sqlite3
 import traceback
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .clients import FantraxClient, NHLStatsClient
+from .clients import FantraxClient, NHLStatsClient, fetch_sheet_csv
 from .config import Settings
 from .db import row, rows, transaction, upsert
 
 LOWER_IS_BETTER = {"GAA", "GA", "L"}
 TEAM_PSEUDO_POSITIONS = {"Tm", "TmS", "TmG"}
-RESOURCES = ("league", "players", "rosters", "standings", "matchups", "stats", "schedule", "match")
+RESOURCES = ("league", "players", "rosters", "standings", "matchups", "stats", "schedule", "match", "salaries")
 
 
 def now_iso() -> str:
@@ -171,6 +175,8 @@ def sync_rosters(conn: sqlite3.Connection, fx: FantraxClient, period: Optional[i
     with transaction(conn):
         conn.execute("DELETE FROM roster_items WHERE league_id=? AND period=?", (fx.league_id, period))
         upsert(conn, "roster_items", items, ["league_id", "period", "team_id", "player_id"])
+        conn.executemany("UPDATE teams SET salary_cap=? WHERE id=?",
+                         [(team.get("salaryCap"), team_id) for team_id, team in data.get("rosters", {}).items()])
     return {"period": period, "roster_items": len(items)}
 
 
@@ -407,6 +413,160 @@ def match_players(conn: sqlite3.Connection, league_id: str) -> Dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- salaries
+
+SEASON_HEADER = re.compile(r"(\d{4})\s*/\s*\d{2,4}")
+# Sheet rows whose name cell is one of these start a new section (compared lowercase, ':' stripped).
+SECTION_LABELS = {"buyouts": "BUYOUT", "buyout": "BUYOUT", "ir cap relief": "IR_RELIEF",
+                  "injured reserve": "IR", "ir": "IR", "minor league": "MINORS", "minors": "MINORS"}
+
+
+def _money(cell: str) -> Optional[float]:
+    text = (cell or "").replace("$", "").replace(",", "").strip()
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
+
+
+def parse_salary_sheet(rows: List[List[str]], season_year: int) -> List[Dict[str, Any]]:
+    """Contracts from a team salary sheet.
+
+    Expected layout: a header row whose first cell is "Player" (or "Name") and whose later cells
+    include seasons like "2026/2027"; then one player per row with a salary under each season
+    (blank = contract over). Rows named BUYOUTS / Injured Reserve / Minor League start a section;
+    rows without a name (spacers, totals) are skipped. Seasons are read by column position from
+    the current one onward, because sheets tend to repeat or mislabel later season headers.
+    """
+    header_at = next((i for i, r in enumerate(rows) if r and r[0].strip().lower() in ("player", "name")), None)
+    if header_at is None:
+        raise ValueError("No header row starting with 'Player'")
+    header = rows[header_at]
+    season_cols = [j for j, cell in enumerate(header) if SEASON_HEADER.search(cell or "")]
+    if not season_cols:
+        raise ValueError("No season columns (like 2026/2027) in the header row")
+    start = next((j for j in season_cols if int(SEASON_HEADER.search(header[j]).group(1)) == season_year),
+                 season_cols[0])
+    columns = [j for j in season_cols if j >= start]
+
+    section = "ROSTER"
+    contracts = []
+    for r in rows[header_at + 1:]:
+        name = (r[0] if r else "").strip()
+        if not name:
+            continue
+        label = name.lower().rstrip(":").strip()
+        if label in SECTION_LABELS:
+            section = SECTION_LABELS[label]
+            continue
+        if section == "IR_RELIEF":
+            continue  # relief is derived from Fantrax IR status instead
+        salaries = []
+        for j in columns:
+            amount = _money(r[j] if j < len(r) else "")
+            if amount is None:
+                break
+            salaries.append(amount)
+        contracts.append({"sheet_name": name, "section": section, "salary": salaries[0] if salaries else None,
+                          "years_remaining": len(salaries), "salaries": salaries})
+    return contracts
+
+
+def match_sheet_names(names: Sequence[str], roster: Sequence[Tuple[str, str]],
+                      pool: Sequence[Tuple[str, str]]) -> Dict[str, Tuple[str, str]]:
+    """Map sheet names to Fantrax ids. roster/pool are (fantrax_id, name) pairs.
+
+    The team's own roster is tried first, exactly and then fuzzily (sheets are hand-typed:
+    "Slavkofsky" for Slafkovsky). Fuzzy matches must be clearly better than the runner-up.
+    Outside the roster only exact, unique name matches count.
+    """
+    roster_keys = [(fid, normalize_name(n)) for fid, n in roster]
+    pool_by_key: Dict[str, List[str]] = defaultdict(list)
+    for fid, n in pool:
+        pool_by_key[normalize_name(n)].append(fid)
+    out: Dict[str, Tuple[str, str]] = {}
+    for name in names:
+        key = normalize_name(name)
+        exact = [fid for fid, k in roster_keys if k == key]
+        if len(exact) == 1:
+            out[name] = (exact[0], "roster")
+            continue
+        scored = sorted(((difflib.SequenceMatcher(None, key, k).ratio(), fid) for fid, k in roster_keys),
+                        reverse=True)
+        if scored and scored[0][0] >= 0.8 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.15):
+            out[name] = (scored[0][1], "roster (fuzzy {:.2f})".format(scored[0][0]))
+            continue
+        if len(pool_by_key.get(key, [])) == 1:
+            out[name] = (pool_by_key[key][0], "league")
+    return out
+
+
+def load_salary_sources(settings: Settings) -> Dict[str, str]:
+    path = settings.salary_sheets_path
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    return {str(k): str(v) for k, v in data.items() if not str(k).startswith("_")}
+
+
+def _resolve_team(conn: sqlite3.Connection, league_id: str, ref: str, my_team_id: Optional[str]) -> str:
+    if ref == "me" and my_team_id:
+        return my_team_id
+    teams = rows(conn, "SELECT id, name FROM teams WHERE league_id=?", (league_id,))
+    if any(t["id"] == ref for t in teams):
+        return ref
+    matches = [t["id"] for t in teams if ref.lower() in t["name"].lower()]
+    if len(matches) != 1:
+        raise ValueError("salary_sheets.json: '{}' doesn't match exactly one team".format(ref))
+    return matches[0]
+
+
+def sync_salaries(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
+    """Read each configured team salary sheet into `contracts`."""
+    sources = load_salary_sources(settings)
+    if not sources:
+        return {"skipped": "no salary sheets configured ({})".format(settings.salary_sheets_path.name)}
+    league_id = settings.league_id
+    lg = row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,))
+    if not lg:
+        raise RuntimeError("League not synced yet; sync 'league' first")
+    period = (row(conn, "SELECT MAX(period) AS p FROM roster_items WHERE league_id=?", (league_id,)) or {}).get("p")
+    pool = [(r["fantrax_id"], r["name"]) for r in rows(conn, "SELECT p.fantrax_id, p.name FROM players p "
+            "JOIN league_players lp ON lp.player_id = p.fantrax_id WHERE lp.league_id=?", (league_id,))]
+    out = {}
+    for ref, source in sources.items():
+        team_id = _resolve_team(conn, league_id, ref, settings.my_team_id)
+        contracts = parse_salary_sheet(list(csv.reader(io.StringIO(fetch_sheet_csv(source)))), lg["season_year"])
+        roster = rows(conn, "SELECT p.fantrax_id, p.name, ri.status FROM roster_items ri "
+                            "JOIN players p ON p.fantrax_id = ri.player_id "
+                            "WHERE ri.league_id=? AND ri.period=? AND ri.team_id=?", (league_id, period, team_id))
+        players = [c for c in contracts if c["section"] != "BUYOUT"]
+        matched = match_sheet_names([c["sheet_name"] for c in players],
+                                    [(r["fantrax_id"], r["name"]) for r in roster], pool)
+        ts = now_iso()
+        records = []
+        for c in contracts:
+            fid, method = matched.get(c["sheet_name"], (None, None)) if c["section"] != "BUYOUT" else (None, None)
+            records.append({"league_id": league_id, "team_id": team_id, "sheet_name": c["sheet_name"],
+                            "player_id": fid, "match_method": method, "section": c["section"],
+                            "salary": c["salary"], "years_remaining": c["years_remaining"],
+                            "salaries": json.dumps(c["salaries"]), "source": source, "synced_at": ts})
+        with transaction(conn):
+            conn.execute("DELETE FROM contracts WHERE league_id=? AND team_id=?", (league_id, team_id))
+            upsert(conn, "contracts", records, ["league_id", "team_id", "sheet_name"])
+        on_sheet = {r["player_id"] for r in records if r["player_id"]}
+        team = row(conn, "SELECT name FROM teams WHERE id=?", (team_id,))
+        out[team["name"] if team else team_id] = {
+            "contracts": len(records),
+            "matched": len(on_sheet),
+            "fuzzy_matches": {c: m[1] for c, m in matched.items() if "fuzzy" in m[1]},
+            "unmatched": [r["sheet_name"] for r in records if r["section"] != "BUYOUT" and not r["player_id"]],
+            "rostered_without_salary": sorted(r["name"] for r in roster
+                                              if r["status"] != "MINORS" and r["fantrax_id"] not in on_sheet),
+        }
+    return out
+
+
 # --------------------------------------------------------------------------- orchestration
 
 
@@ -443,6 +603,7 @@ def sync_all(conn: sqlite3.Connection, settings: Settings, resources: Optional[S
         "stats": lambda: sync_stats(conn, nhl, stat_seasons(conn, settings.league_id)),
         "schedule": lambda: sync_schedule(conn, nhl, settings.league_id),
         "match": lambda: match_players(conn, settings.league_id),
+        "salaries": lambda: sync_salaries(conn, settings),
     }
     # Always run in dependency order regardless of the order requested.
     return [_logged(conn, name, steps[name]) for name in RESOURCES if name in wanted]

@@ -69,6 +69,15 @@ function fmtCat(cat, v) {
   return Math.abs(v) < 10 ? v.toFixed(2) : v.toFixed(1);
 }
 function fmtNum(v, digits = 1) { return v == null ? "–" : Number(v).toFixed(digits); }
+function fmtMoney(v) {
+  if (v == null) return "–";
+  const n = Math.round(Number(v) * 10) / 10;
+  return (n < 0 ? "−$" : "$") + Math.abs(n).toString();
+}
+function fmtContract(p) {
+  if (p.salary == null) return null;
+  return `${fmtMoney(p.salary)}${p.contract_years ? ` × ${p.contract_years} yr${p.contract_years === 1 ? "" : "s"}` : ""}`;
+}
 function fmtSigned(v, digits = 2) {
   if (v == null || Number.isNaN(v)) return "–";
   const r = Number(v.toFixed(digits));
@@ -326,7 +335,7 @@ function renderKpis(profile) {
   const skaterGames = profile.roster.filter((p) => p.position !== "G")
     .reduce((s, p) => s + (p.lineup_games_per_week || 0), 0);
   const goalieStarts = profile.roster.reduce((s, p) => s + (p.expected_starts_per_week || 0), 0);
-  byId("kpis").replaceChildren(
+  byId("kpis").replaceChildren(...[
     tile("Expected category wins per week", fmtNum(profile.expected_category_wins, 2), `of ${nCats}`,
       "Against an average opponent, from projected rest-of-season lineups", { hero: true }),
     tile("Projected strength", ordinal(profile.projected_overall_rank), `of ${state.teams.length}`,
@@ -335,6 +344,44 @@ function renderKpis(profile) {
       "Fantrax head-to-head standings"),
     tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins"),
     tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all your goalies"),
+    profile.cap ? tile("Cap space", fmtMoney(profile.cap.space), `of ${fmtMoney(profile.cap.cap)}`,
+      `${fmtMoney(profile.cap.committed)} committed` +
+      (profile.cap.unknown_salary.length ? ` · no salary for ${profile.cap.unknown_salary.join(", ")}` : "")) : null,
+  ].filter(Boolean));
+  renderCap(profile.cap);
+}
+
+function capRow(label, committed, cap, note) {
+  const over = committed > cap;
+  const pct = Math.min(committed / cap, 1) * 100;
+  const row = h("div", { class: "cap-row", tabindex: "0" },
+    h("span", { class: "cap-season" }, label),
+    h("div", { class: "meter", role: "img", "aria-label": `${label}: ${fmtMoney(committed)} of ${fmtMoney(cap)}` },
+      h("div", { class: "meter-fill" + (over ? " over" : ""), style: { width: pct + "%" } })),
+    h("span", { class: "cap-figures num" },
+      over ? h("span", { class: "down", "aria-hidden": "true" }, "▲ ") : null,
+      `${fmtMoney(committed)} · `, h("strong", {}, over ? `${fmtMoney(committed - cap)} over` : `${fmtMoney(cap - committed)} space`)),
+  );
+  if (note) bindTip(row, () => tipContent(`${fmtMoney(cap - committed)} space`, label, note));
+  return row;
+}
+
+function renderCap(cap) {
+  byId("cap-card").hidden = !cap;
+  if (!cap) return;
+  const parts = [`Cap ${fmtMoney(cap.cap)}. Active and bench salaries count, plus buyouts; minors and IR don't`];
+  if (cap.ir_relief) parts.push(`${fmtMoney(cap.ir_relief)} IR relief right now`);
+  byId("cap-sub").textContent = parts.join(" · ");
+  const now = [["Committed", fmtMoney(cap.committed)], ["IR relief", fmtMoney(cap.ir_relief)],
+    ["Buyouts", fmtMoney(cap.dead_cap)]];
+  if (cap.unknown_salary.length) now.push(["No salary on sheet", cap.unknown_salary.join(", ")]);
+  byId("cap-outlook").replaceChildren(
+    capRow(`${cap.season} (now)`, cap.committed, cap.cap, now),
+    ...cap.future.map((f) => capRow(f.season, f.committed, cap.cap,
+      [["Already committed", fmtMoney(f.committed)], ["Includes", "every contract still running that season"]])),
+    h("p", { class: "market-note" },
+      `${cap.contract_years} contract years left on the books across the roster.` +
+      (cap.unknown_salary.length ? ` Unknown salaries aren't included: ${cap.unknown_salary.join(", ")}.` : "")),
   );
 }
 
@@ -409,6 +456,8 @@ const ROSTER_COLUMNS = [
   { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
     render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
   { key: "market_value", label: "Market", value: (p) => p.market_value, render: (p) => fmtNum(p.market_value, 1) },
+  { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
+  { key: "contract_years", label: "Yrs", value: (p) => p.contract_years, render: (p) => (p.contract_years || "–") },
   { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
     render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
   { key: "best", label: "Best categories", left: true, sortable: false, render: (p) => bestCats(p.z) },
@@ -507,7 +556,7 @@ function playerRow(p, selectedSet, onToggle) {
         .filter(Boolean).join(" · "))),
     h("div", { class: "prow-stats" },
       h("div", {}, h("strong", {}, p.trade_rank ? `#${p.trade_rank}` : "–"), ` · mv ${fmtNum(p.market_value, 1)}`),
-      h("div", {}, games)));
+      h("div", {}, [games, fmtContract(p)].filter(Boolean).join(" · "))));
   box.addEventListener("change", () => onToggle(p.fantrax_id, box.checked));
   return row;
 }
@@ -573,8 +622,8 @@ async function loadSuggestions() {
       return h("div", { class: "sug" },
         h("div", { style: { minWidth: "0" } },
           h("div", { class: "prow-name" }, p.name, p.win_win ? h("span", { class: "badge solid" }, "Win-win") : null),
-          h("div", { class: "prow-meta" }, [positions(p), p.nhl_team, `#${p.trade_rank}`, t.partner ? null : p.fantasy_team]
-            .filter(Boolean).join(" · "))),
+          h("div", { class: "prow-meta" }, [positions(p), p.nhl_team, `#${p.trade_rank}`, fmtContract(p),
+            t.partner ? null : p.fantasy_team].filter(Boolean).join(" · "))),
         h("div", { class: "gain" },
           h("div", {}, "You ", dirMark(p.your_gain), " ", fmtSigned(p.your_gain)),
           h("div", {}, "Them ", dirMark(p.their_gain), " ", fmtSigned(p.their_gain))),
@@ -685,6 +734,13 @@ function sideCard(side, maxDz) {
     ["Goalie starts / wk", `${fmtNum(side.volume.before.goalie_starts, 2)} → ${fmtNum(side.volume.after.goalie_starts, 2)}`],
     ["Market value", fmtSigned(side.market_value.net, 1)],
   ];
+  const cap = side.cap;
+  if (cap) {
+    facts.push(["Cap space", `${fmtMoney(cap.space_before)} → ${fmtMoney(cap.space_after)}${cap.unknown_incoming.length ? "*" : ""}`]);
+    facts.push(["Salary out / in", `${fmtMoney(cap.salary_out)} / ${fmtMoney(cap.salary_in)}${cap.unknown_incoming.length ? "*" : ""}`]);
+  } else {
+    facts.push(["Cap space", "no salary sheet"]);
+  }
   const rows = side.categories.map((c) => {
     const rankDelta = c.before.rank != null && c.after.rank != null ? c.before.rank - c.after.rank : 0;
     const bar = divBar(c.delta_z, maxDz, { mini: true, label: `${c.name} change ${fmtSigned(c.delta_z)} sd` });
@@ -703,6 +759,9 @@ function sideCard(side, maxDz) {
   const notes = [];
   if (r.cap && r.after < r.cap) notes.push(`${r.cap - r.after} open roster spot(s): you'd fill from waivers (not counted here).`);
   if (side.auto_dropped.length) notes.push("Over the roster limit, so the weakest player is dropped in the projection.");
+  if (cap && cap.drop_buyouts) notes.push(`Cutting ${side.auto_dropped.map((p) => p.name).join(", ")} costs a ${fmtMoney(cap.drop_buyouts)} buyout (half salary, $4+ contracts).`);
+  if (cap && cap.unknown_incoming.length) notes.push(`* Salary unknown for ${cap.unknown_incoming.join(", ")}: their team's sheet isn't loaded, so cap space after is overstated.`);
+  if (cap && cap.over_cap) notes.push(`▲ Over the cap by ${fmtMoney(-cap.space_after)} after this trade.`);
   return h("article", { class: "card side" },
     h("div", { class: "side-team" }, side.role === "you" ? "You" : "Trade partner", " · ", side.team_name),
     h("div", { class: "side-hero" },
@@ -712,8 +771,8 @@ function sideCard(side, maxDz) {
     h("div", { class: "side-caption" },
       `Expected category wins per week: ${fmtNum(ecw.before, 2)} → ${fmtNum(ecw.after, 2)}`),
     h("div", { class: "moves" },
-      side.gives.map((p) => h("span", { class: "chip out" }, p.name)),
-      side.gets.map((p) => h("span", { class: "chip in" }, p.name)),
+      side.gives.map((p) => h("span", { class: "chip out" }, p.name, p.salary != null ? ` ${fmtMoney(p.salary)}` : "")),
+      side.gets.map((p) => h("span", { class: "chip in" }, p.name, p.salary != null ? ` ${fmtMoney(p.salary)}` : "")),
       side.auto_dropped.map((p) => h("span", { class: "chip drop", title: "Dropped to stay under the roster limit" }, p.name))),
     h("div", { class: "facts" }, facts.map(([k, v]) => h("div", {},
       h("div", { class: "fact-label" }, k), h("div", { class: "fact-value num" }, v)))),

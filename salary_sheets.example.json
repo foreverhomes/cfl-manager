@@ -1,0 +1,4 @@
+{
+  "_comment": "Copy to salary_sheets.json. Keys: a team id, a unique part of a team name, or \"me\". Values: a Google Sheets URL for the tab (shared 'anyone with the link can view'; the gid picks the tab), or a path to a CSV export.",
+  "me": "https://docs.google.com/spreadsheets/d/<sheet-id>/edit?gid=0#gid=0"
+}

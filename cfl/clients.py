@@ -36,6 +36,29 @@ class _Http:
                 time.sleep(1.5 * attempt)
 
 
+def fetch_sheet_csv(source: str) -> str:
+    """CSV text of one tab of a Google Sheet (by its normal /edit URL, gid included), a direct
+    CSV URL, or a local CSV file path. Google Sheets must be shared as "anyone with the link"."""
+    import os
+    import re
+
+    if os.path.exists(source):
+        with open(source, encoding="utf-8-sig") as f:
+            return f.read()
+    m = re.search(r"/spreadsheets/d/([\w-]+)", source)
+    url = source
+    if m and "/export" not in source:
+        gid = re.search(r"[#?&]gid=(\d+)", source)
+        url = "https://docs.google.com/spreadsheets/d/{}/export?format=csv&gid={}".format(
+            m.group(1), gid.group(1) if gid else "0")
+    resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+    resp.raise_for_status()
+    if "text/html" in resp.headers.get("Content-Type", ""):
+        raise RuntimeError("{} isn't publicly readable. Share it as 'Anyone with the link can view', "
+                           "or download the tab as CSV and point salary_sheets.json at the file.".format(source))
+    return resp.content.decode("utf-8-sig")
+
+
 class FantraxClient:
     """Fantrax public REST API (https://www.fantrax.com/developer). No auth needed for league reads."""
 

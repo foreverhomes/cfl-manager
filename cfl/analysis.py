@@ -39,7 +39,11 @@ PRIOR_SEASON_GAMES = 82
 GAMES_PER_WEEK = 3.5          # fallback when no NHL schedule is synced
 MIN_POOL_GAMES = 10           # games (this + last season) to count toward z-score baselines
 NON_LINEUP_STATUSES = {"MINORS", "INJURED_RESERVE"}
-CAPPED_STATUSES = {"ACTIVE", "RESERVE"}   # what counts against the roster limit
+CAPPED_STATUSES = {"ACTIVE", "RESERVE"}   # what counts against the roster limit and the salary cap
+
+# League rules: cap fallback when Fantrax doesn't report one, and the release / buyout threshold.
+DEFAULT_SALARY_CAP = 220.0
+FREE_RELEASE_MAX_SALARY = 3.0
 
 
 class NotSynced(RuntimeError):
@@ -69,6 +73,11 @@ class Player:
     team_id: Optional[str] = None
     roster_status: Optional[str] = None
     adp: Optional[float] = None
+    # From the team salary sheet, when loaded: current salary, seasons left (incl. this one),
+    # and the salary for each of those seasons.
+    salary: Optional[float] = None
+    contract_years: Optional[int] = None
+    contract_salaries: List[float] = field(default_factory=list)
     # Per game for skaters; per *team* game for goalies (already scaled by start share).
     rates: Dict[str, float] = field(default_factory=dict)
     start_share: Optional[float] = None
@@ -101,6 +110,9 @@ class Context:
     schedule: List[frozenset] = field(default_factory=list)
     horizon_days: int = 0
     roster_cap: Optional[int] = None
+    salary_caps: Dict[str, float] = field(default_factory=dict)
+    contract_teams: set = field(default_factory=set)          # teams with a salary sheet loaded
+    buyouts: Dict[str, List[List[float]]] = field(default_factory=dict)   # team -> per-season dead cap
     _equiv_ranks: Dict[str, float] = field(default_factory=dict, repr=False)
     _market: Optional[Dict[str, float]] = field(default=None, repr=False)
 
@@ -354,6 +366,21 @@ def load_context(conn: sqlite3.Connection, settings: Settings) -> Context:
     cur_season, prior_season = stat_seasons(conn, league_id)
     ctx = Context(league_id, league, categories, teams, roster_period, players, slots, cur_season, prior_season,
                   unsupported, roster_cap=roster_info.get("maxTotalPlayers"))
+
+    # Salaries: caps from Fantrax, contracts from team salary sheets.
+    ctx.salary_caps = {r["id"]: r["salary_cap"] for r in rows(
+        conn, "SELECT id, salary_cap FROM teams WHERE league_id=? AND salary_cap IS NOT NULL", (league_id,))}
+    for c in rows(conn, "SELECT * FROM contracts WHERE league_id=?", (league_id,)):
+        ctx.contract_teams.add(c["team_id"])
+        salaries = json.loads(c["salaries"] or "[]")
+        if c["section"] == "BUYOUT":
+            ctx.buyouts.setdefault(c["team_id"], []).append(salaries)
+            continue
+        p = players.get(c["player_id"]) if c["player_id"] else None
+        # A player listed on two sheets (a trade one sheet hasn't caught up with): trust the
+        # sheet of the team that rosters him.
+        if p is not None and (p.salary is None or p.team_id == c["team_id"]):
+            p.salary, p.contract_years, p.contract_salaries = c["salary"], c["years_remaining"], salaries
 
     # Rest-of-season schedule: from today (or the league start) to the league's end date.
     start = max(date.today().isoformat(), league["start_date"] or "")
@@ -660,12 +687,62 @@ def player_summary(p: Player, ctx: Context, weights: Optional[Dict[str, Dict[str
         "value": round(player_value(p, generic), 2) if p.z else None,
         "trade_rank": ctx.trade_ranks().get(p.fantrax_id),
         "market_value": round(ctx.market_values().get(p.fantrax_id, 0.0), 2) if p.z else None,
+        "salary": p.salary,
+        "contract_years": p.contract_years,
     }
     if p.start_share is not None:
         out["start_share"] = round(p.start_share, 2)
     if weights is not None and p.z:
         out["need_value"] = round(player_value(p, weights), 2)
     return out
+
+
+def _season_label(ctx: Context, offset: int) -> str:
+    year = (ctx.league.get("season_year") or 0) + offset
+    return "{}/{:02d}".format(year, (year + 1) % 100)
+
+
+def cap_summary(ctx: Context, team_id: str, players: Optional[List[Player]] = None,
+                extra_dead_cap: float = 0.0) -> Optional[Dict]:
+    """Salary-cap position under league rules, or None if the team has no salary sheet loaded.
+
+    Active and bench salaries count, plus buyouts; players in the minors or on IR don't.
+    `players` overrides the team's current roster (used to price a trade); `extra_dead_cap` adds
+    buyout charges the caller incurs. Future seasons count everyone under contract except minors.
+    """
+    if team_id not in ctx.contract_teams:
+        return None
+    players = ctx.roster(team_id) if players is None else players
+    cap = ctx.salary_caps.get(team_id) or DEFAULT_SALARY_CAP
+    buyouts = ctx.buyouts.get(team_id, [])
+    counting = [p for p in players if p.roster_status in CAPPED_STATUSES]
+    dead = sum(b[0] for b in buyouts if b) + extra_dead_cap
+    committed = sum(p.salary for p in counting if p.salary is not None) + dead
+    future = []
+    for i in range(1, 5):
+        total = sum(p.contract_salaries[i] for p in players
+                    if p.roster_status != "MINORS" and len(p.contract_salaries) > i)
+        total += sum(b[i] for b in buyouts if len(b) > i)
+        future.append({"season": _season_label(ctx, i), "committed": total, "space": cap - total})
+    return {
+        "cap": cap, "committed": committed, "space": cap - committed, "dead_cap": dead,
+        "ir_relief": sum(p.salary or 0 for p in players if p.roster_status == "INJURED_RESERVE"),
+        "minors_relief": sum(p.salary or 0 for p in players if p.roster_status == "MINORS"),
+        "unknown_salary": sorted(p.name for p in counting if p.salary is None),
+        # Seasons left on every contract, this one included. (How this maps onto the league's
+        # 50-year contract bank is still to be confirmed, so no limit is applied.)
+        "contract_years": sum(p.contract_years or 0 for p in players),
+        "season": _season_label(ctx, 0),
+        "future": future,
+    }
+
+
+def release_cost(p: Player) -> float:
+    """Cap charge for cutting a player: free at $3 or less, otherwise a buyout of half the salary
+    (rounded down) for the rest of the contract. Unknown salaries are treated as free."""
+    if p.salary is None or p.salary <= FREE_RELEASE_MAX_SALARY:
+        return 0.0
+    return float(math.floor(p.salary / 2))
 
 
 def team_profile(conn: sqlite3.Connection, ctx: Context, team_id: str, **need_kwargs) -> Dict:
@@ -700,6 +777,7 @@ def team_profile(conn: sqlite3.Connection, ctx: Context, team_id: str, **need_kw
         "expected_category_wins": round(expected_category_wins(ctx, projected, team_id,
                                                                need_kwargs.get("spread", 1.5)), 2),
         "categories": cats,
+        "cap": cap_summary(ctx, team_id),
         "strengths": [c["category"] for c in sorted(cats, key=lambda c: c["projected_rank"] or n)[:3]],
         "weaknesses": [c["category"] for c in sorted(cats, key=lambda c: -(c["projected_rank"] or 0))[:3]],
         "roster": [dict(player_summary(p, ctx, w_split), **_games_fields(p, games.get(p.fantrax_id, 0.0)))
@@ -893,7 +971,29 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
         p = ctx.players[fid]
         return {"fantrax_id": fid, "name": p.name, "position": ",".join(e for e in p.eligible if e != "F"),
                 "nhl_team": p.nhl_team, "roster_status": p.roster_status,
-                "trade_rank": ctx.trade_ranks().get(fid), "market_value": round(market.get(fid, 0.0), 2)}
+                "trade_rank": ctx.trade_ranks().get(fid), "market_value": round(market.get(fid, 0.0), 2),
+                "salary": p.salary, "contract_years": p.contract_years}
+
+    def cap_effect(t: str, out_ids: Sequence[str], in_ids: Sequence[str], dropped: Sequence[str]) -> Optional[Dict]:
+        before = cap_summary(ctx, t)
+        if before is None:
+            return None
+        leaving = set(out_ids) | set(dropped)
+        roster_after = [p for p in ctx.roster(t) if p.fantrax_id not in leaving] + [ctx.players[f] for f in in_ids]
+        buyouts = sum(release_cost(ctx.players[f]) for f in dropped)
+        after = cap_summary(ctx, t, roster_after, extra_dead_cap=buyouts)
+        incoming = [ctx.players[f] for f in in_ids if ctx.players[f].roster_status in CAPPED_STATUSES]
+        outgoing = [ctx.players[f] for f in out_ids if ctx.players[f].roster_status in CAPPED_STATUSES]
+        return {
+            "cap": before["cap"], "committed_before": before["committed"], "committed_after": after["committed"],
+            "space_before": before["space"], "space_after": after["space"],
+            "salary_out": sum(p.salary or 0 for p in outgoing), "salary_in": sum(p.salary or 0 for p in incoming),
+            "drop_buyouts": buyouts,
+            # Incoming players with no known salary (their team's sheet isn't loaded): space_after
+            # is overstated by whatever they earn.
+            "unknown_incoming": sorted(p.name for p in incoming if p.salary is None),
+            "over_cap": after["space"] < 0,
+        }
 
     def volume(games: Dict[str, float]) -> Dict[str, float]:
         return {"skater_games": round(sum(n for f, n in games.items() if ctx.players[f].group != "G"), 2),
@@ -932,6 +1032,7 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
             "roster": {"before": counts[t], "after": counts[t] - n_out + n_in - len(after[t]["dropped"]),
                        "cap": ctx.roster_cap},
             "auto_dropped": [brief(f) for f in after[t]["dropped"]],
+            "cap": cap_effect(t, out_ids, in_ids, after[t]["dropped"]),
             "market_value": {"gives": round(gives_value, 2), "gets": round(gets_value, 2),
                              "net": round(gets_value - gives_value, 2)},
         })

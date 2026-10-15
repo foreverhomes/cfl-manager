@@ -31,6 +31,8 @@ class Settings:
     # Pseudo-games of league-average production added to every player, so tiny
     # samples (call-ups, rookies) don't produce extreme rates.
     shrink_games: float
+    # JSON file mapping teams to their salary sheets (see salary_sheets.example.json).
+    salary_sheets_path: Path
 
 
 def get_settings() -> Settings:
@@ -42,4 +44,5 @@ def get_settings() -> Settings:
         db_path=db_path,
         prior_season_weight=float(os.environ.get("CFL_PRIOR_SEASON_WEIGHT", "0.5")),
         shrink_games=float(os.environ.get("CFL_SHRINK_GAMES", "5")),
+        salary_sheets_path=Path(os.environ.get("CFL_SALARY_SHEETS", ROOT / "salary_sheets.json")),
     )
