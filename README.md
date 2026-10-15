@@ -223,7 +223,8 @@ cfl/
   analysis.py   projections, z-scores, team profiles, targets, trade partners
   api.py        FastAPI app (also serves the web app)
   web/          dashboard + trade builder (HTML/CSS/JS, no build)
-  __main__.py   CLI (sync / serve / teams / profile / targets)
+  watch.py      day-to-day change tracking: IR moves, roster changes, category trends
+  __main__.py   CLI (sync / serve / publish / teams / profile / targets / watch)
 tests/          offline unit tests (pytest)
 data/           league.db (git-ignored)
 ```
@@ -237,6 +238,19 @@ python -m cfl targets --source trade --punt Hit
 python -m cfl targets --from-team Ruff --position D
 python -m cfl targets --offer "Kyle Connor" --tolerance 0.15
 ```
+
+### Watching your team (`watch`)
+
+`python -m cfl watch` compares your team with the last check (saved in `data/watch_state.json`)
+and prints what needs a roster move, plus roster changes and category ranks. Run it after a sync,
+for example once a day. Add `--json` for machine-readable output.
+
+- **Activate:** a player in your IR slot who played an NHL game since the last check.
+- **Possibly hurt:** an active or bench skater whose NHL team played 2+ games in a row without
+  him (5 for goalies, who sit regularly). There's no injury feed, so this is inferred from games
+  played: check the news before moving him to IR.
+- **Trends:** projected category rank moves since the last check. The last 30 checks are kept
+  in the state file for longer trends.
 
 ### Like-for-like trades (`offer`)
 

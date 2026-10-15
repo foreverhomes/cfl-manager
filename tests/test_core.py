@@ -582,3 +582,34 @@ def test_bios_sync_fills_birth_dates_and_keeps_manual_ones(conn):
     dates = dict(conn.execute("SELECT fantrax_id, birth_date FROM players").fetchall())
     assert dates == {"vet": "1990-05-31", "kid": "2006-08-01", "set": "2000-01-01"}   # manual date kept
     assert result["looked_up"] == 1 and result["still_missing"] == []
+
+
+def test_watch_flags_ir_returns_and_missed_games():
+    from cfl.watch import compare
+
+    def snap(roster):
+        return {"roster": roster, "ranks": {"G": {"proj": 3}}}
+
+    prev = snap({
+        "ir": {"name": "Hurt Guy", "nhl_team": "TOR", "status": "INJURED_RESERVE", "gp": 4, "group": "F"},
+        "sk": {"name": "Sitting Guy", "nhl_team": "BOS", "status": "ACTIVE", "gp": 6, "group": "F", "missed": 1},
+        "g": {"name": "Backup", "nhl_team": "BOS", "status": "RESERVE", "gp": 2, "group": "G"},
+        "ok": {"name": "Healthy", "nhl_team": "BOS", "status": "ACTIVE", "gp": 6, "group": "D"},
+        "gone": {"name": "Traded", "nhl_team": "MTL", "status": "ACTIVE", "gp": 6, "group": "F"},
+    })
+    cur = snap({
+        "ir": {"name": "Hurt Guy", "nhl_team": "TOR", "status": "INJURED_RESERVE", "gp": 5, "group": "F"},
+        "sk": {"name": "Sitting Guy", "nhl_team": "BOS", "status": "ACTIVE", "gp": 6, "group": "F"},
+        "g": {"name": "Backup", "nhl_team": "BOS", "status": "RESERVE", "gp": 2, "group": "G"},
+        "ok": {"name": "Healthy", "nhl_team": "BOS", "status": "RESERVE", "gp": 7, "group": "D"},
+        "new": {"name": "Pickup", "nhl_team": "TOR", "status": "ACTIVE", "gp": 1, "group": "F"},
+    })
+    cur["ranks"]["G"]["proj"] = 5
+    out = compare(prev, cur, {"BOS": 2, "TOR": 1})
+    kinds = {(a["kind"], a["player"]) for a in out["alerts"]}
+    assert kinds == {("activate", "Hurt Guy"), ("missing", "Sitting Guy")}   # backup goalie: 2 < 5
+    assert cur["roster"]["sk"]["missed"] == 3 and cur["roster"]["ok"]["missed"] == 0
+    assert "Healthy: ACTIVE -> RESERVE" in out["changes"]
+    assert "Added Pickup (ACTIVE)" in out["changes"] and "Dropped or traded Traded" in out["changes"]
+    assert out["rank_moves"] == [{"category": "G", "from": 3, "to": 5}]
+    assert compare(None, snap({}), {})["alerts"] == []
