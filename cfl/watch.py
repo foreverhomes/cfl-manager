@@ -85,6 +85,19 @@ def compare(prev: Optional[Dict], cur: Dict, team_games: Dict[str, int]) -> Dict
     return {"alerts": alerts, "changes": changes, "rank_moves": trends}
 
 
+def lineup_check(ctx: A.Context, team_id: str, playing: set) -> Dict:
+    """Is today's lineup set? Compares the ACTIVE players with a game today against the best
+    lineup the roster could field from players with a game today."""
+    best = A._fill_slots(ctx, (p for p in A._lineup_pool(ctx, team_id, "best") if p.nhl_team in playing))
+    active = A._fill_slots(ctx, (p for p in A._lineup_pool(ctx, team_id, "active") if p.nhl_team in playing))
+    best_ids = {p.fantrax_id for p in best}
+    active_ids = {p.fantrax_id for p in active}
+    idle = [p.name for p in ctx.roster(team_id, ["ACTIVE"]) if playing and p.nhl_team not in playing]
+    return {"games_today": bool(playing), "starts": len(active), "possible_starts": len(best),
+            "start": [p.name for p in best if p.fantrax_id not in active_ids],
+            "sit": [p.name for p in active if p.fantrax_id not in best_ids] + idle}
+
+
 def run(conn: sqlite3.Connection, ctx: A.Context, team_id: str, state_path: Path,
         today: Optional[date] = None) -> Dict:
     today = today or date.today()
@@ -94,12 +107,23 @@ def run(conn: sqlite3.Connection, ctx: A.Context, team_id: str, state_path: Path
     # Team games the stats now cover that the previous snapshot's stats didn't.
     games = team_games_between(conn, prev["stats_through"], cur["stats_through"]) if prev else {}
     result = compare(prev, cur, games)
+    playing = set()
+    for away, home in conn.execute("SELECT away, home FROM nhl_games WHERE game_type=2 AND game_date=?",
+                                   (today.isoformat(),)):
+        playing.update((away, home))
+    lineup = lineup_check(ctx, team_id, playing)
+    if lineup["possible_starts"] > lineup["starts"]:
+        result["alerts"].insert(0, {
+            "kind": "lineup", "player": None,
+            "text": "Lineup isn't set: {} of {} possible starts today. Start {}; sit {}.".format(
+                lineup["starts"], lineup["possible_starts"], ", ".join(lineup["start"]) or "-",
+                ", ".join(lineup["sit"]) or "-")})
     history = (state.get("history") or [])[-(HISTORY - 1):] + [
         {"date": cur["date"], "overall_rank": cur["overall_rank"], "expected_wins": cur["expected_wins"],
          "ranks": {c: {"proj": r["proj"], "actual": r["actual"]} for c, r in cur["ranks"].items()}}]
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps({"last": cur, "history": history}, indent=1))
-    return {"team_name": cur["team_name"], "date": cur["date"], "first_run": prev is None,
+    return {"team_name": cur["team_name"], "date": cur["date"], "first_run": prev is None, "lineup": lineup,
             "since": prev["date"] if prev else None, **result,
             "overall_rank": cur["overall_rank"], "teams": len(ctx.teams), "expected_wins": cur["expected_wins"],
             "strengths": cur["strengths"], "weaknesses": cur["weaknesses"],
@@ -112,6 +136,11 @@ def render(r: Dict) -> str:
         r["team_name"], r["date"], r["overall_rank"], r["teams"], r["expected_wins"] or 0)]
     if r["first_run"]:
         lines.append("First check: baseline saved. Changes and IR alerts start with the next run.")
+    lu = r.get("lineup") or {}
+    if lu.get("games_today") and lu["possible_starts"] <= lu["starts"]:
+        lines.append("Lineup is set: {} starts today.".format(lu["starts"]))
+    elif not lu.get("games_today"):
+        lines.append("No NHL games today.")
     if r["alerts"]:
         lines.append("\n**Needs a move**")
         lines += ["- " + a["text"] for a in r["alerts"]]

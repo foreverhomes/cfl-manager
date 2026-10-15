@@ -613,3 +613,23 @@ def test_watch_flags_ir_returns_and_missed_games():
     assert "Added Pickup (ACTIVE)" in out["changes"] and "Dropped or traded Traded" in out["changes"]
     assert out["rank_moves"] == [{"category": "G", "from": 3, "to": 5}]
     assert compare(None, snap({}), {})["alerts"] == []
+
+
+def test_watch_lineup_check_finds_idle_starters_and_benched_players():
+    from cfl.watch import lineup_check
+
+    players = [
+        _p("c1", ["C", "F"], "F", 5),                       # active, team idle today
+        _p("c2", ["C", "F"], "F", 4, status="RESERVE"),     # benched, team plays
+        _p("d1", ["D"], "D", 1),                            # active, plays
+        _p("d2", ["D"], "D", 9, status="INJURED_RESERVE"),  # never a starter
+    ]
+    for p, team in zip(players, ("BOS", "TOR", "TOR", "TOR")):
+        p.nhl_team = team
+    ctx = _ctx_with(players)
+    out = lineup_check(ctx, "t1", {"TOR"})
+    assert (out["starts"], out["possible_starts"]) == (1, 2)
+    assert out["start"] == ["c2"] and out["sit"] == ["c1"]
+    players[1].roster_status = "ACTIVE"
+    assert lineup_check(ctx, "t1", {"TOR"})["possible_starts"] == lineup_check(ctx, "t1", {"TOR"})["starts"] == 2
+    assert lineup_check(ctx, "t1", set())["games_today"] is False

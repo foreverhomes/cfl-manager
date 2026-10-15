@@ -245,6 +245,8 @@ python -m cfl targets --offer "Kyle Connor" --tolerance 0.15
 and prints what needs a roster move, plus roster changes and category ranks. Run it after a sync,
 for example once a day. Add `--json` for machine-readable output.
 
+- **Lineup:** flags today's lineup when bench players with a game could fill more starts than
+  your active players, and says whom to start and sit. Run it before the day's games lock.
 - **Activate:** a player in your IR slot who played an NHL game since the last check.
 - **Possibly hurt:** an active or bench skater whose NHL team played 2+ games in a row without
   him (5 for goalies, who sit regularly). There's no injury feed, so this is inferred from games
