@@ -139,7 +139,7 @@
           <span class="field-label">Trade partner</span>
           <select id="partner-select"></select>
         </label>
-        <label class="field">
+        <label class="field" id="tolerance-field">
           <span class="field-label">Comparable value</span>
           <select id="tolerance-select">
             <option value="0.15">Tight (±15% rank)</option>
@@ -155,7 +155,7 @@
           <header class="card-head">
             <div>
               <h2 id="give-title">You give</h2>
-              <p class="card-sub">Select players to send</p>
+              <p class="card-sub" id="give-sub">Select players to send</p>
             </div>
           </header>
           <div class="list-tools">
@@ -176,7 +176,7 @@
           <div id="get-panel" hidden>
             <div class="list-tools">
               <input type="search" id="get-search" placeholder="Filter players" aria-label="Filter partner players">
-              <label class="check"><input type="checkbox" id="get-minors"> Minors</label>
+              <label class="check" id="get-minors-label"><input type="checkbox" id="get-minors"> Minors</label>
             </div>
             <div id="get-list" class="player-list"></div>
           </div>

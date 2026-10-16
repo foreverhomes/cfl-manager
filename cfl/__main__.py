@@ -108,16 +108,20 @@ def cmd_targets(args) -> None:
     ctx = A.load_context(conn, settings)
     team = _team_arg(ctx, args.team)
     from_team = _team_arg(ctx, args.from_team) if args.from_team else None
-    offer = None
+    offer = drop = None
     if args.offer:
         offer = ctx.resolve_player(args.offer, team)
         if offer is None:
             sys.exit("No single player on {} matches '{}'.".format(ctx.teams[team], args.offer))
+    if args.drop:
+        drop = ctx.resolve_player(args.drop, team)
+        if drop is None:
+            sys.exit("No single player on {} matches '{}'.".format(ctx.teams[team], args.drop))
     source = args.source or ("trade" if from_team or offer else "fa")
     try:
         res = A.targets(conn, ctx, team, source=source, position=args.position, limit=args.limit,
                         min_games=args.min_games, strategy=args.strategy, punt=args.punt or [], from_team=from_team,
-                        offer=offer, tolerance=args.tolerance)
+                        offer=offer, tolerance=args.tolerance, drop=drop)
     except ValueError as exc:
         sys.exit(str(exc))
     print("Need weights:", ", ".join("{} {:.2f}".format(c, w) for c, w in res["need_weights"].items()))
@@ -125,6 +129,8 @@ def cmd_targets(args) -> None:
         o = res["offer"]
         print("Offering {} (trade rank #{}, need value {:.2f}) -> comparable ranks #{}-#{}".format(
             o["name"], o["trade_rank"], o["need_value"], *o["comparable_trade_ranks"]))
+    if res["drop"]:
+        print("Dropping {} for each pickup".format(res["drop"]["name"]))
     for i, p in enumerate(res["targets"], 1):
         top = sorted(p["z"].items(), key=lambda kv: kv[1], reverse=True)[:3]
         extra = ""
@@ -132,8 +138,9 @@ def cmd_targets(args) -> None:
             extra = "  #{:<4} you {:+.2f} / them {:+.2f}{}  ({})".format(
                 p["trade_rank"], p["your_gain"], p["their_gain"], "  WIN-WIN" if p["win_win"] else "",
                 p["fantasy_team"])
-        elif source == "fa" and "replaces" in p:
-            extra = "  upgrade {:+.2f} over {}".format(p["upgrade"], p["replaces"]["name"])
+        elif source == "fa":
+            extra = "  you {:+.2f}  drop {}".format(
+                p["your_gain"], ", ".join(d["name"] for d in p["drops"]) or "nobody (open roster spot)")
         elif p.get("fantasy_team"):
             extra = "  ({})".format(p["fantasy_team"])
         print("{:>2}. {:<24} {:<4} {:<10} need {:>6.2f}  gp {:>2}/{:<2}  best: {}{}".format(
@@ -201,6 +208,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             p.add_argument("--source", choices=["fa", "trade"], help="default: trade with --from-team, else fa")
             p.add_argument("--from-team", help="Only players on this team (id or part of the name)")
             p.add_argument("--offer", help="Player on your roster to trade away (id or part of the name)")
+            p.add_argument("--drop", help="With --source fa: player on your roster to release for each pickup "
+                                          "(default: the best drop is found for each)")
             p.add_argument("--tolerance", type=float, default=0.25,
                            help="With --offer: allowed trade-rank difference as a fraction (default 0.25)")
             p.add_argument("--position", help="F, D, G, C, LW or RW")

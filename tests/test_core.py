@@ -258,7 +258,78 @@ def test_evaluate_trade_two_for_one_drops_to_the_cap():
     with pytest.raises(ValueError):
         A.evaluate_trade(ctx, "t1", give=["b1"], other_team_id="t2")        # not your player
     with pytest.raises(ValueError):
-        A.evaluate_trade(ctx, "t1", give=[], get=["b1"])                    # partner required
+        A.evaluate_trade(ctx, "t1", give=[], get=["b1"])                    # b1 is on t2: pick t2 as partner
+
+
+def _waiver_ctx():
+    """_trade_ctx plus two free agents: a forward and a defenseman."""
+    ctx = _trade_ctx()
+    for p in (_p("fa_f", ["C", "F"], "F", 7, team=None, status=None), _p("fa_d", ["D"], "D", 4, team=None, status=None)):
+        p.rates["goals"] = p.z["G"] / 10
+        ctx.players[p.fantrax_id] = p
+    return ctx
+
+
+def test_fa_targets_simulate_each_pickup_with_its_best_drop():
+    ctx = _waiver_ctx()
+    # t1 is full (cap 3) with one C, one F flex and one D slot: a1 C, a2 F, a3 D.
+    res = A.targets(None, ctx, "t1", source="fa", min_games=0)
+    got = {t["fantrax_id"]: t for t in res["targets"]}
+    # The defenseman replaces the weak D (a3). The forward would leave the D slot empty if a3 went,
+    # so his best drop is a2, the forward he pushes out of the lineup.
+    assert [d["fantrax_id"] for d in got["fa_d"]["drops"]] == ["a3"]
+    assert [d["fantrax_id"] for d in got["fa_f"]["drops"]] == ["a2"]
+    assert got["fa_d"]["your_gain"] > got["fa_f"]["your_gain"] > 0
+    assert [t["fantrax_id"] for t in res["targets"]] == ["fa_d", "fa_f"]
+    assert got["fa_d"]["market_value_net"] == pytest.approx(
+        ctx.market_values()["fa_d"] - ctx.market_values()["a3"], abs=0.01)
+    assert res["roster"] == {"count": 3, "cap": 3} and res["drop"] is None
+    assert ctx.players["fa_f"].team_id is None and ctx.players["fa_f"].roster_status is None   # restored
+
+    # A chosen drop applies to every pickup: losing the only D costs the forward pickup.
+    res = A.targets(None, ctx, "t1", source="fa", min_games=0, drop="a3")
+    got = {t["fantrax_id"]: t for t in res["targets"]}
+    assert [d["fantrax_id"] for d in got["fa_f"]["drops"]] == ["a3"] and got["fa_f"]["your_gain"] < 0
+    assert res["drop"]["name"] == "a3"
+
+    # An open roster spot: nobody has to go.
+    ctx.roster_cap = 4
+    res = A.targets(None, ctx, "t1", source="fa", min_games=0)
+    assert all(t["drops"] == [] for t in res["targets"])
+
+    with pytest.raises(ValueError):
+        A.targets(None, ctx, "t1", source="trade", drop="a3")
+    with pytest.raises(ValueError):
+        A.targets(None, ctx, "t1", source="fa", drop="b1")       # not on your roster
+
+
+def test_evaluate_trade_prices_a_waiver_pickup():
+    ctx = _waiver_ctx()
+    for fid, salary in (("a1", 30), ("a2", 6), ("a3", 6)):
+        _with_contract(ctx.players[fid], [salary])
+    ctx.league = {"season_year": 2026}
+    ctx.contract_teams, ctx.salary_caps = {"t1"}, {"t1": 50}
+
+    res = A.evaluate_trade(ctx, "t1", give=["a3"], get=["fa_d"])
+    assert len(res["sides"]) == 1
+    me = res["sides"][0]
+    assert me["roster"] == {"before": 3, "after": 3, "cap": 3} and not me["auto_dropped"]
+    assert me["expected_category_wins"]["delta"] > 0
+    assert res["market"]["you_get"] == pytest.approx(ctx.market_values()["fa_d"], abs=0.01)
+    # a3 is released ($6: a $3 buyout); the pickup has no contract yet.
+    assert me["cap"]["release_buyouts"] == 3 and me["cap"]["unknown_incoming"] == ["fa_d"]
+    assert me["cap"]["space_after"] == 50 - 30 - 6 - 3
+
+    # A pickup with a contract set counts against the cap.
+    _with_contract(ctx.players["fa_d"], [2])
+    res = A.evaluate_trade(ctx, "t1", give=["a3"], get=["fa_d"])
+    assert res["sides"][0]["cap"]["space_after"] == 50 - 30 - 6 - 3 - 2
+    assert ctx.players["fa_d"].roster_status is None
+
+    # No drop on a full roster: the pickup counts, so the weakest player is cut.
+    res = A.evaluate_trade(ctx, "t1", give=[], get=["fa_d"])
+    assert [p["fantrax_id"] for p in res["sides"][0]["auto_dropped"]] == ["a3"]
+    assert res["sides"][0]["roster"]["after"] == 3
 
 
 def test_parse_salary_sheet_handles_sections_totals_and_mislabeled_seasons():
