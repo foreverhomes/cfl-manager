@@ -265,6 +265,7 @@ function wireControls() {
   byId("players-missing").addEventListener("change", loadPlayers);
   byId("team-select").addEventListener("change", (e) => {
     state.team = e.target.value;
+    state.playersTeam = state.team;   // the Players page follows the header's team
     state.trade.give.clear();
     state.trade.get.clear();
     state.trade.pickups.clear();
