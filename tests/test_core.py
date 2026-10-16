@@ -613,6 +613,17 @@ def test_published_sheet_layout_and_formulas():
     assert row["Cap space"][1][2] == "=C{}-C{}".format(row["Salary cap"][0], row["Committed"][0])
 
 
+def test_web_app_is_revalidated_on_every_load():
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    client = TestClient(app)
+    assert client.get("/").headers["cache-control"] == "no-cache"
+    res = client.get("/static/app.js")
+    assert res.status_code == 200 and res.headers["cache-control"] == "no-cache"
+    unchanged = client.get("/static/app.js", headers={"If-None-Match": res.headers["etag"]})
+    assert unchanged.status_code == 304 and unchanged.headers["cache-control"] == "no-cache"
+
+
 def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):
     from cfl import publish as P
     settings = _owned_league(conn, tmp_path)
