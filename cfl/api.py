@@ -430,6 +430,9 @@ def profile(team_id: str, strategy: str = STRATEGY, spread: float = SPREAD, punt
 def targets(team_id: str,
             source: Optional[str] = Query(None, description="fa (waivers/free agents) or trade. "
                                                              "Defaults to trade when from_team/offer is set, else fa"),
+            drop: Optional[str] = Query(None, description="With source=fa: player(s) on your roster to release for "
+                                                           "each pickup, comma-separated ids or unique parts of "
+                                                           "names. Without it, the best drop is found for each"),
             from_team: Optional[str] = Query(None, description="Only players on this team: team id or a unique "
                                                                 "part of its name (implies source=trade)"),
             offer: Optional[str] = Query(None, description="Player(s) on your roster to trade away, comma-separated "
@@ -452,21 +455,25 @@ def targets(team_id: str,
             raise HTTPException(404, detail={"error": "No single team matches from_team '{}'".format(from_team),
                                              "teams": [{"id": t, "name": n} for t, n in ctx.teams.items()]})
         from_team = resolved
-    offer_ids: List[str] = []
-    for part in (offer.split(",") if offer else []):
-        resolved = ctx.resolve_player(part.strip(), team_id)
-        if resolved is None:
-            raise HTTPException(404, detail={
-                "error": "No single player on {} matches offer '{}'".format(ctx.teams[team_id], part.strip()),
-                "roster": sorted(p.name for p in ctx.roster(team_id) if p.z)})
-        offer_ids.append(resolved)
+    def roster_players(value: Optional[str], param: str) -> List[str]:
+        ids = []
+        for part in (value.split(",") if value else []):
+            resolved = ctx.resolve_player(part.strip(), team_id)
+            if resolved is None:
+                raise HTTPException(404, detail={
+                    "error": "No single player on {} matches {} '{}'".format(ctx.teams[team_id], param, part.strip()),
+                    "roster": sorted(p.name for p in ctx.roster(team_id) if p.z)})
+            ids.append(resolved)
+        return ids
+
+    offer_ids, drop_ids = roster_players(offer, "offer"), roster_players(drop, "drop")
     source = source or ("trade" if from_team or offer_ids else "fa")
     if source not in ("fa", "trade"):
         raise HTTPException(400, detail="source must be fa or trade")
     try:
         return A.targets(conn, ctx, team_id, source=source, position=position, limit=limit, min_games=min_games,
                          include_minors=include_minors, from_team=from_team, offer=offer_ids or None,
-                         tolerance=tolerance,
+                         tolerance=tolerance, drop=drop_ids or None,
                          **_need_kwargs(ctx, strategy, spread, punt, weights, lineup))
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
@@ -497,7 +504,8 @@ class TradeRequest(BaseModel):
 def trade(req: TradeRequest, conn: sqlite3.Connection = Depends(get_conn)):
     """Cost/benefit of a trade for both teams: change in expected category wins per week, per-category
     before/after, games and starts volume, roster-limit drops and the market value moving each way.
-    Leave other_team_id empty to see what losing the `give` players costs you."""
+    Leave other_team_id empty for a waiver move: `give` players are released and `get` must be
+    free agents (or leave `get` empty to see what losing the `give` players costs you)."""
     s = get_settings()
     ctx = _ctx(conn, s)
     team_id = _team(ctx, req.team_id, s)

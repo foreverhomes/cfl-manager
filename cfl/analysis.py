@@ -544,11 +544,14 @@ def simulate_moves(ctx: Context, projected: Dict[str, Dict], moves: Dict[str, Op
     """Every team's projected profile after moving players ({player_id: new_team_id or None}).
 
     Affected teams re-run their daily lineups, so a player only counts for the nights he'd
-    actually start. A team pushed over the roster limit drops its lowest-value players (never
-    the ones it just received); those show up in the team's `dropped` list. z-scores stay on
-    the pre-trade league scale. Rosters are restored afterwards.
+    actually start. A free agent picked up joins the bench, so he counts against the roster
+    limit. A team pushed over the roster limit drops its lowest-value players (never the ones
+    it just received); those show up in the team's `dropped` list. z-scores stay on the
+    pre-trade league scale. Rosters are restored afterwards.
     """
     previous = {fid: ctx.players[fid].team_id for fid in moves}
+    statuses = {fid: ctx.players[fid].roster_status for fid, team in moves.items()
+                if team is not None and previous[fid] is None}
     affected = {t for t in set(previous.values()) | set(moves.values()) if t}
     before = {t: {c: v["value"] for c, v in p["categories"].items()} for t, p in projected.items()}
     values = dict(before)
@@ -558,6 +561,8 @@ def simulate_moves(ctx: Context, projected: Dict[str, Dict], moves: Dict[str, Op
     try:
         for fid, team in moves.items():
             ctx.players[fid].team_id = team
+        for fid in statuses:
+            ctx.players[fid].roster_status = "RESERVE"
         for t in affected:
             over = capped_count(ctx, t) - ctx.roster_cap if ctx.roster_cap else 0
             if over > 0:
@@ -574,6 +579,8 @@ def simulate_moves(ctx: Context, projected: Dict[str, Dict], moves: Dict[str, Op
     finally:
         for fid, team in previous.items():
             ctx.players[fid].team_id = team
+        for fid, status in statuses.items():
+            ctx.players[fid].roster_status = status
     ranked = _rank_and_z(ctx, values, baseline=before)
     return {t: {"team_id": t, "team_name": ctx.teams[t], "categories": ranked[t], "games": games[t],
                 "dropped": dropped.get(t, [])} for t in ctx.teams}
@@ -881,11 +888,15 @@ def _overall_rank(projected: Dict[str, Dict], team_id: str) -> int:
 
 def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = "fa", position: Optional[str] = None,
             limit: int = 25, min_games: int = 5, include_minors: bool = False, from_team: Optional[str] = None,
-            offer: Union[None, str, Sequence[str]] = None, tolerance: float = 0.25, **need_kwargs) -> Dict:
+            offer: Union[None, str, Sequence[str]] = None, tolerance: float = 0.25,
+            drop: Union[None, str, Sequence[str]] = None, **need_kwargs) -> Dict:
     """Players to go after, ranked by value to `team_id` given its category needs.
 
-    source="fa": unrostered players, each paired with the weakest droppable player in the same
-                 position group on your roster ("upgrade" = need value gained by the swap).
+    source="fa": unrostered players. Each pickup is simulated (your daily lineups re-run with him
+                 on the bench) and scored as the change in your expected category wins per week
+                 (`your_gain`). With a full roster someone has to go: `drop` names the player(s)
+                 you'd release; without it, your lowest-value players (overall and at the pickup's
+                 position) are each tried and the best drop is reported in `drops`.
     source="trade": players on other teams; `from_team` narrows that to one team's roster.
     offer: one or more players on your roster to trade away. Only players of comparable market
            value are returned: trade rank within `tolerance` (see comparable_band) of the offered
@@ -895,11 +906,14 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
            the other team (`their_gain`).
     """
     offer_ids = [offer] if isinstance(offer, str) else list(offer or [])
+    drop_ids = [drop] if isinstance(drop, str) else list(drop or [])
     if from_team is not None or offer_ids:
         if source != "trade":
             raise ValueError("from_team and offer only apply to source=trade")
         if from_team == team_id:
             raise ValueError("from_team is the team you're finding targets for")
+    if drop_ids and source != "fa":
+        raise ValueError("drop only applies to source=fa")
     lineup_mode = need_kwargs.pop("lineup", "best")
     projected = projected_profiles(ctx, lineup_mode)
     weights = _split(need_weights(ctx, team_id, projected, **need_kwargs), ctx)
@@ -913,6 +927,12 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
         if not p.z:
             raise ValueError("{} has no NHL stats, so there's no value to compare against".format(p.name))
         offered.append(p)
+    dropping: List[Player] = []
+    for fid in drop_ids:
+        p = ctx.players.get(fid)
+        if p is None or p.team_id != team_id:
+            raise ValueError("drop must be players on your roster")
+        dropping.append(p)
     band, anchor, package_value = (0, 0), 0, 0.0
     if offered:
         package_value = sum(market[p.fantrax_id] for p in offered)
@@ -930,29 +950,17 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
                     and (not offered or band[0] <= ranks.get(p.fantrax_id, 0) <= band[1]))
         raise ValueError("source must be 'fa' or 'trade'")
 
-    mine = [p for p in ctx.roster(team_id) if p.roster_status != "MINORS" and p.z]
-    weakest = {}
-    for grp in ("F", "D", "G"):
-        group = [p for p in mine if p.group == grp]
-        if group:
-            weakest[grp] = min(group, key=lambda p: player_value(p, weights))
-
-    def rank_key(p: Player) -> float:
-        # Rank by gain over the player leaving your roster (the drop for pickups, the offered
-        # player for trades): that compares skaters and goalies on the same footing, since
-        # their z-sums cover different numbers of categories.
-        outgoing = weakest.get(p.group) if source == "fa" else None
-        return player_value(p, weights) - (player_value(outgoing, weights) if outgoing else 0.0)
-
     candidates = [p for p in ctx.players.values() if eligible(p)]
+    rank_key = lambda p: player_value(p, weights)  # noqa: E731
+    # Your punts / manual weights decide what counts as a gain for you; the other team is scored
+    # on plain category wins.
+    spread = need_kwargs.get("spread", 1.5)
+    importance = {c.short_name: c.weight for c in ctx.categories}
+    importance.update({c: 0.0 for c in need_kwargs.get("punt") or ()})
+    importance.update(need_kwargs.get("overrides") or {})
+
     swaps: Dict[str, Tuple[float, float]] = {}
     if offered:
-        # Your punts / manual weights decide what counts as a gain for you; the other team is
-        # scored on plain category wins.
-        spread = need_kwargs.get("spread", 1.5)
-        importance = {c.short_name: c.weight for c in ctx.categories}
-        importance.update({c: 0.0 for c in need_kwargs.get("punt") or ()})
-        importance.update(need_kwargs.get("overrides") or {})
         base_me = expected_category_wins(ctx, projected, team_id, spread, importance)
         base = {t: expected_category_wins(ctx, projected, t, spread) for t in ctx.teams}
         for p in candidates:
@@ -965,15 +973,49 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
             )
         rank_key = lambda p: swaps[p.fantrax_id][0]  # noqa: E731
 
+    pickups: Dict[str, Tuple[float, List[str]]] = {}
+    open_spots = ctx.roster_cap - capped_count(ctx, team_id) if ctx.roster_cap else 1
+    if source == "fa":
+        # Simulating the whole pool is wasted work: shortlist the best free agents per position
+        # group by need value, then rank the shortlist by simulated gain.
+        shortlist: List[Player] = []
+        for grp in ("F", "D", "G"):
+            shortlist += sorted((p for p in candidates if p.group == grp), key=rank_key, reverse=True)[:max(limit, 20)]
+        candidates = shortlist
+        # Cheapest players to lose first; ones with no NHL stats add nothing this season.
+        droppable = sorted(ctx.roster(team_id, CAPPED_STATUSES),
+                           key=lambda p: player_value(p, weights) if p.z else -1e9)
+
+        def drop_options(p: Player) -> List[List[str]]:
+            if dropping:
+                return [[d.fantrax_id for d in dropping]]
+            if open_spots > 0:
+                return [[]]
+            tries = droppable[:3] + [d for d in droppable if d.group == p.group][:2]
+            return [[fid] for fid in dict.fromkeys(d.fantrax_id for d in tries)] or [[]]
+
+        base_me = expected_category_wins(ctx, projected, team_id, spread, importance)
+        for p in candidates:
+            best: Optional[Tuple[float, List[str]]] = None
+            for out in drop_options(p):
+                moves = {fid: None for fid in out}
+                moves[p.fantrax_id] = team_id
+                after = simulate_moves(ctx, projected, moves, lineup_mode)
+                gain = expected_category_wins(ctx, after, team_id, spread, importance, opponents=projected) - base_me
+                if best is None or gain > best[0]:
+                    best = (gain, out + after[team_id]["dropped"])
+            pickups[p.fantrax_id] = best
+        rank_key = lambda p: pickups[p.fantrax_id][0]  # noqa: E731
+
     pool = sorted(candidates, key=rank_key, reverse=True)[:limit]
     results = []
     for p in pool:
         item = player_summary(p, ctx, weights)
-        drop = weakest.get(p.group)
-        if source == "fa" and drop is not None:
-            item["replaces"] = {"fantrax_id": drop.fantrax_id, "name": drop.name,
-                                "need_value": round(player_value(drop, weights), 2)}
-            item["upgrade"] = round(rank_key(p), 2)
+        if source == "fa":
+            gain, out = pickups[p.fantrax_id]
+            item["your_gain"] = round(gain, 3)      # expected category wins per week
+            item["drops"] = [_move_brief(ctx, f, weights) for f in out]
+            item["market_value_net"] = round(market.get(p.fantrax_id, 0.0) - sum(market.get(f, 0.0) for f in out), 2)
         if offered:
             yours, theirs = swaps[p.fantrax_id]
             item["your_gain"] = round(yours, 3)      # expected category wins per week
@@ -993,14 +1035,35 @@ def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = 
             "need_value": round(sum(player_value(o, weights) for o in offered), 2),
             "comparable_trade_ranks": list(band), "tolerance": tolerance,
         },
+        "drop": None if not dropping else {
+            "players": [_move_brief(ctx, d.fantrax_id, weights) for d in dropping],
+            "name": " + ".join(d.name for d in dropping),
+        },
+        "roster": {"count": capped_count(ctx, team_id), "cap": ctx.roster_cap},
         "need_weights": {c: round(w, 2) for c, w in {**weights["S"], **weights["G"]}.items()},
         "targets": results,
     }
 
 
+def _move_brief(ctx: Context, fid: str, weights: Optional[Dict[str, Dict[str, float]]] = None) -> Dict:
+    """A player changing teams: who he is, what he's worth, and what he's paid."""
+    p = ctx.players[fid]
+    out = {"fantrax_id": fid, "name": p.name, "position": ",".join(e for e in p.eligible if e != "F"),
+           "nhl_team": p.nhl_team, "roster_status": p.roster_status,
+           "trade_rank": ctx.trade_ranks().get(fid), "market_value": round(ctx.market_values().get(fid, 0.0), 2),
+           "salary": p.salary, "contract_years": p.contract_years, "release_cost": release_cost(p),
+           "age": age_on(p.birth_date, date.today()) if p.birth_date else None}
+    if weights is not None:
+        out["need_value"] = round(player_value(p, weights), 2) if p.z else None
+    return out
+
+
 def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_id: Optional[str] = None,
                    get: Sequence[str] = (), lineup: str = "best", spread: float = 1.5) -> Dict:
-    """Cost/benefit of a trade for both sides (or, with no other team, the cost of losing `give`).
+    """Cost/benefit of a trade for both sides.
+
+    With no other team it's a waiver move: `give` players are released (buyouts for $4+
+    contracts) and `get` players are free agents picked up onto the bench.
 
     The trade is simulated with daily lineups over the rest of the season; each side's effect is
     the change in expected category wins per week against the unchanged rest of the league, with
@@ -1011,15 +1074,18 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
         raise ValueError("Unknown team {}".format(team_id))
     if other_team_id is not None and (other_team_id not in ctx.teams or other_team_id == team_id):
         raise ValueError("other_team_id must be a different team in the league")
-    if get and other_team_id is None:
-        raise ValueError("Pick the other team to receive players from")
     if not give and not get:
         raise ValueError("Select at least one player")
     for fid in give:
         if fid not in ctx.players or ctx.players[fid].team_id != team_id:
             raise ValueError("{} is not on {}".format(fid, ctx.teams[team_id]))
     for fid in get:
-        if fid not in ctx.players or ctx.players[fid].team_id != other_team_id:
+        if fid not in ctx.players:
+            raise ValueError("Unknown player {}".format(fid))
+        if other_team_id is None and ctx.players[fid].team_id is not None:
+            raise ValueError("{} is on {}: pick that team as the trade partner".format(
+                ctx.players[fid].name, ctx.teams[ctx.players[fid].team_id]))
+        if other_team_id is not None and ctx.players[fid].team_id != other_team_id:
             raise ValueError("{} is not on {}".format(fid, ctx.teams[other_team_id]))
 
     projected = projected_profiles(ctx, lineup)
@@ -1028,13 +1094,9 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
     counts = {t: capped_count(ctx, t) for t in (team_id, other_team_id) if t}
     after = simulate_moves(ctx, projected, moves, lineup)
     market = ctx.market_values()
-
-    def brief(fid: str) -> Dict:
-        p = ctx.players[fid]
-        return {"fantrax_id": fid, "name": p.name, "position": ",".join(e for e in p.eligible if e != "F"),
-                "nhl_team": p.nhl_team, "roster_status": p.roster_status,
-                "trade_rank": ctx.trade_ranks().get(fid), "market_value": round(market.get(fid, 0.0), 2),
-                "salary": p.salary, "contract_years": p.contract_years}
+    brief = lambda fid: _move_brief(ctx, fid)  # noqa: E731
+    # Free agents picked up join the bench, so they count against the roster limit and the cap.
+    joins_capped = lambda f: ctx.players[f].team_id is None or ctx.players[f].roster_status in CAPPED_STATUSES  # noqa: E731
 
     def cap_effect(t: str, out_ids: Sequence[str], in_ids: Sequence[str], dropped: Sequence[str]) -> Optional[Dict]:
         before = cap_summary(ctx, t)
@@ -1046,8 +1108,15 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
         # With no trade partner the players are released: $4+ contracts cost a buyout.
         released = list(out_ids) if other_team_id is None else []
         release_buyouts = sum(release_cost(ctx.players[f]) for f in released)
-        after = cap_summary(ctx, t, roster_after, extra_dead_cap=buyouts + release_buyouts)
-        incoming = [ctx.players[f] for f in in_ids if ctx.players[f].roster_status in CAPPED_STATUSES]
+        pickups = {f: ctx.players[f].roster_status for f in in_ids if ctx.players[f].team_id is None}
+        try:
+            for f in pickups:
+                ctx.players[f].roster_status = "RESERVE"
+            after = cap_summary(ctx, t, roster_after, extra_dead_cap=buyouts + release_buyouts)
+        finally:
+            for f, status in pickups.items():
+                ctx.players[f].roster_status = status
+        incoming = [ctx.players[f] for f in in_ids if joins_capped(f)]
         outgoing = [ctx.players[f] for f in out_ids if ctx.players[f].roster_status in CAPPED_STATUSES]
         return {
             "cap": before["cap"], "committed_before": before["committed"], "committed_after": after["committed"],
@@ -1055,8 +1124,8 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
             "salary_out": sum(p.salary or 0 for p in outgoing), "salary_in": sum(p.salary or 0 for p in incoming),
             "drop_buyouts": buyouts,
             "release_buyouts": release_buyouts,
-            # Incoming players with no known salary (their team's sheet isn't loaded): space_after
-            # is overstated by whatever they earn.
+            # Incoming players with no known salary (their team's sheet isn't loaded, or a free
+            # agent not signed yet): space_after is overstated by whatever they earn.
             "unknown_incoming": sorted(p.name for p in incoming if p.salary is None),
             "over_cap": after["space"] < 0,
             "contract_years_before": before["contract_years"], "contract_years_after": after["contract_years"],
@@ -1089,7 +1158,7 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
         gives_value = sum(market.get(f, 0.0) for f in out_ids)
         gets_value = sum(market.get(f, 0.0) for f in in_ids)
         n_out = sum(1 for f in out_ids if ctx.players[f].roster_status in CAPPED_STATUSES)
-        n_in = sum(1 for f in in_ids if ctx.players[f].roster_status in CAPPED_STATUSES)
+        n_in = sum(1 for f in in_ids if joins_capped(f))
         sides.append({
             "team_id": t, "team_name": ctx.teams[t], "role": "you" if t == team_id else "partner",
             "gives": [brief(f) for f in out_ids], "gets": [brief(f) for f in in_ids],

@@ -36,6 +36,10 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
     drops, and market value moving each way.
   - **Suggestions:** comparable-value targets for your selection are listed league-wide, or from
     the chosen partner. **Add** pulls a suggested player into the trade.
+  - **Waiver wire:** pick it as the partner to compare free agents with your roster. Your
+    selection becomes the players you'd drop. Suggestions rank free agents by simulated gain,
+    with the best drop for each when you haven't chosen one. Search the free agents to add any of
+    them, and the evaluation prices the pickup like a trade, including buyouts for the drop.
 
 macOS has no bare `python` command, and the dependencies live in `.venv`. Either prefix commands
 with `.venv/bin/python` as above, or activate the venv once per terminal session
@@ -176,13 +180,14 @@ Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
-| `GET /analysis/teams/me/targets?source=fa` | free agents ranked by upgrade over your weakest player at the position |
+| `GET /analysis/teams/me/targets?source=fa` | free agents ranked by simulated gain, each with its best drop (see below) |
+| `GET /analysis/teams/me/targets?source=fa&drop=Evans` | the same, with the player you'd release fixed |
 | `GET /analysis/teams/me/targets?source=trade&position=G` | players on other teams that fit your needs |
 | `GET /analysis/teams/me/targets?from_team=Ruff` | only one team's players (team id or unique part of the name; implies `source=trade`) |
 | `GET /analysis/teams/me/targets?offer=Connor` | trade targets of comparable value to one of your players (see below) |
 | `GET /analysis/teams/me/trade-partners` | teams whose strengths match your weaknesses, players each way, your trade chips |
 | `GET /publish`, `POST /publish?force=true` | sheet publishing status; publish app-owned teams now |
-| `POST /analysis/trade` | cost/benefit of any trade, e.g. `{"give": [ids], "other_team_id": "Ruff", "get": [ids]}`; omit the partner to price losing players |
+| `POST /analysis/trade` | cost/benefit of any trade, e.g. `{"give": [ids], "other_team_id": "Ruff", "get": [ids]}`; omit the partner for a waiver move (`give` released, `get` free agents) or to price losing players |
 
 Common analysis parameters:
 - `strategy`: `marginal` (default), `weakness` or `even`
@@ -237,6 +242,7 @@ python -m cfl targets --position D
 python -m cfl targets --source trade --punt Hit
 python -m cfl targets --from-team Ruff --position D
 python -m cfl targets --offer "Kyle Connor" --tolerance 0.15
+python -m cfl targets --position G --drop "Evans"
 ```
 
 ### Watching your team (`watch`)
@@ -276,4 +282,23 @@ and targets only returns players of similar market value, ranked by how much the
   nights has real value, and a 3rd goalie still starts when the top two are idle. `win_win` flags
   deals where both gains are positive, which are the ones most likely to get accepted.
 - Combine with `from_team` to ask "what could I get from this team for X?"
+
+### Waiver pickups (`source=fa`)
+
+Free agents are scored the same way as trades: each pickup is simulated with your daily lineups,
+and **`your_gain`** is the change in expected category wins per week.
+
+- **The drop.** A pickup joins your bench, so on a full roster someone has to go. Pass `drop`
+  (ids or unique parts of names) to fix who. Otherwise each pickup tries your three lowest-value
+  players and your two lowest at his position, and reports the best in **`drops`**. With an open
+  roster spot, nobody is dropped.
+- **Market value** works as for trades. `market_value_net` is the pickup's market value minus the
+  drop's. A negative number means the drop might fetch more in a trade than on waivers.
+- **Buyouts.** Each drop shows its `release_cost`: free at $3 or less, otherwise half the salary.
+- **Not modelled:** dynasty value. Market value measures this season's production only, so check
+  a prospect's age and contract before dropping him.
+- **Waivers vs. free agents:** Fantrax's public data marks a player as rostered or not, with no
+  waiver status. Every unrostered player is treated as available.
+- Only the best free agents by need value at each position (F, D, G) are simulated, so a query
+  takes about half a second.
 

@@ -177,10 +177,14 @@ const state = {
   trade: {
     give: new Set(), get: new Set(), partner: "", tolerance: prefs.get("tolerance", "0.25"),
     giveMinors: false, getMinors: false, giveQuery: "", getQuery: "",
+    pickups: new Map(),   // free agents selected on the waiver wire, by id, so they stay listed
   },
 };
+// Partner-select value for picking up free agents instead of trading.
+const WAIVERS = "__waivers__";
+const onWaivers = () => state.trade.partner === WAIVERS;
 // Latest-request counters: a slower, older response never overwrites a newer one.
-const seqs = { dashboard: 0, tradeLoad: 0, suggest: 0, evaluate: 0 };
+const seqs = { dashboard: 0, tradeLoad: 0, suggest: 0, evaluate: 0, pool: 0 };
 
 function showError(err) {
   const box = byId("error");
@@ -250,6 +254,7 @@ function wireControls() {
     state.team = e.target.value;
     state.trade.give.clear();
     state.trade.get.clear();
+    state.trade.pickups.clear();
     if (state.trade.partner === state.team) state.trade.partner = "";
     route();
   });
@@ -270,10 +275,17 @@ function wireControls() {
   byId("trade-clear").addEventListener("click", () => {
     state.trade.give.clear();
     state.trade.get.clear();
+    state.trade.pickups.clear();
     loadTrade();
   });
   byId("give-search").addEventListener("input", (e) => { state.trade.giveQuery = e.target.value; renderTradeLists(); });
-  byId("get-search").addEventListener("input", (e) => { state.trade.getQuery = e.target.value; renderTradeLists(); });
+  let poolTimer = null;
+  byId("get-search").addEventListener("input", (e) => {
+    state.trade.getQuery = e.target.value;
+    if (!onWaivers()) { renderTradeLists(); return; }
+    clearTimeout(poolTimer);
+    poolTimer = setTimeout(loadWaiverPool, 250);
+  });
   byId("give-minors").addEventListener("change", (e) => { state.trade.giveMinors = e.target.checked; renderTradeLists(); });
   byId("get-minors").addEventListener("change", (e) => { state.trade.getMinors = e.target.checked; renderTradeLists(); });
 }
@@ -697,18 +709,23 @@ async function loadTrade() {
   const partnerSel = byId("partner-select");
   partnerSel.replaceChildren(
     h("option", { value: "" }, "No partner: price my players"),
+    h("option", { value: WAIVERS, selected: onWaivers() }, "Waiver wire: free agents"),
     ...state.teams.filter((t) => t.id !== state.team).map((t) =>
       h("option", { value: t.id, selected: t.id === state.trade.partner }, t.name)));
-  byId("give-title").textContent = `${teamName(state.team)} gives`;
+  const waivers = onWaivers();
+  byId("give-title").textContent = `${teamName(state.team)} ${waivers ? "drops" : "gives"}`;
+  byId("give-sub").textContent = waivers ? "Select players to release" : "Select players to send";
+  byId("tolerance-field").hidden = waivers;
   const token = ++seqs.tradeLoad;
   try {
     const [mine, theirs] = await Promise.all([
       getProfile(state.team),
-      state.trade.partner ? getProfile(state.trade.partner) : Promise.resolve(null),
+      state.trade.partner && !waivers ? getProfile(state.trade.partner) : Promise.resolve(null),
+      waivers ? loadWaiverPool({ render: false }) : Promise.resolve(),
     ]);
     if (token !== seqs.tradeLoad) return;
     myRoster = mine.roster;
-    partnerRoster = theirs ? theirs.roster : [];
+    if (!waivers) partnerRoster = theirs ? theirs.roster : [];
     clearError();
   } catch (err) {
     if (token === seqs.tradeLoad) showError(err);
@@ -723,13 +740,37 @@ function setPartner(teamId) {
   if (teamId === state.trade.partner) return;
   state.trade.partner = teamId;
   state.trade.get.clear();
+  state.trade.pickups.clear();
   loadTrade();
+}
+
+// Selected pickups first, then the rest; each by trade rank.
+function orderPool(players) {
+  const picked = state.trade.pickups;
+  const byRank = (a, b) => (a.trade_rank || 1e9) - (b.trade_rank || 1e9);
+  return [...[...picked.values()].sort(byRank), ...players.filter((p) => !picked.has(p.fantrax_id)).sort(byRank)];
+}
+
+// The free agents listed on the waiver wire: the best by value, or matches for the search.
+// Selected pickups stay listed whatever the search.
+async function loadWaiverPool({ render = true } = {}) {
+  const token = ++seqs.pool;
+  const q = state.trade.getQuery.trim();
+  try {
+    const res = await api.get("/players", { status: "fa", q: q || null, min_games: q ? 0 : 5, limit: 40 });
+    if (token !== seqs.pool || !onWaivers()) return;
+    partnerRoster = orderPool(res.players);
+  } catch (err) {
+    if (token === seqs.pool) showError(err);
+    return;
+  }
+  if (render) renderTradeLists();
 }
 
 function playerRow(p, selectedSet, onToggle) {
   const selected = selectedSet.has(p.fantrax_id);
-  const games = p.expected_starts_per_week != null
-    ? `${fmtNum(p.expected_starts_per_week, 2)} starts/wk` : `${fmtNum(p.lineup_games_per_week, 1)} g/wk`;
+  const games = p.expected_starts_per_week != null ? `${fmtNum(p.expected_starts_per_week, 2)} starts/wk`
+    : p.lineup_games_per_week != null ? `${fmtNum(p.lineup_games_per_week, 1)} g/wk` : null;
   const box = h("input", { type: "checkbox", checked: selected, "aria-label": `Select ${p.name}` });
   const row = h("label", { class: "prow" + (selected ? " selected" : "") },
     box,
@@ -766,14 +807,24 @@ function renderTradeLists() {
     ? give.map((p) => playerRow(p, t.give, toggle(t.give))) : [h("div", { class: "empty" }, "No players match")]));
 
   const hasPartner = Boolean(t.partner);
+  const waivers = onWaivers();
   byId("get-panel").hidden = !hasPartner;
-  byId("get-title").textContent = hasPartner ? `${teamName(t.partner)} gives` : "You get";
-  byId("get-sub").textContent = hasPartner
-    ? "Select players to receive" : "Pick a trade partner above, or add one of the suggestions";
+  byId("get-minors-label").hidden = waivers;
+  byId("get-search").placeholder = waivers ? "Search free agents" : "Filter players";
+  byId("get-title").textContent = waivers ? "You pick up" : hasPartner ? `${teamName(t.partner)} gives` : "You get";
+  byId("get-sub").textContent = waivers ? "Free agents: select players to add, or use the suggestions"
+    : hasPartner ? "Select players to receive" : "Pick a trade partner above, or add one of the suggestions";
   if (hasPartner) {
-    const get = filteredList(partnerRoster, t.getQuery, t.getMinors, t.get);
+    const pick = toggle(t.get);
+    const onToggle = waivers ? (id, on) => {
+      if (on) t.pickups.set(id, partnerRoster.find((p) => p.fantrax_id === id));
+      else t.pickups.delete(id);
+      pick(id, on);
+    } : pick;
+    // The server already searched the free agents; only a trade partner's roster is filtered here.
+    const get = waivers ? partnerRoster : filteredList(partnerRoster, t.getQuery, t.getMinors, t.get);
     byId("get-list").replaceChildren(...(get.length
-      ? get.map((p) => playerRow(p, t.get, toggle(t.get))) : [h("div", { class: "empty" }, "No players match")]));
+      ? get.map((p) => playerRow(p, t.get, onToggle)) : [h("div", { class: "empty" }, "No players match")]));
   }
 }
 
@@ -787,6 +838,10 @@ async function loadSuggestions() {
   const t = state.trade;
   const box = byId("suggestions");
   const token = ++seqs.suggest;
+  if (onWaivers()) {
+    loadPickupSuggestions(box, token);
+    return;
+  }
   if (!t.give.size) {
     box.replaceChildren(h("p", { class: "card-sub", style: { marginBottom: "12px" } },
       "Select players you'd give up to see comparable-value targets ranked by how much they help you."));
@@ -835,6 +890,63 @@ function addFromSuggestion(p) {
   loadTrade();
 }
 
+// Free agents ranked by the simulated gain of picking them up. With no drop selected, the best
+// drop is found for each (unless there's an open roster spot).
+async function loadPickupSuggestions(box, token) {
+  const t = state.trade;
+  box.classList.add("is-loading");
+  try {
+    const res = await api.get(`/analysis/teams/${encodeURIComponent(state.team)}/targets`, {
+      source: "fa", drop: [...t.give].join(",") || null, limit: 8,
+    });
+    if (token !== seqs.suggest) return;
+    const items = res.targets.map((p) => {
+      const added = t.get.has(p.fantrax_id);
+      const add = h("button", { class: "btn small ghost", type: "button" }, added ? "Added" : "Add");
+      add.disabled = added;
+      add.addEventListener("click", () => addPickup(p));
+      const drops = p.drops.map((d) => d.name + (d.release_cost ? ` (${fmtMoney(d.release_cost)} buyout)` : ""));
+      return h("div", { class: "sug" },
+        h("div", { style: { minWidth: "0" } },
+          h("div", { class: "prow-name" }, p.name),
+          h("div", { class: "prow-meta" }, [positions(p), p.nhl_team, p.trade_rank ? `#${p.trade_rank}` : null,
+            `mv ${fmtNum(p.market_value, 1)}`].filter(Boolean).join(" · ")),
+          t.give.size ? null : h("div", { class: "prow-meta" },
+            drops.length ? `Drop ${drops.join(", ")}` : "Fills an open roster spot")),
+        h("div", { class: "gain" },
+          h("div", {}, "You ", dirMark(p.your_gain), " ", fmtSigned(p.your_gain)),
+          h("div", {}, "mv ", fmtSigned(p.market_value_net, 1))),
+        add);
+    });
+    const r = res.roster;
+    const heading = res.drop ? `Best pickups if you drop ${res.drop.name}`
+      : r.cap && r.count < r.cap ? `Best pickups (${r.cap - r.count} open roster spot${r.cap - r.count === 1 ? "" : "s"})`
+        : "Best pickups, each with its best drop";
+    box.replaceChildren(h("div", { class: "suggestions" },
+      h("h3", {}, heading),
+      h("p", { class: "card-sub", style: { marginBottom: "6px" } },
+        "Gains are the change in expected category wins per week, simulated with daily lineups. mv is market value gained (pickup minus drop)."),
+      items.length ? items : h("div", { class: "empty" }, "No free agents with enough NHL games.")));
+  } catch (err) {
+    if (token === seqs.suggest) box.replaceChildren(h("div", { class: "empty" }, err.message));
+  } finally {
+    if (token === seqs.suggest) box.classList.remove("is-loading");
+  }
+}
+
+// Adds a suggested pickup. With no drop chosen yet, the suggestion's drop comes along, so the
+// evaluation below matches the suggestion.
+function addPickup(p) {
+  const t = state.trade;
+  t.get.add(p.fantrax_id);
+  t.pickups.set(p.fantrax_id, p);
+  if (!t.give.size) p.drops.forEach((d) => t.give.add(d.fantrax_id));
+  partnerRoster = orderPool(partnerRoster);
+  renderTradeLists();
+  refreshSuggestions();
+  refreshEvaluation();
+}
+
 let evalTimer = null;
 function refreshEvaluation() {
   clearTimeout(evalTimer);
@@ -852,7 +964,8 @@ async function loadEvaluation() {
   out.classList.add("is-loading");
   try {
     const res = await api.post("/analysis/trade", {
-      team_id: state.team, give: [...t.give], other_team_id: t.partner || null, get: [...t.get],
+      team_id: state.team, give: [...t.give], other_team_id: t.partner && !onWaivers() ? t.partner : null,
+      get: [...t.get],
     });
     if (token !== seqs.evaluate) return;
     renderEvaluation(res);
@@ -867,9 +980,17 @@ async function loadEvaluation() {
 function verdict(res) {
   const [me, them] = res.sides;
   const dMe = me.expected_category_wins.delta;
+  const names = (players) => players.map((p) => p.name).join(" + ");
+  if (!them && me.gets.length) {
+    const move = `Pick up ${names(me.gets)}${me.gives.length ? `, drop ${names(me.gives)}` : ""}`;
+    return {
+      title: dMe > 0.005 ? "Worth the pickup" : dMe < -0.005 ? "Makes you weaker" : "Roughly neutral",
+      sub: `${move}: ${fmtSigned(dMe)} expected category wins per week for ${me.team_name}.`,
+    };
+  }
   if (!them) {
     return {
-      title: me.gives.length ? `Cost of losing ${me.gives.map((p) => p.name).join(" + ")}` : "Adding players",
+      title: `Cost of losing ${names(me.gives)}`,
       sub: `${fmtSigned(dMe)} expected category wins per week for ${me.team_name}, before you refill the roster spot.`,
     };
   }
@@ -891,24 +1012,29 @@ function marketCard(res) {
   const m = res.market;
   const give = m.you_give || 0, get = m.you_get || 0;
   const max = Math.max(give, get, 0.01);
+  const pickup = !res.sides[1] && res.sides[0].gets.length > 0;
   const row = (label, value, rank, cls) => h("div", { class: "market-row" },
     h("span", {}, label),
     h("div", { class: "market-track" }, h("div", { class: "market-fill " + cls, style: { width: (value / max) * 100 + "%" } })),
     h("span", { class: "num" }, `${fmtNum(value, 1)}${rank ? ` · ≈ #${rank}` : ""}`));
   const diff = get - give;
   let note;
-  if (!res.sides[1]) note = "Market value is value over a replacement-level starter. Pick a partner to compare both sides.";
+  if (pickup && Math.abs(diff) <= 0.5) note = "Even on market value.";
+  else if (pickup && diff > 0) note = `You add ${fmtNum(diff, 1)} more market value than you drop.`;
+  else if (pickup) note = `You drop ${fmtNum(-diff, 1)} more market value than you add: that may fetch more in a trade.`;
+  else if (!res.sides[1]) note = "Market value is value over a replacement-level starter. Pick a partner to compare both sides.";
   else if (Math.abs(diff) <= Math.max(0.5, 0.15 * max)) note = "Even on market value: a fair ask.";
   else if (diff > 0) note = `You get ${fmtNum(diff, 1)} more market value; expect pushback.`;
   else note = `You pay a ${fmtNum(-diff, 1)} premium in market value.`;
   return h("div", { class: "card market" },
     h("h3", {}, "Market value"),
-    row("You give", give, m.you_give_equiv_rank, "give"),
-    res.sides[1] ? row("You get", get, m.you_get_equiv_rank, "get") : null,
+    row(pickup ? "You drop" : "You give", give, m.you_give_equiv_rank, "give"),
+    res.sides[1] || pickup ? row(pickup ? "You add" : "You get", get, m.you_get_equiv_rank, "get") : null,
     h("p", { class: "market-note" }, note));
 }
 
-function sideCard(side, maxDz) {
+function sideCard(side, maxDz, waiverMove) {
+  const move = waiverMove ? "move" : "trade";
   const ecw = side.expected_category_wins;
   const d = direction(ecw.delta);
   const r = side.roster;
@@ -946,10 +1072,14 @@ function sideCard(side, maxDz) {
   if (side.auto_dropped.length) notes.push("Over the roster limit, so the weakest player is dropped in the projection.");
   if (cap && cap.release_buyouts) notes.push(`Releasing $4+ contracts costs ${fmtMoney(cap.release_buyouts)} in buyouts (half salary, for the rest of each contract).`);
   if (cap && cap.drop_buyouts) notes.push(`Cutting ${side.auto_dropped.map((p) => p.name).join(", ")} costs a ${fmtMoney(cap.drop_buyouts)} buyout (half salary, $4+ contracts).`);
-  if (cap && cap.unknown_incoming.length) notes.push(`* Salary unknown for ${cap.unknown_incoming.join(", ")}: their team's sheet isn't loaded, so cap space after is overstated.`);
-  if (cap && cap.over_cap) notes.push(`▲ Over the cap by ${fmtMoney(-cap.space_after)} after this trade.`);
+  if (cap && cap.unknown_incoming.length) {
+    notes.push(waiverMove
+      ? `* No salary set for ${cap.unknown_incoming.join(", ")}, so cap space after leaves it out. Set the pickup's contract in the Players tab to include it.`
+      : `* Salary unknown for ${cap.unknown_incoming.join(", ")}: their team's sheet isn't loaded, so cap space after is overstated.`);
+  }
+  if (cap && cap.over_cap) notes.push(`▲ Over the cap by ${fmtMoney(-cap.space_after)} after this ${move}.`);
   if (cap && cap.contract_years_after > cap.contract_year_bank) {
-    notes.push(`▲ ${cap.contract_years_after - cap.contract_year_bank} contract years over the ${cap.contract_year_bank}-year bank after this trade.`);
+    notes.push(`▲ ${cap.contract_years_after - cap.contract_year_bank} contract years over the ${cap.contract_year_bank}-year bank after this ${move}.`);
   }
   return h("article", { class: "card side" },
     h("div", { class: "side-team" }, side.role === "you" ? "You" : "Trade partner", " · ", side.team_name),
@@ -984,7 +1114,7 @@ function renderEvaluation(res) {
         h("p", { class: "market-note" },
           "Simulated with daily lineups over the rest of the season. Each side is scored against the unchanged rest of the league.")),
       marketCard(res)),
-    h("div", { class: "sides" }, res.sides.map((s) => sideCard(s, maxDz))));
+    h("div", { class: "sides" }, res.sides.map((s) => sideCard(s, maxDz, !res.sides[1] && s.gets.length > 0))));
 }
 
 /* ================================================================ players + contract editor */
