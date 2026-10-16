@@ -41,7 +41,8 @@ class User:
 
 
 def local_admin(settings: Settings) -> User:
-    """Who every request is when logins aren't set up (on your own computer)."""
+    """Who every request is when logins aren't set up (on your own computer). With no users to
+    look up, "your" team is FANTRAX_MY_TEAM_ID, as for the CLI."""
     return User("local", None, settings.my_team_id, True)
 
 
@@ -96,9 +97,8 @@ def load_user(conn: Connection, settings: Settings, email: str) -> Optional[User
         return None
     r = r or {}
     is_admin = always_admin or r.get("role") == "admin"
-    # An admin from CFL_ADMIN_EMAILS manages FANTRAX_MY_TEAM_ID's team unless linked to another.
-    team_id = r.get("team_id") or (settings.my_team_id if always_admin else None)
-    return User(email, r.get("name"), team_id, is_admin, "active" if is_admin else r.get("status", "pending"))
+    # Everyone's team is the one linked in the Admin tab, admins included.
+    return User(email, r.get("name"), r.get("team_id"), is_admin, "active" if is_admin else r.get("status", "pending"))
 
 
 def record_login(conn: Connection, settings: Settings, claims: Dict[str, Any]) -> User:
