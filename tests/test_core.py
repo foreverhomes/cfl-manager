@@ -22,8 +22,11 @@ TEST_POSTGRES = os.environ.get("CFL_TEST_DATABASE_URL")
 
 @pytest.fixture(autouse=True)
 def _app_database(monkeypatch):
-    """The database the API opens: the test Postgres, or none (SQLite), never a DATABASE_URL from .env."""
+    """The database the API opens: the test Postgres, or none (SQLite), never a DATABASE_URL from .env.
+    Logins are off unless a test turns them on (see _logins)."""
     monkeypatch.setenv("DATABASE_URL", TEST_POSTGRES or "")
+    for name in ("GOOGLE_CLIENT_ID", "CFL_SESSION_SECRET", "CFL_ADMIN_EMAILS", "VERCEL"):
+        monkeypatch.setenv(name, "")
 
 
 def _empty_postgres(url: str) -> None:
@@ -820,3 +823,140 @@ def test_a_database_url_switches_to_postgres_and_is_shown_without_its_password(m
     assert s.database_label == "postgres://ep-x-pooler.us-east-1.aws.neon.tech/neondb"
     monkeypatch.setenv("DATABASE_URL", "")
     assert get_settings().database == get_settings().db_path
+
+
+# --------------------------------------------------------------------------- logins
+
+
+def _logins(monkeypatch, tmp_path):
+    """Turn on Sign in with Google with a fake Google: credential "x" is x@example.com. boss@ is the admin."""
+    from cfl import auth
+
+    def fake_verify(credential, client_id):
+        assert client_id == "client-1"
+        if credential == "forged":
+            raise ValueError("signature doesn't match")
+        return {"email": "{}@Example.com".format(credential), "name": credential.title(), "email_verified": True}
+
+    monkeypatch.setattr(auth, "verify_google_credential", fake_verify)
+    for name, value in (("GOOGLE_CLIENT_ID", "client-1"), ("CFL_SESSION_SECRET", "test-secret"),
+                        ("CFL_ADMIN_EMAILS", "boss@example.com"), ("FANTRAX_LEAGUE_ID", LEAGUE),
+                        ("CFL_DB_PATH", str(tmp_path / "t.db")), ("CFL_SALARY_SHEETS", str(tmp_path / "none.json"))):
+        monkeypatch.setenv(name, value)
+
+
+def _two_teams(conn):
+    """t1 has Daccord ($8, on t1's sheet); t2 has Snuggerud ($5, on t2's sheet)."""
+    for tid, name, fid, player, nhl, pos, salary in (("t1", "One", "f1", "Daccord, Joey", "SEA", "G", 8),
+                                                     ("t2", "Two", "f2", "Snuggerud, Jimmy", "STL", "RW", 5)):
+        conn.execute("INSERT INTO teams (id, league_id, name) VALUES (?, ?, ?)", (tid, LEAGUE, name))
+        _player(conn, fid, player, nhl, pos)
+        conn.execute("INSERT INTO league_players VALUES (?, ?, 'F', 'T')", (LEAGUE, fid))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, ?, ?, 'F', 'ACTIVE')", (LEAGUE, tid, fid))
+        conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                     "years_remaining, salaries) VALUES (?, ?, ?, ?, 'ROSTER', ?, 3, ?)",
+                     (LEAGUE, tid, player, fid, salary, "[{0},{0},{0}]".format(salary)))
+    conn.commit()
+
+
+def _signed_in(credential):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    client = TestClient(app)
+    return client, client.post("/auth/google", json={"credential": credential})
+
+
+def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_their_own(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    nobody = TestClient(app)
+    assert nobody.get("/teams").status_code == 401
+    assert nobody.get("/").status_code == 200                                         # the page, to sign in from
+    assert nobody.get("/auth/config").json() == {"enabled": True, "google_client_id": "client-1"}
+
+    gm, res = _signed_in("gm")
+    assert res.json()["status"] == "pending" and gm.get("/auth/me").json()["status"] == "pending"
+    assert gm.get("/teams").status_code == 403                                        # not until approved
+
+    boss, res = _signed_in("boss")
+    assert (res.json()["email"], res.json()["is_admin"], res.json()["status"]) == ("boss@example.com", True, "active")
+    waiting = boss.get("/admin/users").json()["users"][0]
+    assert (waiting["email"], waiting["status"]) == ("gm@example.com", "pending")
+    assert boss.put("/admin/users/gm@example.com", json={"team_id": "t9"}).status_code == 404   # no such team
+    boss.put("/admin/users/gm@example.com", json={"team_id": "t1", "role": "gm", "status": "active"})
+
+    assert gm.get("/health").json()["my_team_id"] == "t1"
+    assert {t["id"]: t["is_me"] for t in gm.get("/teams").json()} == {"t1": 1, "t2": 0}
+    assert gm.get("/teams/t2/contracts").status_code == 200                           # every team, read-only
+    assert gm.get("/players/f1/contract").json()["can_edit"] is True
+    assert gm.get("/players/f2/contract").json()["can_edit"] is False
+    assert gm.put("/players/f1/contract", json={"years": 2}).json()["effective"]["salaries"] == [8, 8]
+    assert gm.put("/players/f2/contract", json={"years": 2}).status_code == 403       # someone else's player
+    assert gm.delete("/players/f2/contract").status_code == 403
+    assert gm.put("/players/f2/birth-date", json={"birth_date": "2000-01-01"}).status_code == 403
+    for path in ("/analysis/teams/me/targets", "/analysis/teams/me/trade-partners", "/admin/users", "/publish"):
+        assert gm.get(path).status_code == 403, path                                  # the trade builder is the admin's
+    assert gm.post("/analysis/trade", json={"give": ["f1"]}).status_code == 403
+    assert boss.put("/players/f2/contract", json={"years": 1}).status_code == 200     # the admin edits anyone
+
+    assert boss.delete("/admin/users/boss@example.com").status_code == 400            # can't remove yourself
+    boss.delete("/admin/users/gm@example.com")
+    assert gm.get("/teams").status_code == 401                                        # removed: signed out
+
+
+def test_gms_refresh_rosters_and_stats_but_only_the_admin_runs_a_full_sync(conn, tmp_path, monkeypatch):
+    import cfl.api as api
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    ran = []
+    monkeypatch.setattr(api, "sync_all", lambda conn, settings, resources: ran.append(resources) or [])
+    boss, _ = _signed_in("boss")
+    boss.post("/admin/users", json={"email": " GM@example.com ", "team_id": "t2"})   # added before they sign in
+    gm, res = _signed_in("gm")
+    assert (res.json()["status"], res.json()["team_id"]) == ("active", "t2")          # straight in
+
+    quick = {"resources": ["rosters", "stats", "match", "bios"]}
+    assert gm.post("/sync", params=quick).status_code == 200
+    assert gm.post("/sync").status_code == 403
+    assert gm.post("/sync", params={"resources": ["salaries"]}).status_code == 403
+    assert boss.post("/sync").status_code == 200
+    assert ran == [quick["resources"], None]
+
+    assert gm.post("/auth/logout").status_code == 200
+    assert gm.get("/teams").status_code == 401
+
+
+def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl import auth
+    from cfl.api import app
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    _, res = _signed_in("forged")
+    assert res.status_code == 401
+    stranger = TestClient(app)
+    for cookie in ("not-a-session", auth.make_session("boss@example.com", "someone-elses-secret")):
+        stranger.cookies.set(auth.COOKIE, cookie)
+        assert stranger.get("/teams").status_code == 401
+
+    boss, _ = _signed_in("boss")
+    elsewhere = {"Origin": "https://evil.example"}
+    assert boss.put("/players/f1/contract", json={"years": 1}, headers=elsewhere).status_code == 403
+    assert boss.post("/auth/google", json={"credential": "boss"}, headers=elsewhere).status_code == 403
+    assert boss.put("/players/f1/contract", json={"years": 1}, headers={"Origin": "http://testserver"}).status_code == 200
+
+
+def test_a_vercel_deployment_without_logins_refuses_every_request(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "never-opened" / "t.db"))
+    client = TestClient(app)
+    res = client.get("/teams")
+    assert res.status_code == 503 and "GOOGLE_CLIENT_ID" in res.json()["detail"]
+    assert client.get("/auth/me").status_code == 503
+    assert client.get("/").status_code == 200                                          # the page still loads, to say so
+    assert "Privacy" in client.get("/privacy").text                                    # public, for Google's setup
+    assert not (tmp_path / "never-opened").exists()                                    # refused before the database

@@ -16,18 +16,21 @@
           <div class="brand-league" id="league-name">Loading league…</div>
         </div>
       </div>
-      <nav class="tabs" role="tablist" aria-label="Views">
+      <!-- Shown once the app knows who's signed in. Trade builder and Admin are the admin's. -->
+      <nav class="tabs" role="tablist" aria-label="Views" id="tabs" hidden>
         <a class="tab" role="tab" href="#dashboard" id="tab-dashboard">Dashboard</a>
-        <a class="tab" role="tab" href="#trade" id="tab-trade">Trade builder</a>
+        <a class="tab" role="tab" href="#trade" id="tab-trade" hidden>Trade builder</a>
         <a class="tab" role="tab" href="#players" id="tab-players">Players</a>
+        <a class="tab" role="tab" href="#admin" id="tab-admin" hidden>Admin</a>
       </nav>
-      <div class="topbar-actions">
+      <div class="topbar-actions" id="topbar-actions" hidden>
         <label class="field compact">
           <span class="field-label">Team</span>
           <select id="team-select" aria-label="Team to analyze"></select>
         </label>
         <button class="btn" id="refresh-btn" type="button" title="Today's Fantrax rosters and NHL.com stats">Refresh rosters &amp; stats</button>
-        <button class="btn danger-ghost" id="sync-btn" type="button" title="Re-read every source, including salary sheets">Full sync…</button>
+        <button class="btn danger-ghost" id="sync-btn" type="button" title="Re-read every source, including salary sheets" hidden>Full sync…</button>
+        <div class="account" id="account" hidden></div>
       </div>
     </div>
     <div class="sync-status" id="sync-status" role="status" aria-live="polite"></div>
@@ -35,6 +38,18 @@
 
   <main class="container">
     <div class="banner error" id="error" hidden></div>
+
+    <!-- Sign in / waiting for approval ---------------------------------- -->
+    <section id="view-signin" class="view" hidden>
+      <article class="card gate">
+        <h2 id="gate-title">Sign in</h2>
+        <p class="card-sub" id="gate-text"></p>
+        <div class="google-button" id="google-button"></div>
+        <div id="gate-extra"></div>
+        <p class="gate-msg" id="gate-msg" role="alert"></p>
+        <p class="gate-foot"><a href="/privacy">Privacy</a></p>
+      </article>
+    </section>
 
     <!-- Dashboard -------------------------------------------------------- -->
     <section id="view-dashboard" class="view" hidden>
@@ -126,7 +141,7 @@
         <header class="card-head">
           <div>
             <h2 id="players-title">Players</h2>
-            <p class="card-sub">Click a player to edit his contract. Edits override the salary sheet until you revert them.</p>
+            <p class="card-sub" id="players-sub">Click a player to edit his contract. Edits override the salary sheet until you revert them.</p>
           </div>
         </header>
         <div id="players-table" class="scroll-x"></div>
@@ -184,6 +199,11 @@
       </div>
 
       <div id="trade-result"></div>
+    </section>
+
+    <!-- Admin: who can sign in, and their teams ------------------------- -->
+    <section id="view-admin" class="view" hidden>
+      <div id="admin-body"></div>
     </section>
   </main>
 

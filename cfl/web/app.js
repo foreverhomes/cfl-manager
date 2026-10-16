@@ -38,7 +38,10 @@ async function request(method, path, { params, body } = {}) {
   try { data = await res.json(); } catch (_) { /* non-JSON error body */ }
   if (!res.ok) {
     const detail = data && data.detail;
-    throw new Error(typeof detail === "string" ? detail : (detail && detail.error) || `Request failed (${res.status})`);
+    const err = new Error(typeof detail === "string" ? detail : (detail && detail.error) || `Request failed (${res.status})`);
+    err.status = res.status;
+    if (res.status === 401 && !path.startsWith("/auth/")) showSignIn();   // the session ran out
+    throw err;
   }
   return data;
 }
@@ -163,6 +166,7 @@ function heatStyle(z) {
 /* ================================================================ state */
 
 const state = {
+  me: null,             // who's signed in: { email, name, team_id, is_admin, status, auth }
   health: null,
   league: null,
   teams: [],
@@ -217,6 +221,15 @@ async function boot() {
   byId("strategy-select").value = state.strategy;
   byId("tolerance-select").value = state.trade.tolerance;
   wireControls();
+  try {
+    state.me = await api.get("/auth/me");
+  } catch (err) {
+    if (err.status === 401) showSignIn();
+    else showError(err);
+    return;
+  }
+  if (state.me.status !== "active") { showWaiting(); return; }
+  applyRole();
   try {
     const [health, teams] = await Promise.all([api.get("/health"), api.get("/teams")]);
     state.health = health;
@@ -362,19 +375,24 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "trade", "players"];
+const VIEWS = ["dashboard", "trade", "players", "admin"];
+const ADMIN_VIEWS = new Set(["trade", "admin"]);
+const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
 function currentView() {
   const v = window.location.hash.slice(1);
-  return VIEWS.includes(v) ? v : "dashboard";
+  return VIEWS.includes(v) && (isAdmin() || !ADMIN_VIEWS.has(v)) ? v : "dashboard";
 }
 
 function route() {
+  if (!state.me || state.me.status !== "active") return;
   const view = currentView();
+  byId("view-signin").hidden = true;
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
   }
+  if (view === "admin") { loadAdmin(); return; }
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
   else if (view === "trade") loadTrade();
@@ -471,6 +489,7 @@ function capRow(label, committed, cap, note, holds = 0) {
 // Google Sheet publishing status for the team on screen (only teams whose contracts live in the app).
 async function renderPublish() {
   const box = byId("publish-status");
+  if (!isAdmin()) { box.replaceChildren(); return; }
   let st;
   try { st = await api.get("/publish"); } catch (_) { box.replaceChildren(); return; }
   const t = st.teams[state.team];
@@ -1226,22 +1245,23 @@ function renderPlayerDialog(d) {
   const current = d.override || d.effective || null;
   const salaries = current ? current.salaries : [];
   const knownSalary = salaries.length ? salaries[0] : null;
+  const editable = d.can_edit !== false;   // a GM edits only their own team's players
 
   // The salary comes from the sheet; this editor sets how many years are left on the contract.
   // Only a player with no salary anywhere gets a salary box.
   const salaryInput = knownSalary == null ? h("input", { type: "number", min: "0", step: "1", inputmode: "numeric",
-    placeholder: "$", "aria-label": "Salary per season" }) : null;
+    placeholder: "$", "aria-label": "Salary per season", disabled: !editable }) : null;
   const salaryText = h("div", { class: "fact-value num" });
   const years = h("input", { type: "number", min: "1", step: "1", inputmode: "numeric", class: "stepper-value",
-    value: String(salaries.length || 1), "aria-label": "Years left on the contract" });
+    value: String(salaries.length || 1), "aria-label": "Years left on the contract", disabled: !editable });
   const minus = h("button", { type: "button", class: "stepper-btn", "aria-label": "One year fewer" }, "−");
   const plus = h("button", { type: "button", class: "stepper-btn", "aria-label": "One year more" }, "+");
   const range = h("span", { class: "card-sub" });
-  const typeSel = h("select", { "aria-label": "Contract type" },
+  const typeSel = h("select", { "aria-label": "Contract type", disabled: !editable },
     Object.entries(d.contract_types).map(([k, label]) =>
       h("option", { value: k, selected: k === ((current && current.contract_type) || "STANDARD") }, label)));
   const note = h("input", { type: "text", placeholder: "Optional note (e.g. year 2 of ELC)",
-    value: (d.override && d.override.note) || "", "aria-label": "Note" });
+    value: (d.override && d.override.note) || "", "aria-label": "Note", disabled: !editable });
   const error = h("div", { class: "banner error", hidden: true });
 
   const maxYears = () => (typeSel.value === "IN_SEASON_UFA" ? 1
@@ -1250,8 +1270,8 @@ function renderPlayerDialog(d) {
     const v = Math.max(1, Math.min(maxYears(), Math.round(Number(n) || 1)));
     years.value = String(v);
     years.max = String(maxYears());
-    minus.disabled = v <= 1;
-    plus.disabled = v >= maxYears();
+    minus.disabled = !editable || v <= 1;
+    plus.disabled = !editable || v >= maxYears();
     range.textContent = v === 1 ? `${d.seasons[0]} only` : `${d.seasons[0]} – ${d.seasons[v - 1]}`;
     const elc = typeSel.value === "ELC";
     if (salaryInput && elc) salaryInput.value = String(d.rules.elc_salary);
@@ -1329,19 +1349,23 @@ function renderPlayerDialog(d) {
     h("div", { class: "dialog-row" },
       h("label", { class: "field grow" }, h("span", { class: "field-label" }, "Note"), note)),
     error,
+    editable ? null : h("p", { class: "market-note" },
+      `Only ${p.fantasy_team ? possessive(p.fantasy_team) + " GM or the admin" : "the admin"} can change this contract.`),
     h("div", { class: "dialog-actions" },
-      d.override && d.sheet ? h("button", { class: "btn ghost", type: "button", onclick: revert }, "Revert to sheet") : null,
-      d.override && !d.sheet ? h("button", { class: "btn ghost", type: "button", onclick: revert }, "Remove contract") : null,
+      editable && d.override && d.sheet ? h("button", { class: "btn ghost", type: "button", onclick: revert }, "Revert to sheet") : null,
+      editable && d.override && !d.sheet ? h("button", { class: "btn ghost", type: "button", onclick: revert }, "Remove contract") : null,
       h("span", { class: "spacer" }),
       h("button", { class: "btn ghost", type: "button", onclick: () => dialog.close() }, "Close"),
-      h("button", { class: "btn", type: "button", onclick: save }, "Save")),
+      editable ? h("button", { class: "btn", type: "button", onclick: save }, "Save") : null),
   ].filter(Boolean));
 }
 
 // Birth date decides RFA vs UFA; it comes from NHL.com but can be set by hand (syncs keep it).
 function birthDateRow(p, d) {
-  const input = h("input", { type: "date", value: p.birth_date || "", "aria-label": "Birth date", class: "date-input" });
-  const save = h("button", { class: "btn small ghost", type: "button", disabled: true }, "Save");
+  const editable = d.can_edit !== false;
+  const input = h("input", { type: "date", value: p.birth_date || "", "aria-label": "Birth date", class: "date-input",
+    disabled: !editable });
+  const save = h("button", { class: "btn small ghost", type: "button", disabled: true, hidden: !editable }, "Save");
   const msg = h("span", { class: "sub" });
   input.addEventListener("input", () => { save.disabled = input.value === (p.birth_date || ""); });
   save.addEventListener("click", async () => {
@@ -1367,6 +1391,205 @@ function afterContractChange(message) {
   if (view === "players") loadPlayers();
   else if (view === "trade") loadTrade();
   else loadDashboard();
+}
+
+
+/* ================================================================ sign-in */
+
+// What the signed-in person sees: GMs get the dashboard and players; the admin gets everything.
+function applyRole() {
+  const me = state.me;
+  byId("tabs").hidden = false;
+  byId("topbar-actions").hidden = false;
+  byId("tab-trade").hidden = !me.is_admin;
+  byId("tab-admin").hidden = !me.is_admin;
+  byId("sync-btn").hidden = !me.is_admin;
+  byId("players-sub").textContent = me.is_admin
+    ? "Click a player to edit his contract. Edits override the salary sheet until you revert them."
+    : "Click a player to see his contract. You can edit the players on your own team.";
+  const account = byId("account");
+  account.hidden = !me.auth;   // no logins when running locally without GOOGLE_CLIENT_ID
+  if (me.auth) {
+    account.replaceChildren(
+      h("span", { class: "account-name", title: me.email }, me.name || me.email),
+      h("button", { class: "btn ghost small", type: "button", onclick: signOut }, "Sign out"));
+  }
+}
+
+function showGate(title, text, extra = []) {
+  for (const v of VIEWS) byId(`view-${v}`).hidden = true;
+  byId("tabs").hidden = true;
+  byId("topbar-actions").hidden = true;
+  byId("league-name").textContent = "";
+  byId("gate-title").textContent = title;
+  byId("gate-text").textContent = text;
+  byId("gate-extra").replaceChildren(...extra);
+  byId("gate-msg").textContent = "";
+  byId("view-signin").hidden = false;
+}
+
+let googleScript = null;
+function loadGoogle() {
+  googleScript = googleScript || new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => { googleScript = null; reject(new Error("Couldn't load Google sign-in. Check your connection and reload.")); };
+    document.head.append(s);
+  });
+  return googleScript;
+}
+
+let signInShown = false;
+async function showSignIn() {
+  if (signInShown) return;   // several requests can hit an expired session at once
+  signInShown = true;
+  state.me = null;
+  showGate("Sign in", "Use the Google account you play under. If you're new, sign in and the admin will approve you and link your team.");
+  const button = byId("google-button");
+  button.hidden = false;
+  try {
+    const cfg = await api.get("/auth/config");
+    await loadGoogle();
+    google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: onGoogleCredential });
+    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    google.accounts.id.renderButton(button, { theme: dark ? "filled_black" : "outline", size: "large", shape: "pill",
+      text: "signin_with" });
+  } catch (err) {
+    byId("gate-msg").textContent = err.message;
+  }
+}
+
+async function onGoogleCredential({ credential }) {
+  try {
+    await api.post("/auth/google", { credential });
+    window.location.reload();   // start over as the signed-in user
+  } catch (err) {
+    byId("gate-msg").textContent = err.message;
+  }
+}
+
+function showWaiting() {
+  const me = state.me;
+  const first = me.name ? `, ${me.name.split(" ")[0]}` : "";
+  showGate("Waiting for approval",
+    `Thanks${first}. The admin needs to approve ${me.email} and link it to your team. Check back once they have.`,
+    [h("button", { class: "btn ghost", type: "button", onclick: signOut }, "Use a different account")]);
+  byId("google-button").hidden = true;
+}
+
+async function signOut() {
+  try { await api.post("/auth/logout"); } catch (_) { /* signed out either way */ }
+  if (window.google && google.accounts) google.accounts.id.disableAutoSelect();
+  window.location.hash = "";
+  window.location.reload();
+}
+
+/* ================================================================ admin */
+
+let adminSeq = 0;
+async function loadAdmin() {
+  const out = byId("admin-body");
+  const token = ++adminSeq;
+  out.classList.add("is-loading");
+  try {
+    const res = await api.get("/admin/users");
+    if (token === adminSeq) renderAdmin(res);
+  } catch (err) {
+    if (token === adminSeq) out.replaceChildren(h("div", { class: "banner error" }, err.message));
+  } finally {
+    if (token === adminSeq) out.classList.remove("is-loading");
+  }
+}
+
+// Every change returns the updated list, which is drawn straight away.
+async function adminCall(method, path, body) {
+  try {
+    renderAdmin(await request(method, path, { body }));
+    clearError();
+  } catch (err) {
+    showError(err);
+  }
+}
+
+function teamSelect(value, blank) {
+  return h("select", { "aria-label": "Team" },
+    h("option", { value: "" }, blank),
+    ...state.teams.map((t) => h("option", { value: t.id, selected: t.id === value }, t.name)));
+}
+
+function adminCard(title, sub, body) {
+  return h("article", { class: "card" },
+    h("header", { class: "card-head" }, h("div", {}, h("h2", {}, title), h("p", { class: "card-sub" }, sub))),
+    body);
+}
+
+async function removeUser(u) {
+  const ok = await confirmDialog({
+    title: `Remove ${u.name || u.email}?`, danger: true, confirmLabel: "Remove",
+    body: [h("p", { class: "dialog-text" }, "They lose access straight away. If they sign in again, they show up as a new request.")],
+  });
+  if (ok) adminCall("DELETE", userPath(u));
+}
+
+const userPath = (u) => `/admin/users/${encodeURIComponent(u.email)}`;
+
+function renderAdmin(res) {
+  const when = (iso) => (iso ? new Date(iso).toLocaleDateString() : "–");
+  const person = (u) => h("td", { class: "left" }, h("div", {}, u.name || u.email), u.name ? h("div", { class: "sub" }, u.email) : null);
+  const head = (...cols) => h("thead", {}, h("tr", {}, cols.map((c) => h("th", { class: "left" }, c)), h("th", {}, "")));
+  const pending = res.users.filter((u) => u.status === "pending");
+  const active = res.users.filter((u) => u.status === "active");
+
+  const requests = !pending.length
+    ? h("div", { class: "empty" }, "No one is waiting. Send GMs the site's link: when they sign in with Google, they show up here.")
+    : h("div", { class: "scroll-x" }, h("table", { class: "data-table" }, head("Person", "Asked", "Team"),
+      h("tbody", {}, pending.map((u) => {
+        const team = teamSelect(u.team_id, "Pick their team");
+        const approve = h("button", { class: "btn small", type: "button", disabled: !team.value,
+          onclick: () => adminCall("PUT", userPath(u), { team_id: team.value, role: "gm", status: "active" }) }, "Approve");
+        team.addEventListener("change", () => { approve.disabled = !team.value; });
+        return h("tr", {}, person(u), h("td", { class: "left" }, when(u.created_at)), h("td", { class: "left" }, team),
+          h("td", {}, h("div", { class: "row-actions" }, approve,
+            h("button", { class: "btn small ghost", type: "button", onclick: () => adminCall("DELETE", userPath(u)) }, "Decline"))));
+      }))));
+
+  const people = !active.length ? h("div", { class: "empty" }, "No one yet.")
+    : h("div", { class: "scroll-x" }, h("table", { class: "data-table" }, head("Person", "Team", "Role", "Last sign-in"),
+      h("tbody", {}, active.map((u) => {
+        const self = u.email === state.me.email;
+        const team = teamSelect(u.team_id, "No team");
+        const role = h("select", { "aria-label": "Role", disabled: u.always_admin || self },
+          h("option", { value: "gm", selected: u.role !== "admin" && !u.always_admin }, "GM"),
+          h("option", { value: "admin", selected: u.role === "admin" || u.always_admin }, "Admin"));
+        const save = () => adminCall("PUT", userPath(u), { team_id: team.value || null, role: role.value, status: "active" });
+        team.addEventListener("change", save);
+        role.addEventListener("change", save);
+        return h("tr", {}, person(u), h("td", { class: "left" }, team),
+          h("td", { class: "left" }, role, u.always_admin ? h("div", { class: "sub" }, "Always (CFL_ADMIN_EMAILS)") : null),
+          h("td", { class: "left" }, when(u.last_login_at)),
+          h("td", {}, self ? h("span", { class: "sub" }, "You") :
+            h("button", { class: "btn small ghost", type: "button", onclick: () => removeUser(u) }, "Remove")));
+      }))));
+
+  const email = h("input", { type: "email", placeholder: "their.name@gmail.com", "aria-label": "Google email", autocomplete: "off" });
+  const team = teamSelect("", "Pick their team");
+  const add = h("button", { class: "btn", type: "button", onclick: () => {
+    if (!email.value.trim() || !team.value) return showError("Enter their Google email and pick their team.");
+    adminCall("POST", "/admin/users", { email: email.value.trim(), team_id: team.value, role: "gm", status: "active" });
+  } }, "Add");
+
+  byId("admin-body").replaceChildren(
+    adminCard("Requests", "People who signed in with Google and are waiting for you. Pick their team to approve them.", requests),
+    adminCard("People with access",
+      "GMs see every team and edit their own team's contracts. Admins also get the trade builder, full syncs, publishing and this page.",
+      people),
+    adminCard("Add someone", "They get straight in the first time they sign in with this Google account.",
+      h("div", { class: "filters" },
+        h("label", { class: "field grow" }, h("span", { class: "field-label" }, "Google email"), email),
+        h("label", { class: "field" }, h("span", { class: "field-label" }, "Team"), team),
+        add)));
 }
 
 boot();

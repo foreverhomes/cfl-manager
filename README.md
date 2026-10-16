@@ -30,8 +30,9 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   team's projected rank in every category. A sortable roster table rounds it out. The team picker
   in the header lets you view any team.
 - **Players.** Search the league or browse a team, filter to players missing a salary, and edit
-  any player's contract.
-- **Trade builder.** Select any of your players. Optionally pick a trade partner and their players.
+  any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
+- **Trade builder** (admin only). Select any of your players. Optionally pick a trade partner and
+  their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in
     expected category wins, per-category before/after, games and starts volume, roster-limit
     drops, and market value moving each way.
@@ -41,6 +42,8 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
     selection becomes the players you'd drop. Suggestions rank free agents by simulated gain,
     with the best drop for each when you haven't chosen one. Search the free agents to add any of
     them, and the evaluation prices the pickup like a trade, including buyouts for the drop.
+- **Admin** (admin only). Approve GMs who signed in, link each to their team, change roles, and
+  remove access.
 
 macOS has no bare `python` command, and the dependencies live in `.venv`. Either prefix commands
 with `.venv/bin/python` as above, or activate the venv once per terminal session
@@ -192,10 +195,12 @@ the app and the CLI use that Postgres database instead. Nothing else changes.
    - `FANTRAX_MY_TEAM_ID`, and `FANTRAX_LEAGUE_ID` if it isn't the default.
    - `CFL_SALARY_SHEETS_JSON`: the contents of `salary_sheets.json`, which isn't in the repository.
    - `CFL_SHEET_PUBLISH_URL` and `CFL_SHEET_PUBLISH_TOKEN`, if you publish to your sheet.
-5. **Lock it down.** The app has no login. Anyone who can open it can sync, edit contracts and
-   publish. Under **Settings > Deployment Protection**, turn on **Vercel Authentication** for
-   **All Deployments** (free on Hobby), and only your Vercel account can open the site. A
-   **Shareable Link** lets someone else in, with the same full access.
+   - `GOOGLE_CLIENT_ID`, `CFL_SESSION_SECRET` and `CFL_ADMIN_EMAILS`, for [logins](#logins). A
+     deployment without them refuses every request, so the data is never left open.
+5. **Choose who can reach it.** Under **Settings > Deployment Protection**, **Vercel
+   Authentication** for **All Deployments** (free on Hobby) lets only your Vercel account open the
+   site. Keep that on until logins work. Then switch it to **Standard Protection**, which still
+   guards preview deployments, so GMs can reach the production site and sign in with Google.
 
 With `DATABASE_URL` in `.env`, local commands (`sync`, `serve`, `watch`, ...) read and write the
 Neon database too, so the site and your terminal agree. Remove it to go back to `data/league.db`.
@@ -204,14 +209,53 @@ Free-plan limits: Vercel Hobby includes 4 CPU-hours of function time a month, an
 run for 5 minutes (a full sync takes about 10 seconds). Neon's free plan sleeps the database after
 5 idle minutes, so the first request after a break takes a moment longer.
 
+## Logins
+
+GMs sign in with Google. Anyone can ask to join; you approve them and link their team.
+
+- **Who sees what.** A GM sees every team's dashboard and players, and edits contracts and birth
+  dates for players on their own team. They can run **Refresh rosters & stats**. Admins also get
+  full syncs, sheet publishing, the trade builder and the **Admin** tab. The API enforces all of
+  this, not just the page.
+- **Joining.** Send GMs the site's link. When someone signs in for the first time they wait for
+  approval and show up under **Requests** in the Admin tab, where you pick their team. You can
+  also add someone's Google email and team ahead of time, so they get straight in.
+- **Admins.** Emails in `CFL_ADMIN_EMAILS` are always admins, so you can't lock yourself out. One
+  without a linked team manages `FANTRAX_MY_TEAM_ID`'s team. You can make other people admins in
+  the Admin tab.
+- **Sessions.** Signing in sets a cookie that lasts 30 days. Every request checks the `users`
+  table, so a new team, role or removal applies on the next click.
+- **Running locally.** Without `GOOGLE_CLIENT_ID` there are no logins: the app and CLI act as the
+  admin, as before. Vercel refuses that setup.
+
+Set it up once:
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project. Under
+   **Google Auth Platform**, set **Audience** to **External** and fill in **Branding**: app name,
+   support email, developer contact email, and under **App domain** the home page
+   `https://clfl.vercel.app`, the privacy policy `https://clfl.vercel.app/privacy` (served by the
+   app) and the authorized domain `clfl.vercel.app`. Skip the logo, which needs a Google review.
+   Then on **Audience**, click **Publish app**: while it's in **Testing**, only the test users you
+   list can sign in. The app asks only for email and profile, which need no review.
+2. Under **Clients**, choose **Create client** with type **Web application**. Add the site to
+   **Authorized JavaScript origins**: `https://clfl.vercel.app` (or your domain). To use logins
+   locally, also add `http://localhost` and `http://localhost:8000`. No redirect URI is needed.
+3. In Vercel, set `GOOGLE_CLIENT_ID` to the client ID, `CFL_SESSION_SECRET` to a long random
+   string (for example `openssl rand -base64 32`; keep it a Secret), and `CFL_ADMIN_EMAILS` to your
+   Google email. Redeploy.
+4. Sign in yourself, then try a second Google account: it should wait for approval, and once you
+   approve it, see only what a GM sees. Then switch Deployment Protection to Standard (step 5
+   above) and send GMs the link.
+
 ## API
 
-Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it reads
-`FANTRAX_MY_TEAM_ID`).
+Interactive docs are at `/docs`. Every endpoint below needs a signed-in, approved user when logins
+are on; those marked *admin* need an admin. Anywhere a `team_id` goes, you can use `me`: the
+signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 
 | Endpoint | |
 |---|---|
-| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com |
+| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`) |
 | `GET /league`, `/categories`, `/teams`, `/standings` | league data |
 | `GET /teams/{id}/roster` | roster with per-game projections and z-scores |
 | `GET /teams/{id}/contracts` | salary-sheet contracts, how each matched, and the cap summary |
@@ -220,14 +264,17 @@ Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
-| `GET /analysis/teams/me/targets?source=fa` | free agents ranked by simulated gain, each with its best drop (see below) |
+| `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |
 | `GET /analysis/teams/me/targets?source=fa&drop=Evans` | the same, with the player you'd release fixed |
 | `GET /analysis/teams/me/targets?source=trade&position=G` | players on other teams that fit your needs |
 | `GET /analysis/teams/me/targets?from_team=Ruff` | only one team's players (team id or unique part of the name; implies `source=trade`) |
 | `GET /analysis/teams/me/targets?offer=Connor` | trade targets of comparable value to one of your players (see below) |
-| `GET /analysis/teams/me/trade-partners` | teams whose strengths match your weaknesses, players each way, your trade chips |
-| `GET /publish`, `POST /publish?force=true` | sheet publishing status; publish app-owned teams now |
-| `POST /analysis/trade` | cost/benefit of any trade, e.g. `{"give": [ids], "other_team_id": "Ruff", "get": [ids]}`; omit the partner for a waiver move (`give` released, `get` free agents) or to price losing players |
+| `GET /analysis/teams/me/trade-partners` | *admin*: teams whose strengths match your weaknesses, players each way, your trade chips |
+| `GET /publish`, `POST /publish?force=true` | *admin*: sheet publishing status; publish app-owned teams now |
+| `POST /analysis/trade` | *admin*: cost/benefit of any trade, e.g. `{"give": [ids], "other_team_id": "Ruff", "get": [ids]}`; omit the partner for a waiver move (`give` released, `get` free agents) or to price losing players |
+| `GET /auth/config`, `GET /auth/me` | whether logins are on (and the Google client ID); who's signed in |
+| `POST /auth/google`, `POST /auth/logout` | sign in with a Google ID token `{"credential": "..."}`; sign out |
+| `GET /admin/users`, `POST /admin/users`, `PUT` / `DELETE /admin/users/{email}` | *admin*: list who has access; add, approve or link someone (`{"team_id": "...", "role": "gm", "status": "active"}`); remove them |
 
 Common analysis parameters:
 - `strategy`: `marginal` (default), `weakness` or `even`
@@ -267,6 +314,7 @@ cfl/
   sync.py       ingest + Fantrax↔NHL id matching
   analysis.py   projections, z-scores, team profiles, targets, trade partners
   api.py        FastAPI app (also serves the web app)
+  auth.py       Sign in with Google, sessions, who may do what
   web/          dashboard + trade builder (HTML/CSS/JS, no build)
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
   __main__.py   CLI (sync / import-sqlite / serve / publish / teams / profile / targets / watch)

@@ -3,18 +3,21 @@
 import json
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
+from urllib.parse import urlsplit
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import analysis as A
+from . import auth
 from . import contracts as C
 from . import publish as P
+from .auth import User
 from .config import Settings, get_settings
-from .db import Connection, connect, row, rows
-from .sync import RESOURCES, _logged, current_period, sync_all
+from .db import Connection, connect, row, rows, transaction
+from .sync import RESOURCES, _logged, current_period, now_iso, sync_all
 
 app = FastAPI(
     title="CFL Manager",
@@ -44,6 +47,12 @@ def index():
     return FileResponse(str(WEB_DIR / "index.html"), headers=NO_CACHE)
 
 
+@app.get("/privacy", include_in_schema=False)
+def privacy():
+    """Public, like the page: Google's sign-in setup asks for a privacy policy link."""
+    return FileResponse(str(WEB_DIR / "privacy.html"), headers=NO_CACHE)
+
+
 CATEGORY_ALIASES = {"pm": "+/-", "plusminus": "+/-", "/-": "+/-", "svpct": "SV%"}
 
 
@@ -60,18 +69,72 @@ def _not_synced(_, exc: A.NotSynced):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
+# --------------------------------------------------------------------------- who's asking
+
+NO_LOGINS = ("Sign-in isn't set up for this deployment: set GOOGLE_CLIENT_ID, CFL_SESSION_SECRET and "
+             "CFL_ADMIN_EMAILS in the Vercel project (see README, \"Logins\"), then redeploy.")
+
+
+def _same_site(request: Request) -> bool:
+    """A write carrying the login cookie must come from this site's own pages. Browsers send Origin
+    on cross-site writes; a request without one (curl, or an older browser's same-site form) passes."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    return urlsplit(origin).netloc in {request.headers.get("host"), request.headers.get("x-forwarded-host")}
+
+
+def _logins_ready() -> None:
+    """Refuse everything on a deployment whose logins aren't set up, before touching the database."""
+    s = get_settings()
+    if (s.on_vercel or s.google_client_id) and not (s.google_client_id and s.session_secret):
+        raise HTTPException(503, detail=NO_LOGINS)
+
+
+def signed_in_user(request: Request, _: None = Depends(_logins_ready), conn: Connection = Depends(get_conn)) -> User:
+    """Whoever sent the request, approved or not. 401 when nobody is signed in."""
+    s = get_settings()
+    if not s.google_client_id:
+        return auth.local_admin(s)       # no logins: your own computer
+    email = auth.read_session(request.cookies.get(auth.COOKIE), s.session_secret)
+    user = auth.load_user(conn, s, email) if email else None
+    if user is None:
+        raise HTTPException(401, detail="Sign in to continue")
+    if request.method not in ("GET", "HEAD") and not _same_site(request):
+        raise HTTPException(403, detail="Refused a request from another site")
+    return user
+
+
+def current_user(user: User = Depends(signed_in_user)) -> User:
+    if user.status != "active":
+        raise HTTPException(403, detail="Your account is waiting for the admin's approval")
+    return user
+
+
+def require_admin(user: User = Depends(current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(403, detail="Only the admin can do that")
+    return user
+
+
+# Every data route needs an approved user. The page itself and /auth/* don't.
+data = APIRouter(dependencies=[Depends(current_user)])
+ADMIN_ONLY = [Depends(require_admin)]
+
+
 def _ctx(conn: Connection, settings: Settings) -> A.Context:
     return A.load_context(conn, settings)
 
 
-def _team(ctx: A.Context, team_id: str, settings: Settings) -> str:
+def _team(ctx: A.Context, team_id: str, user: User) -> str:
     if team_id == "me":
-        if not settings.my_team_id:
+        if not user.team_id:
             raise HTTPException(400, detail={
-                "error": "Set FANTRAX_MY_TEAM_ID in .env to use 'me'",
+                "error": "No team is linked to your account yet; ask the admin" if get_settings().google_client_id
+                         else "Set FANTRAX_MY_TEAM_ID in .env to use 'me'",
                 "teams": [{"id": t, "name": n} for t, n in ctx.teams.items()],
             })
-        team_id = settings.my_team_id
+        team_id = user.team_id
     if team_id not in ctx.teams:
         raise HTTPException(404, detail="Unknown team id {}".format(team_id))
     return team_id
@@ -126,11 +189,11 @@ LINEUP = Query("best", description="best = daily best lineups from non-minors/IR
 # --------------------------------------------------------------------------- sync & raw data
 
 
-@app.get("/health")
-def health(conn: Connection = Depends(get_conn)):
+@data.get("/health")
+def health(conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     s = get_settings()
     last = row(conn, "SELECT resource, finished_at, status FROM sync_log ORDER BY id DESC LIMIT 1")
-    return {"ok": True, "league_id": s.league_id, "my_team_id": s.my_team_id, "database": s.database_label,
+    return {"ok": True, "league_id": s.league_id, "my_team_id": user.team_id, "database": s.database_label,
             "last_sync": last}
 
 
@@ -145,10 +208,12 @@ def auto_publish() -> None:
         conn.close()
 
 
-@app.post("/sync")
+@data.post("/sync")
 def sync(background: BackgroundTasks,
          resources: Optional[List[str]] = Query(None, description="Subset of: " + ", ".join(RESOURCES)),
-         conn: Connection = Depends(get_conn)):
+         conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    if not user.is_admin and not (resources and set(resources) <= auth.GM_SYNC_RESOURCES):
+        raise HTTPException(403, detail="Only the admin can run a full sync")
     try:
         results = sync_all(conn, get_settings(), resources)
     except ValueError as exc:
@@ -157,7 +222,7 @@ def sync(background: BackgroundTasks,
     return {"ok": all(r["status"] == "ok" for r in results), "results": results}
 
 
-@app.get("/publish")
+@data.get("/publish", dependencies=ADMIN_ONLY)
 def publish_status(conn: Connection = Depends(get_conn)):
     """Whether sheet publishing is set up, and when each app-owned team's sheet was last written."""
     out = P.publish_status(conn, get_settings())
@@ -168,7 +233,7 @@ def publish_status(conn: Connection = Depends(get_conn)):
     return out
 
 
-@app.post("/publish")
+@data.post("/publish", dependencies=ADMIN_ONLY)
 def publish_now(force: bool = Query(False, description="Write even if nothing changed"),
                 conn: Connection = Depends(get_conn)):
     """Write app-owned teams' contracts to their Google Sheets now."""
@@ -176,7 +241,7 @@ def publish_now(force: bool = Query(False, description="Write even if nothing ch
     return _logged(conn, "publish", lambda: P.publish(conn, s, force=force))
 
 
-@app.get("/sync/log")
+@data.get("/sync/log")
 def sync_log(limit: int = 20, conn: Connection = Depends(get_conn)):
     out = rows(conn, "SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))
     for r in out:
@@ -184,7 +249,7 @@ def sync_log(limit: int = 20, conn: Connection = Depends(get_conn)):
     return out
 
 
-@app.get("/league")
+@data.get("/league")
 def league(conn: Connection = Depends(get_conn)):
     s = get_settings()
     lg = row(conn, "SELECT * FROM league WHERE id=?", (s.league_id,))
@@ -201,44 +266,44 @@ def league(conn: Connection = Depends(get_conn)):
     return lg
 
 
-@app.get("/categories")
+@data.get("/categories")
 def categories(conn: Connection = Depends(get_conn)):
     return rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better FROM scoring_categories "
                       "WHERE league_id=? ORDER BY sort_order", (get_settings().league_id,))
 
 
-@app.get("/teams")
-def teams(conn: Connection = Depends(get_conn)):
+@data.get("/teams")
+def teams(conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     s = get_settings()
     return rows(conn, """
         SELECT t.id, t.name, t.short_name, s.rank, s.points AS record, s.games_back, s.win_pct,
                CASE WHEN t.id = ? THEN 1 ELSE 0 END AS is_me
         FROM teams t LEFT JOIN standings s ON s.team_id = t.id AND s.league_id = t.league_id
-        WHERE t.league_id = ? ORDER BY s.rank NULLS FIRST, t.name""", (s.my_team_id, s.league_id))
+        WHERE t.league_id = ? ORDER BY s.rank NULLS FIRST, t.name""", (user.team_id, s.league_id))
 
 
-@app.get("/standings")
-def standings(conn: Connection = Depends(get_conn)):
-    return teams(conn)
+@data.get("/standings")
+def standings(conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    return teams(conn, user)
 
 
-@app.get("/teams/{team_id}/roster")
-def team_roster(team_id: str, conn: Connection = Depends(get_conn)):
+@data.get("/teams/{team_id}/roster")
+def team_roster(team_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     s = get_settings()
     ctx = _ctx(conn, s)
-    team_id = _team(ctx, team_id, s)
+    team_id = _team(ctx, team_id, user)
     players = sorted(ctx.roster(team_id), key=lambda p: (p.roster_status or "", p.group, p.name))
     return {"team_id": team_id, "team_name": ctx.teams[team_id], "roster_period": ctx.roster_period,
             "players": [A.player_summary(p, ctx) for p in players]}
 
 
-@app.get("/teams/{team_id}/contracts")
-def team_contracts(team_id: str, conn: Connection = Depends(get_conn)):
+@data.get("/teams/{team_id}/contracts")
+def team_contracts(team_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Contracts from the team's salary sheet, how each line matched a Fantrax player, and the
     cap summary. Empty when no sheet is configured for the team (see salary_sheets.json)."""
     s = get_settings()
     ctx = _ctx(conn, s)
-    team_id = _team(ctx, team_id, s)
+    team_id = _team(ctx, team_id, user)
     contracts = rows(conn, """
         SELECT c.sheet_name, c.section, c.salary, c.years_remaining, c.salaries, c.player_id, c.match_method,
                p.name AS player_name, ri.team_id AS current_team_id, ri.status AS roster_status
@@ -254,7 +319,7 @@ def team_contracts(team_id: str, conn: Connection = Depends(get_conn)):
             "contracts": contracts}
 
 
-@app.get("/matchups")
+@data.get("/matchups")
 def matchups(period: Optional[int] = None, conn: Connection = Depends(get_conn)):
     s = get_settings()
     period = period or current_period(conn, s.league_id, "scoring")
@@ -286,17 +351,17 @@ def matchups(period: Optional[int] = None, conn: Connection = Depends(get_conn))
     return {"period": period, "matchups": out}
 
 
-@app.get("/players")
+@data.get("/players")
 def players(status: str = Query("all", description="all, fa, or rostered"),
             position: Optional[str] = Query(None, description="F, D, G, C, LW or RW"),
             team_id: Optional[str] = None, q: Optional[str] = Query(None, description="Name search"),
             sort: str = Query("value", description="value or adp"),
             min_games: int = 0, limit: int = 50, offset: int = 0,
-            conn: Connection = Depends(get_conn)):
+            conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     s = get_settings()
     ctx = _ctx(conn, s)
     if team_id:
-        team_id = _team(ctx, team_id, s)
+        team_id = _team(ctx, team_id, user)
     generic = A._split({c.short_name: c.weight for c in ctx.categories}, ctx)
     needle = (q or "").lower()
 
@@ -323,7 +388,7 @@ def players(status: str = Query("all", description="all, fa, or rostered"),
     return {"total": len(pool), "players": [A.player_summary(p, ctx) for p in pool[offset:offset + limit]]}
 
 
-@app.get("/players/{fantrax_id}")
+@data.get("/players/{fantrax_id}")
 def player(fantrax_id: str, conn: Connection = Depends(get_conn)):
     ctx = _ctx(conn, get_settings())
     p = ctx.players.get(fantrax_id)
@@ -352,21 +417,36 @@ def _player_or_404(ctx: A.Context, fantrax_id: str) -> A.Player:
     return p
 
 
-@app.get("/players/{fantrax_id}/contract")
-def player_contract(fantrax_id: str, conn: Connection = Depends(get_conn)):
+def _editable_player(ctx: A.Context, fantrax_id: str, user: User) -> A.Player:
+    """The player, if this user may change his contract or birth date (403 otherwise)."""
+    p = _player_or_404(ctx, fantrax_id)
+    if not auth.can_edit_player(user, p.team_id):
+        raise HTTPException(403, detail="You can only edit players on your own team")
+    return p
+
+
+def _contract_detail(conn: Connection, ctx: A.Context, fantrax_id: str, user: User) -> Dict:
+    out = C.contract_detail(conn, ctx, fantrax_id)
+    out["can_edit"] = auth.can_edit_player(user, ctx.players[fantrax_id].team_id)
+    return out
+
+
+@data.get("/players/{fantrax_id}/contract")
+def player_contract(fantrax_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """The player's contract as the app uses it, what his salary sheet says, and any edit made here."""
     ctx = _ctx(conn, get_settings())
     _player_or_404(ctx, fantrax_id)
-    return C.contract_detail(conn, ctx, fantrax_id)
+    return _contract_detail(conn, ctx, fantrax_id, user)
 
 
-@app.put("/players/{fantrax_id}/contract")
+@data.put("/players/{fantrax_id}/contract")
 def edit_player_contract(fantrax_id: str, edit: ContractEdit, background: BackgroundTasks,
-                         conn: Connection = Depends(get_conn)):
+                         conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Set how many years are left on a contract (and its type). It overrides the salary sheet, and
-    survives syncs, until reverted. The salary stays as it is unless one is given."""
+    survives syncs, until reverted. The salary stays as it is unless one is given. A GM can edit
+    players on their own team; the admin, anyone."""
     s = get_settings()
-    p = _player_or_404(_ctx(conn, s), fantrax_id)
+    p = _editable_player(_ctx(conn, s), fantrax_id, user)
     salary = edit.salary
     if salary is None:
         salary = C.ELC_SALARY if edit.contract_type == "ELC" else p.salary
@@ -377,20 +457,20 @@ def edit_player_contract(fantrax_id: str, edit: ContractEdit, background: Backgr
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
     background.add_task(auto_publish)
-    return C.contract_detail(conn, _ctx(conn, s), fantrax_id)
+    return _contract_detail(conn, _ctx(conn, s), fantrax_id, user)
 
 
 class BirthDateEdit(BaseModel):
     birth_date: Optional[str] = None    # YYYY-MM-DD; null drops a manual date so syncs can fill it again
 
 
-@app.put("/players/{fantrax_id}/birth-date")
+@data.put("/players/{fantrax_id}/birth-date")
 def set_birth_date(fantrax_id: str, edit: BirthDateEdit, background: BackgroundTasks,
-                   conn: Connection = Depends(get_conn)):
+                   conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Set a player's birth date by hand (it decides RFA vs UFA). Syncs never overwrite it."""
     from datetime import date
     s = get_settings()
-    _player_or_404(_ctx(conn, s), fantrax_id)
+    _editable_player(_ctx(conn, s), fantrax_id, user)
     if edit.birth_date:
         try:
             born = date.fromisoformat(edit.birth_date)
@@ -404,40 +484,42 @@ def set_birth_date(fantrax_id: str, edit: BirthDateEdit, background: BackgroundT
         conn.execute("UPDATE players SET birth_date=NULL, birth_date_source=NULL WHERE fantrax_id=?", (fantrax_id,))
     conn.commit()
     background.add_task(auto_publish)
-    return C.contract_detail(conn, _ctx(conn, s), fantrax_id)
+    return _contract_detail(conn, _ctx(conn, s), fantrax_id, user)
 
 
-@app.delete("/players/{fantrax_id}/contract")
-def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: Connection = Depends(get_conn)):
+@data.delete("/players/{fantrax_id}/contract")
+def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: Connection = Depends(get_conn),
+                           user: User = Depends(current_user)):
     """Drop the app's contract for this player (for a sheet-read team, the sheet applies again)."""
     s = get_settings()
-    _player_or_404(_ctx(conn, s), fantrax_id)
+    _editable_player(_ctx(conn, s), fantrax_id, user)
     C.delete_override(conn, s.league_id, fantrax_id)
     background.add_task(auto_publish)
-    return C.contract_detail(conn, _ctx(conn, s), fantrax_id)
+    return _contract_detail(conn, _ctx(conn, s), fantrax_id, user)
 
 
 # --------------------------------------------------------------------------- analysis
 
 
-@app.get("/analysis/overview")
+@data.get("/analysis/overview")
 def overview(lineup: str = LINEUP, conn: Connection = Depends(get_conn)):
     """Every team's projected category ranks (1 = best) and actual H2H category records."""
     ctx = _ctx(conn, get_settings())
     return {"teams": A.league_overview(conn, ctx, lineup)}
 
 
-@app.get("/analysis/teams/{team_id}/profile")
+@data.get("/analysis/teams/{team_id}/profile")
 def profile(team_id: str, strategy: str = STRATEGY, spread: float = SPREAD, punt: Optional[str] = PUNT,
-            weights: Optional[str] = WEIGHTS, lineup: str = LINEUP, conn: Connection = Depends(get_conn)):
+            weights: Optional[str] = WEIGHTS, lineup: str = LINEUP, conn: Connection = Depends(get_conn),
+            user: User = Depends(current_user)):
     """Category strengths/weaknesses (projected and actual) plus your roster valued by your needs."""
     s = get_settings()
     ctx = _ctx(conn, s)
-    team_id = _team(ctx, team_id, s)
+    team_id = _team(ctx, team_id, user)
     return A.team_profile(conn, ctx, team_id, **_need_kwargs(ctx, strategy, spread, punt, weights, lineup))
 
 
-@app.get("/analysis/teams/{team_id}/targets")
+@data.get("/analysis/teams/{team_id}/targets", dependencies=ADMIN_ONLY)
 def targets(team_id: str,
             source: Optional[str] = Query(None, description="fa (waivers/free agents) or trade. "
                                                              "Defaults to trade when from_team/offer is set, else fa"),
@@ -455,11 +537,11 @@ def targets(team_id: str,
             limit: int = 25, min_games: int = Query(5, description="Min NHL games (this + last season)"),
             include_minors: bool = False, strategy: str = STRATEGY, spread: float = SPREAD,
             punt: Optional[str] = PUNT, weights: Optional[str] = WEIGHTS, lineup: str = LINEUP,
-            conn: Connection = Depends(get_conn)):
+            conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Players ranked by how much they help *your* category needs."""
     s = get_settings()
     ctx = _ctx(conn, s)
-    team_id = _team(ctx, team_id, s)
+    team_id = _team(ctx, team_id, user)
     if from_team is not None:
         resolved = ctx.resolve_team(from_team)
         if resolved is None:
@@ -490,14 +572,14 @@ def targets(team_id: str,
         raise HTTPException(400, detail=str(exc))
 
 
-@app.get("/analysis/teams/{team_id}/trade-partners")
+@data.get("/analysis/teams/{team_id}/trade-partners", dependencies=ADMIN_ONLY)
 def trade_partners(team_id: str, per_team: int = 3, strategy: str = STRATEGY, spread: float = SPREAD,
                    punt: Optional[str] = PUNT, weights: Optional[str] = WEIGHTS, lineup: str = LINEUP,
-                   conn: Connection = Depends(get_conn)):
+                   conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Teams whose strengths cover your weaknesses (and vice versa), with candidate players each way."""
     s = get_settings()
     ctx = _ctx(conn, s)
-    team_id = _team(ctx, team_id, s)
+    team_id = _team(ctx, team_id, user)
     return A.trade_partners(conn, ctx, team_id, per_team=per_team,
                             **_need_kwargs(ctx, strategy, spread, punt, weights, lineup))
 
@@ -511,15 +593,15 @@ class TradeRequest(BaseModel):
     spread: float = 1.5
 
 
-@app.post("/analysis/trade")
-def trade(req: TradeRequest, conn: Connection = Depends(get_conn)):
+@data.post("/analysis/trade", dependencies=ADMIN_ONLY)
+def trade(req: TradeRequest, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Cost/benefit of a trade for both teams: change in expected category wins per week, per-category
     before/after, games and starts volume, roster-limit drops and the market value moving each way.
     Leave other_team_id empty for a waiver move: `give` players are released and `get` must be
     free agents (or leave `get` empty to see what losing the `give` players costs you)."""
     s = get_settings()
     ctx = _ctx(conn, s)
-    team_id = _team(ctx, req.team_id, s)
+    team_id = _team(ctx, req.team_id, user)
     other = None
     if req.other_team_id:
         other = ctx.resolve_team(req.other_team_id)
@@ -531,3 +613,133 @@ def trade(req: TradeRequest, conn: Connection = Depends(get_conn)):
         return A.evaluate_trade(ctx, team_id, req.give, other, req.get, lineup=req.lineup, spread=req.spread)
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
+
+
+# --------------------------------------------------------------------------- logins
+
+
+class GoogleSignIn(BaseModel):
+    credential: str                     # the ID token Google's sign-in button hands the page
+
+
+def _secure_cookie(request: Request) -> bool:
+    return get_settings().on_vercel or request.url.scheme == "https"
+
+
+@app.get("/auth/config")
+def auth_config():
+    """What the sign-in page needs: whether logins are on, and the (public) Google client id."""
+    s = get_settings()
+    return {"enabled": bool(s.google_client_id), "google_client_id": s.google_client_id}
+
+
+@app.get("/auth/me")
+def auth_me(user: User = Depends(signed_in_user)):
+    """Who's signed in, including someone still waiting for approval. 401 when nobody is."""
+    return user.public(auth=bool(get_settings().google_client_id))
+
+
+@app.post("/auth/google")
+def auth_google(sign_in: GoogleSignIn, request: Request, response: Response, conn: Connection = Depends(get_conn)):
+    """Sign in with a Google ID token. Someone new is recorded as waiting for the admin's approval."""
+    s = get_settings()
+    if not (s.google_client_id and s.session_secret):
+        raise HTTPException(503, detail=NO_LOGINS)
+    if not _same_site(request):
+        raise HTTPException(403, detail="Refused a request from another site")
+    try:
+        claims = auth.verify_google_credential(sign_in.credential, s.google_client_id)
+    except Exception:  # noqa: BLE001 - a bad, expired or foreign token all get the same answer
+        raise HTTPException(401, detail="Google sign-in didn't work. Try again.")
+    user = auth.record_login(conn, s, claims)
+    response.set_cookie(auth.COOKIE, auth.make_session(user.email, s.session_secret),
+                        max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                        secure=_secure_cookie(request))
+    return user.public()
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, response: Response):
+    response.delete_cookie(auth.COOKIE, httponly=True, samesite="lax", secure=_secure_cookie(request))
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- admin: who has access
+
+
+class UserAccess(BaseModel):
+    team_id: Optional[str] = None       # the GM's team; None unlinks it
+    role: str = "gm"                    # gm / admin
+    status: str = "active"              # pending / active
+
+
+class NewUser(UserAccess):
+    email: str
+
+
+def _check_access(conn: Connection, access: UserAccess) -> None:
+    if access.role not in auth.ROLES:
+        raise HTTPException(400, detail="role must be one of: " + ", ".join(auth.ROLES))
+    if access.status not in auth.STATUSES:
+        raise HTTPException(400, detail="status must be one of: " + ", ".join(auth.STATUSES))
+    if access.team_id is not None and not row(conn, "SELECT id FROM teams WHERE id=? AND league_id=?",
+                                              (access.team_id, get_settings().league_id)):
+        raise HTTPException(404, detail="Unknown team id {}".format(access.team_id))
+
+
+@data.get("/admin/users", dependencies=ADMIN_ONLY)
+def admin_users(conn: Connection = Depends(get_conn)):
+    """Everyone who has signed in or been added: requests waiting for approval first."""
+    s = get_settings()
+    names = {r["id"]: r["name"] for r in rows(conn, "SELECT id, name FROM teams WHERE league_id=?", (s.league_id,))}
+    users = rows(conn, "SELECT * FROM users ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, created_at")
+    for u in users:
+        u["always_admin"] = u["email"] in s.admin_emails
+        if u["always_admin"] and not u["team_id"]:
+            u["team_id"] = s.my_team_id       # what auth.load_user falls back to
+        u["team_name"] = names.get(u["team_id"])
+    return {"users": users, "admin_emails": list(s.admin_emails)}
+
+
+@data.post("/admin/users", dependencies=ADMIN_ONLY)
+def admin_add_user(new: NewUser, conn: Connection = Depends(get_conn)):
+    """Give someone access before they sign in, or change it if they're already listed."""
+    email = new.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(400, detail="That doesn't look like an email address")
+    _check_access(conn, new)
+    with transaction(conn):
+        if row(conn, "SELECT email FROM users WHERE email=?", (email,)):
+            conn.execute("UPDATE users SET team_id=?, role=?, status=? WHERE email=?",
+                         (new.team_id, new.role, new.status, email))
+        else:
+            conn.execute("INSERT INTO users (email, team_id, role, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                         (email, new.team_id, new.role, new.status, now_iso()))
+    return admin_users(conn)
+
+
+@data.put("/admin/users/{email}", dependencies=ADMIN_ONLY)
+def admin_set_access(email: str, access: UserAccess, conn: Connection = Depends(get_conn)):
+    """Approve a request, link someone's team, or change their role."""
+    email = email.strip().lower()
+    if not row(conn, "SELECT email FROM users WHERE email=?", (email,)):
+        raise HTTPException(404, detail="No user {}".format(email))
+    _check_access(conn, access)
+    with transaction(conn):
+        conn.execute("UPDATE users SET team_id=?, role=?, status=? WHERE email=?",
+                     (access.team_id, access.role, access.status, email))
+    return admin_users(conn)
+
+
+@data.delete("/admin/users/{email}", dependencies=ADMIN_ONLY)
+def admin_remove_user(email: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Take away someone's access. If they sign in again, they're a new request."""
+    email = email.strip().lower()
+    if email == user.email:
+        raise HTTPException(400, detail="You can't remove yourself")
+    with transaction(conn):
+        conn.execute("DELETE FROM users WHERE email=?", (email,))
+    return admin_users(conn)
+
+
+app.include_router(data)

@@ -356,6 +356,23 @@ input[type="search"] { width: 100%; }
 .tooltip .tt-label { color: var(--ink-2); }
 .tooltip .tt-row { display: flex; justify-content: space-between; gap: 14px; }
 
+/* ---------------------------------------------------------------- sign-in, account, admin */
+.gate { max-width: 440px; margin: 56px auto; padding: 28px 24px; text-align: center; }
+.gate h2 { margin: 0 0 6px; font-size: 20px; }
+.gate .card-sub { font-size: 13px; line-height: 1.45; margin: 0 auto 20px; max-width: 340px; }
+.google-button { display: flex; justify-content: center; min-height: 44px; }
+.gate-msg { color: var(--bad); font-size: 13px; margin: 12px 0 0; }
+.gate-msg:empty { display: none; }
+.gate-foot { margin: 20px 0 0; font-size: 12px; }
+.gate-foot a, .legal a { color: var(--ink-2); }
+.legal { max-width: 680px; margin: 24px auto; padding: 24px; line-height: 1.55; }
+.legal h1 { margin: 0; font-size: 24px; }
+.legal h2 { margin: 22px 0 4px; font-size: 15px; }
+.legal p { margin: 6px 0; color: var(--ink-2); }
+.account { display: flex; align-items: center; gap: 8px; }
+.account-name { font-size: 13px; color: var(--ink-2); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 980px) {
   .grid-2, .trade-grid { grid-template-columns: minmax(0, 1fr); }
@@ -372,6 +389,9 @@ input[type="search"] { width: 100%; }
   .topbar-actions { flex-wrap: wrap; }
   .topbar-actions .field { flex: 1 1 100%; }
   .topbar-actions .btn { flex: 1; }
+  .account { flex: 1 1 100%; justify-content: space-between; }
+  .account .btn { flex: 0 0 auto; }
+  .gate { margin: 24px auto; }
   .brand-league { max-width: 220px; }
   .card { padding: 14px 12px; }
   .kpis { gap: 8px; }

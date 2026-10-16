@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +41,12 @@ class Settings:
     database_url: Optional[str] = None
     # salary_sheets.json's contents, for a deployment that has no such file.
     salary_sheets_json: Optional[str] = None
+    # Sign in with Google (see README, "Logins"). Without a client id there are no logins and
+    # every request acts as the admin, which is refused on Vercel.
+    google_client_id: Optional[str] = None
+    session_secret: Optional[str] = None        # signs the login cookie
+    admin_emails: Tuple[str, ...] = ()          # always admins, so the admin can't be locked out
+    on_vercel: bool = False                     # Vercel sets VERCEL=1 in every deployment
 
     @property
     def database(self) -> Union[Path, str]:
@@ -70,4 +76,8 @@ def get_settings() -> Settings:
         sheet_publish_token=os.environ.get("CFL_SHEET_PUBLISH_TOKEN") or None,
         database_url=os.environ.get("DATABASE_URL") or None,
         salary_sheets_json=os.environ.get("CFL_SALARY_SHEETS_JSON") or None,
+        google_client_id=os.environ.get("GOOGLE_CLIENT_ID") or None,
+        session_secret=os.environ.get("CFL_SESSION_SECRET") or None,
+        admin_emails=tuple(e.strip().lower() for e in os.environ.get("CFL_ADMIN_EMAILS", "").split(",") if e.strip()),
+        on_vercel=bool(os.environ.get("VERCEL")),
     )
