@@ -1,11 +1,10 @@
-"""Pull data from Fantrax + NHL.com into the local SQLite store."""
+"""Pull data from Fantrax + NHL.com into the store."""
 
 import csv
 import difflib
 import io
 import json
 import re
-import sqlite3
 import traceback
 import unicodedata
 from collections import defaultdict
@@ -14,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .clients import FantraxClient, NHLStatsClient, fetch_sheet_csv
 from .config import Settings
-from .db import row, rows, transaction, upsert
+from .db import Connection, row, rows, transaction, upsert
 
 LOWER_IS_BETTER = {"GAA", "GA", "L"}
 TEAM_PSEUDO_POSITIONS = {"Tm", "TmS", "TmG"}
@@ -50,7 +49,7 @@ def split_fantrax_name(name: str):
     return " ".join(parts[:-1]), (parts[-1] if parts else name), name
 
 
-def current_period(conn: sqlite3.Connection, league_id: str, kind: str, at: Optional[datetime] = None) -> Optional[int]:
+def current_period(conn: Connection, league_id: str, kind: str, at: Optional[datetime] = None) -> Optional[int]:
     """Period number containing `at` (default now); clamps to first/last period outside the season."""
     at = at or datetime.now(timezone.utc)
     periods = rows(conn, "SELECT number, start_date, end_date FROM periods WHERE league_id=? AND kind=? ORDER BY number",
@@ -68,7 +67,7 @@ def current_period(conn: sqlite3.Connection, league_id: str, kind: str, at: Opti
 # --------------------------------------------------------------------------- league
 
 
-def sync_league(conn: sqlite3.Connection, fx: FantraxClient) -> Dict[str, Any]:
+def sync_league(conn: Connection, fx: FantraxClient) -> Dict[str, Any]:
     info = fx.league_info()
     league_id = fx.league_id
     scoring = info.get("scoringSystem", {})
@@ -139,7 +138,7 @@ def sync_league(conn: sqlite3.Connection, fx: FantraxClient) -> Dict[str, Any]:
             "matchups": len(matchups), "player_pool": len(pool)}
 
 
-def sync_players(conn: sqlite3.Connection, fx: FantraxClient) -> Dict[str, Any]:
+def sync_players(conn: Connection, fx: FantraxClient) -> Dict[str, Any]:
     ids = fx.player_ids("NHL")
     adp = {a["id"]: a.get("ADP") for a in fx.adp("NHL")}
     records = []
@@ -164,7 +163,7 @@ def sync_players(conn: sqlite3.Connection, fx: FantraxClient) -> Dict[str, Any]:
     return {"players": len(records), "with_adp": sum(1 for r in records if r["adp"] is not None)}
 
 
-def sync_rosters(conn: sqlite3.Connection, fx: FantraxClient, period: Optional[int] = None) -> Dict[str, Any]:
+def sync_rosters(conn: Connection, fx: FantraxClient, period: Optional[int] = None) -> Dict[str, Any]:
     data = fx.team_rosters(period)
     period = data["period"]
     items = []
@@ -180,7 +179,7 @@ def sync_rosters(conn: sqlite3.Connection, fx: FantraxClient, period: Optional[i
     return {"period": period, "roster_items": len(items)}
 
 
-def sync_standings(conn: sqlite3.Connection, fx: FantraxClient) -> Dict[str, Any]:
+def sync_standings(conn: Connection, fx: FantraxClient) -> Dict[str, Any]:
     data = fx.standings()
     records = [{"league_id": fx.league_id, "team_id": s["teamId"], "rank": s.get("rank"), "points": s.get("points"),
                 "games_back": s.get("gamesBack"), "win_pct": s.get("winPercentage")} for s in data]
@@ -190,7 +189,7 @@ def sync_standings(conn: sqlite3.Connection, fx: FantraxClient) -> Dict[str, Any
     return {"teams": len(records)}
 
 
-def _store_matchup_scores(conn: sqlite3.Connection, league_id: str, data: Dict[str, Any]) -> int:
+def _store_matchup_scores(conn: Connection, league_id: str, data: Dict[str, Any]) -> int:
     period = data["period"]
     results, cats = [], []
     for m in data.get("matchups", []):
@@ -215,7 +214,7 @@ def _store_matchup_scores(conn: sqlite3.Connection, league_id: str, data: Dict[s
     return len(results)
 
 
-def sync_matchups(conn: sqlite3.Connection, fx: FantraxClient, refetch_all: bool = False) -> Dict[str, Any]:
+def sync_matchups(conn: Connection, fx: FantraxClient, refetch_all: bool = False) -> Dict[str, Any]:
     """Fetch H2H matchup scores for every scoring period up to the current one.
 
     Completed periods don't change, so they're skipped once stored unless refetch_all.
@@ -263,7 +262,7 @@ def _goalie_record(g: Dict[str, Any], season_id: int, ts: str) -> Dict[str, Any]
     }
 
 
-def stat_seasons(conn: sqlite3.Connection, league_id: str) -> List[int]:
+def stat_seasons(conn: Connection, league_id: str) -> List[int]:
     """Current NHL season for the league plus the previous one (used as the prior)."""
     lg = row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,))
     if not lg or not lg["season_year"]:
@@ -272,7 +271,7 @@ def stat_seasons(conn: sqlite3.Connection, league_id: str) -> List[int]:
     return [season_id_for(year), season_id_for(year - 1)]
 
 
-def sync_stats(conn: sqlite3.Connection, nhl: NHLStatsClient, seasons: Sequence[int]) -> Dict[str, Any]:
+def sync_stats(conn: Connection, nhl: NHLStatsClient, seasons: Sequence[int]) -> Dict[str, Any]:
     out = {}
     ts = now_iso()
     for season in seasons:
@@ -287,7 +286,7 @@ def sync_stats(conn: sqlite3.Connection, nhl: NHLStatsClient, seasons: Sequence[
     return out
 
 
-def sync_schedule(conn: sqlite3.Connection, nhl: NHLStatsClient, league_id: str) -> Dict[str, Any]:
+def sync_schedule(conn: Connection, nhl: NHLStatsClient, league_id: str) -> Dict[str, Any]:
     """NHL games between the league's start and end dates (drives daily-lineup projections)."""
     lg = row(conn, "SELECT start_date, end_date FROM league WHERE id=?", (league_id,))
     if not lg or not lg["start_date"] or not lg["end_date"]:
@@ -326,7 +325,7 @@ def _pos_group(pos: Optional[str]) -> str:
     return "F"
 
 
-def match_players(conn: sqlite3.Connection, league_id: str) -> Dict[str, Any]:
+def match_players(conn: Connection, league_id: str) -> Dict[str, Any]:
     """Link Fantrax players to NHL.com player ids by name, then team / position to break ties."""
     nhl: Dict[int, Dict[str, Any]] = {}
     for table, is_goalie in (("skater_stats", False), ("goalie_stats", True)):
@@ -446,7 +445,7 @@ def _search_nhl_id(nhl: NHLStatsClient, name: str, position: Optional[str], team
     return int(hits[0]["playerId"]) if len(hits) == 1 else None
 
 
-def sync_bios(conn: sqlite3.Connection, nhl: NHLStatsClient, league_id: str, lookup_limit: int = 400) -> Dict[str, Any]:
+def sync_bios(conn: Connection, nhl: NHLStatsClient, league_id: str, lookup_limit: int = 400) -> Dict[str, Any]:
     """Birth dates: one bios report per season, then a per-player lookup for rostered players still
     missing one (prospects without NHL games). Dates entered in the app ('manual') are never replaced."""
     found: Dict[int, str] = {}
@@ -643,13 +642,16 @@ def load_salary_sources(settings: Settings) -> Dict[str, Dict[str, Any]]:
     (it is published to instead; see publish.py).
     """
     path = settings.salary_sheets_path
-    if not path.exists():
+    if settings.salary_sheets_json:
+        data = json.loads(settings.salary_sheets_json)
+    elif path.exists():
+        data = json.loads(path.read_text())
+    else:
         return {}
-    data = json.loads(path.read_text())
     return {str(k): (v if isinstance(v, dict) else {"url": v}) for k, v in data.items() if not str(k).startswith("_")}
 
 
-def _resolve_team(conn: sqlite3.Connection, league_id: str, ref: str, my_team_id: Optional[str]) -> str:
+def _resolve_team(conn: Connection, league_id: str, ref: str, my_team_id: Optional[str]) -> str:
     if ref == "me" and my_team_id:
         return my_team_id
     teams = rows(conn, "SELECT id, name FROM teams WHERE league_id=?", (league_id,))
@@ -661,7 +663,7 @@ def _resolve_team(conn: sqlite3.Connection, league_id: str, ref: str, my_team_id
     return matches[0]
 
 
-def app_owned_teams(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Dict[str, Any]]:
+def app_owned_teams(conn: Connection, settings: Settings) -> Dict[str, Dict[str, Any]]:
     """{team_id: sheet spec} for teams whose contracts are managed in this app."""
     out = {}
     for ref, spec in load_salary_sources(settings).items():
@@ -674,7 +676,7 @@ def app_owned_teams(conn: sqlite3.Connection, settings: Settings) -> Dict[str, D
     return out
 
 
-def adopt_sheet_contracts(conn: sqlite3.Connection, league_id: str, team_id: str) -> Dict[str, Any]:
+def adopt_sheet_contracts(conn: Connection, league_id: str, team_id: str) -> Dict[str, Any]:
     """Move a team's sheet contracts into the app's own contract records (contract_overrides), once.
 
     Players who already have an app record keep it. Buyout rows stay in `contracts`, since they
@@ -695,7 +697,7 @@ def adopt_sheet_contracts(conn: sqlite3.Connection, league_id: str, team_id: str
             "unmatched_dropped": [r["sheet_name"] for r in sheet_rows if not r["player_id"]]}
 
 
-def sync_salaries(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
+def sync_salaries(conn: Connection, settings: Settings) -> Dict[str, Any]:
     """Read each configured team salary sheet into `contracts`. Teams owned by the app are skipped
     (their sheet contracts are adopted the first time)."""
     sources = load_salary_sources(settings)
@@ -755,10 +757,9 @@ def sync_salaries(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any
 # --------------------------------------------------------------------------- orchestration
 
 
-def _logged(conn: sqlite3.Connection, resource: str, fn: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-    cur = conn.execute("INSERT INTO sync_log (resource, started_at, status) VALUES (?, ?, 'running')",
-                       (resource, now_iso()))
-    log_id = cur.lastrowid
+def _logged(conn: Connection, resource: str, fn: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+    log_id = conn.execute("INSERT INTO sync_log (resource, started_at, status) VALUES (?, ?, 'running') RETURNING id",
+                          (resource, now_iso())).fetchall()[0][0]
     conn.commit()
     try:
         result = fn()
@@ -766,13 +767,14 @@ def _logged(conn: sqlite3.Connection, resource: str, fn: Callable[[], Dict[str, 
     except Exception as exc:  # noqa: BLE001 - recorded in sync_log; later steps still run
         status, detail = "error", {"error": repr(exc), "trace": traceback.format_exc(limit=3)}
         result = None
+        conn.rollback()  # Postgres refuses further statements in a transaction that failed
     conn.execute("UPDATE sync_log SET finished_at=?, status=?, detail=? WHERE id=?",
                  (now_iso(), status, json.dumps(detail), log_id))
     conn.commit()
     return {"resource": resource, "status": status, "detail": detail}
 
 
-def sync_all(conn: sqlite3.Connection, settings: Settings, resources: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+def sync_all(conn: Connection, settings: Settings, resources: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     wanted = list(resources or RESOURCES)
     unknown = set(wanted) - set(RESOURCES)
     if unknown:

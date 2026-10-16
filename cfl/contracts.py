@@ -1,11 +1,10 @@
 """Contract edits made in the app: local overrides layered over the team salary sheets."""
 
 import json
-import sqlite3
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import analysis as A
-from .db import row, rows, transaction, upsert
+from .db import Connection, row, rows, transaction, upsert
 from .sync import MAX_CONTRACT_YEARS, now_iso
 
 CONTRACT_TYPES = {
@@ -33,7 +32,7 @@ def validate(salaries: Sequence[Optional[float]], contract_type: str) -> List[fl
     return [float(s) for s in salaries]
 
 
-def save_override(conn: sqlite3.Connection, league_id: str, player_id: str, salaries: Sequence[Optional[float]],
+def save_override(conn: Connection, league_id: str, player_id: str, salaries: Sequence[Optional[float]],
                   contract_type: str = "STANDARD", note: Optional[str] = None) -> None:
     clean = validate(salaries, contract_type)
     with transaction(conn):
@@ -43,13 +42,13 @@ def save_override(conn: sqlite3.Connection, league_id: str, player_id: str, sala
         }], ["league_id", "player_id"])
 
 
-def delete_override(conn: sqlite3.Connection, league_id: str, player_id: str) -> bool:
+def delete_override(conn: Connection, league_id: str, player_id: str) -> bool:
     with transaction(conn):
         cur = conn.execute("DELETE FROM contract_overrides WHERE league_id=? AND player_id=?", (league_id, player_id))
     return cur.rowcount > 0
 
 
-def contract_detail(conn: sqlite3.Connection, ctx: A.Context, player_id: str) -> Dict[str, Any]:
+def contract_detail(conn: Connection, ctx: A.Context, player_id: str) -> Dict[str, Any]:
     """Effective contract plus what the sheet says and any app edit, for the player editor."""
     p = ctx.players[player_id]
     sheet_rows = rows(conn, "SELECT c.*, t.name AS team_name FROM contracts c JOIN teams t ON t.id = c.team_id "

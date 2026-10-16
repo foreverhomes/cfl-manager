@@ -4,7 +4,8 @@ A local data store and analysis API for the **Competelevel Fantasy League** on F
 dynasty league with an auction draft and H2H "each category" scoring.
 
 It pulls league structure, rosters, schedules and weekly category results from Fantrax, and player
-stats from NHL.com. Everything goes into a single SQLite file. The analysis layer projects every
+stats from NHL.com. Everything goes into a single SQLite file, or a Postgres database when the app is
+deployed (see [Deploying to Vercel](#deploying-to-vercel)). The analysis layer projects every
 player, profiles every team by category, and ranks waiver and trade targets by what *your* team needs.
 
 ## Setup
@@ -171,6 +172,38 @@ needed. Set it up once:
 "Anyone" means anyone with the URL can call the script, but every write must carry your token.
 The template is `cfl/sheet_publisher.gs`. After changing it, redeploy with a new version.
 
+## Deploying to Vercel
+
+The app runs on Vercel's free Hobby plan with a free Neon Postgres database. Vercel keeps no
+files between requests, so a deployed app can't use `data/league.db`. When `DATABASE_URL` is set,
+the app and the CLI use that Postgres database instead. Nothing else changes.
+
+1. **Create the project.** In Vercel, choose **Add New > Project** and import this repository. No
+   settings are needed: Vercel loads the app from `app.py`, installs `requirements.txt` and uses
+   Python 3.12 (from `.python-version`). The site won't work until it has a database.
+2. **Add the database.** In the project's **Storage** tab, create a **Neon** database on the free
+   plan, in AWS `us-east-1` (next to Vercel's default region, Washington, D.C.). Connecting it to
+   the project adds `DATABASE_URL`.
+3. **Copy your data.** Put the same `DATABASE_URL` in your local `.env` (copy it from the
+   project's **Environment Variables**), then run `python -m cfl import-sqlite`. It copies
+   everything in `data/league.db`, contract edits and hand-entered birth dates included. It won't
+   overwrite a database that already has data unless you add `--replace`.
+4. **Set the other variables** under **Settings > Environment Variables**, then redeploy:
+   - `FANTRAX_MY_TEAM_ID`, and `FANTRAX_LEAGUE_ID` if it isn't the default.
+   - `CFL_SALARY_SHEETS_JSON`: the contents of `salary_sheets.json`, which isn't in the repository.
+   - `CFL_SHEET_PUBLISH_URL` and `CFL_SHEET_PUBLISH_TOKEN`, if you publish to your sheet.
+5. **Lock it down.** The app has no login. Anyone who can open it can sync, edit contracts and
+   publish. Under **Settings > Deployment Protection**, turn on **Vercel Authentication** for
+   **All Deployments** (free on Hobby), and only your Vercel account can open the site. A
+   **Shareable Link** lets someone else in, with the same full access.
+
+With `DATABASE_URL` in `.env`, local commands (`sync`, `serve`, `watch`, ...) read and write the
+Neon database too, so the site and your terminal agree. Remove it to go back to `data/league.db`.
+
+Free-plan limits: Vercel Hobby includes 4 CPU-hours of function time a month, and a request can
+run for 5 minutes (a full sync takes about 10 seconds). Neon's free plan sleeps the database after
+5 idle minutes, so the first request after a break takes a moment longer.
+
 ## API
 
 Interactive docs are at `/docs`. Anywhere a `team_id` goes, you can use `me` (it reads
@@ -230,16 +263,20 @@ Common analysis parameters:
 ```
 cfl/
   clients.py    Fantrax + NHL.com HTTP clients
-  db.py         SQLite schema + helpers
+  db.py         schema + helpers, for SQLite or Postgres (DATABASE_URL)
   sync.py       ingest + Fantrax↔NHL id matching
   analysis.py   projections, z-scores, team profiles, targets, trade partners
   api.py        FastAPI app (also serves the web app)
   web/          dashboard + trade builder (HTML/CSS/JS, no build)
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
-  __main__.py   CLI (sync / serve / publish / teams / profile / targets / watch)
+  __main__.py   CLI (sync / import-sqlite / serve / publish / teams / profile / targets / watch)
+app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)
 data/           league.db (git-ignored)
 ```
+
+`pytest` runs the tests on SQLite. To run them on Postgres, set `CFL_TEST_DATABASE_URL` to a
+scratch database. It's wiped before every test.
 
 CLI shortcuts for quick looks without the server:
 

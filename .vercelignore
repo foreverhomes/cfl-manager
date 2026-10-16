@@ -1,0 +1,12 @@
+# Kept out of `vercel deploy` uploads. Git deploys only see committed files anyway.
+.env
+.env.*
+!.env.example
+data/
+salary_sheets.json
+.venv/
+.claude/
+tests/
+__pycache__/
+*.pyc
+.pytest_cache/
