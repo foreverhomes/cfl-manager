@@ -2,3 +2,5 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 requests>=2.31
 psycopg[binary]>=3.2
+google-auth>=2.22
+itsdangerous>=2.1

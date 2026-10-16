@@ -225,6 +225,17 @@ CREATE TABLE IF NOT EXISTS nhl_games (
 );
 CREATE INDEX IF NOT EXISTS idx_nhl_games_date ON nhl_games(game_date);
 
+-- People who can sign in with Google. CFL_ADMIN_EMAILS are admins whether or not they're listed.
+CREATE TABLE IF NOT EXISTS users (
+    email           TEXT PRIMARY KEY,   -- Google account email, lowercased
+    name            TEXT,
+    team_id         TEXT,               -- the GM's team; NULL until the admin links one
+    role            TEXT NOT NULL DEFAULT 'gm',         -- gm / admin
+    status          TEXT NOT NULL DEFAULT 'pending',    -- pending (asked to join) / active
+    created_at      TEXT NOT NULL,
+    last_login_at   TEXT
+);
+
 -- Small app-level state (e.g. what was last published to each team's sheet).
 CREATE TABLE IF NOT EXISTS app_state (
     key             TEXT PRIMARY KEY,
