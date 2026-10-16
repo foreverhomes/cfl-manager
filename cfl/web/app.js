@@ -449,13 +449,17 @@ function yearsTile(cap) {
         : `${-over} left in the bank`));
 }
 
-function capRow(label, committed, cap, note) {
+// `holds`: RFA placeholders drawn as an unfilled, dotted segment after the committed fill.
+function capRow(label, committed, cap, note, holds = 0) {
   const over = committed > cap;
   const pct = Math.min(committed / cap, 1) * 100;
+  const holdPct = Math.min((holds / cap) * 100, 100 - pct);
   const row = h("div", { class: "cap-row", tabindex: "0" },
     h("span", { class: "cap-season" }, label),
-    h("div", { class: "meter", role: "img", "aria-label": `${label}: ${fmtMoney(committed)} of ${fmtMoney(cap)}` },
-      h("div", { class: "meter-fill" + (over ? " over" : ""), style: { width: pct + "%" } })),
+    h("div", { class: "meter", role: "img", "aria-label": `${label}: ${fmtMoney(committed)} of ${fmtMoney(cap)}`
+        + (holds ? `, plus ${fmtMoney(holds)} in RFA holds` : "") },
+      h("div", { class: "meter-fill" + (over ? " over" : ""), style: { width: pct + "%" } }),
+      holdPct > 0 ? h("div", { class: "meter-hold", style: { left: pct + "%", width: holdPct + "%" } }) : null),
     h("span", { class: "cap-figures num" },
       over ? h("span", { class: "down", "aria-hidden": "true" }, "▲ ") : null,
       `${fmtMoney(committed)} · `, h("strong", {}, over ? `${fmtMoney(committed - cap)} over` : `${fmtMoney(cap - committed)} space`)),
@@ -506,8 +510,18 @@ function renderCap(cap) {
   if (cap.unknown_salary.length) now.push(["No salary on sheet", cap.unknown_salary.join(", ")]);
   byId("cap-outlook").replaceChildren(
     capRow(`${cap.season} (now)`, cap.committed, cap.cap, now),
-    ...cap.future.map((f) => capRow(f.season, f.committed, cap.cap,
-      [["Already committed", fmtMoney(f.committed)], ["Includes", "every contract still running that season"]])),
+    ...cap.future.map((f) => capRow(f.season, f.committed, cap.cap, [
+      ["Already committed", fmtMoney(f.committed)], ["Includes", "every contract still running that season"],
+      ...(f.rfa_holds ? [
+        ["RFA holds", `${fmtMoney(f.rfa_holds)} (dotted)`],
+        ["Space after holds", fmtMoney(cap.cap - f.committed - f.rfa_holds)],
+        ...f.rfa_players.map((x) => [x.name, `${fmtMoney(x.salary)} · RFA '${x.after_season.slice(-2)}`]),
+      ] : []),
+    ], f.rfa_holds)),
+    ...(cap.future.some((f) => f.rfa_holds) ? [h("p", { class: "market-note" },
+      h("span", { class: "hold-swatch", "aria-hidden": "true" }),
+      "RFA holds: players whose contracts end while they're RFAs, carried into every later season at their " +
+      "final salary. Not counted in committed or space.")] : []),
     h("p", { class: "market-note" },
       `${cap.contract_years} of ${cap.contract_year_bank} contract years used (seasons left on each contract; minors and IR excluded).` +
       (cap.unknown_salary.length ? ` Unknown salaries aren't included: ${cap.unknown_salary.join(", ")}.` : "")),

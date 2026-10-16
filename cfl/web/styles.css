@@ -278,6 +278,9 @@ input[type="search"] { width: 100%; }
 .meter { height: 12px; border-radius: 0 4px 4px 0; background: color-mix(in oklab, var(--accent) 16%, var(--surface)); position: relative; }
 .meter-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 0 4px 4px 0; }
 .meter-fill.over { background: var(--bad); }
+/* RFA holds are placeholders, not contracts: an unfilled, dotted segment after the fill. */
+.meter-hold { position: absolute; top: 0; bottom: 0; background: var(--surface); border: 2px dotted var(--rfa); border-radius: 0 4px 4px 0; }
+.hold-swatch { display: inline-block; width: 20px; height: 10px; margin-right: 6px; vertical-align: -1px; background: var(--surface); border: 2px dotted var(--rfa); border-radius: 0 3px 3px 0; }
 
 .publish-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .publish-status a { color: var(--ink); }

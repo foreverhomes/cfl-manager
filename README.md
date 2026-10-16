@@ -131,6 +131,13 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   shows this as a badge, e.g. "RFA '29", along with his age. The published sheet has an
   **At expiry** column. Birth dates come from NHL.com; enter a missing or wrong one in the player
   editor. Hand-entered dates are never overwritten by a sync.
+- **RFA holds:** an RFA's salary doesn't drop to $0 after his contract ends. In every later
+  season of the cap outlook he's carried at his final-season salary, as a placeholder. Holds
+  follow the same rules as other future seasons: IR counts, minors don't. Players with no birth
+  date on file aren't included, because their status is unknown. Holds stay out of `committed` and
+  `space`. Each future season reports them as `rfa_holds` (the total) and `rfa_players` (the
+  players). The dashboard cap card draws them as a dotted, unfilled segment after the committed
+  salary, and its tooltip lists the players. The published sheet doesn't add them.
 - **Contract-year bank (50):** seasons left on every contract, this one included, for active and
   bench players. Minors and IR don't count, and in-season UFA deals are exempt. The dashboard
   flags a team over the bank, and trades show contract years before → after.
