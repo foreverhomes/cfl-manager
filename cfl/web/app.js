@@ -230,6 +230,11 @@ async function boot() {
   }
   if (state.me.status !== "active") { showWaiting(); return; }
   applyRole();
+  if (state.me.auth && !state.me.team_id) {
+    showError(state.me.is_admin
+      ? "Your account isn't linked to a team yet. Pick yours in the Admin tab, on your own row."
+      : "Your account isn't linked to a team yet. Ask the admin to link it.");
+  }
   try {
     const [health, teams] = await Promise.all([api.get("/health"), api.get("/teams")]);
     state.health = health;

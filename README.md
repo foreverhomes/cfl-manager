@@ -13,7 +13,7 @@ player, profiles every team by category, and ranks waiver and trade targets by w
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env            # then set FANTRAX_MY_TEAM_ID
+cp .env.example .env            # then set FANTRAX_MY_TEAM_ID (your team, for the CLI and local use)
 .venv/bin/python -m cfl sync    # ~2s, writes data/league.db
 .venv/bin/python -m cfl teams   # find your team id for .env
 .venv/bin/python -m cfl serve   # app at http://127.0.0.1:8000, API docs at /docs
@@ -192,8 +192,11 @@ the app and the CLI use that Postgres database instead. Nothing else changes.
    everything in `data/league.db`, contract edits and hand-entered birth dates included. It won't
    overwrite a database that already has data unless you add `--replace`.
 4. **Set the other variables** under **Settings > Environment Variables**, then redeploy:
-   - `FANTRAX_MY_TEAM_ID`, and `FANTRAX_LEAGUE_ID` if it isn't the default.
+   - `FANTRAX_LEAGUE_ID`, if it isn't the default. Leave out `FANTRAX_MY_TEAM_ID`: on the site,
+     everyone's team, yours included, is the one linked in the Admin tab.
    - `CFL_SALARY_SHEETS_JSON`: the contents of `salary_sheets.json`, which isn't in the repository.
+     Key your own sheet by its team name rather than `me`, which only works with
+     `FANTRAX_MY_TEAM_ID`.
    - `CFL_SHEET_PUBLISH_URL` and `CFL_SHEET_PUBLISH_TOKEN`, if you publish to your sheet.
    - `GOOGLE_CLIENT_ID`, `CFL_SESSION_SECRET` and `CFL_ADMIN_EMAILS`, for [logins](#logins). A
      deployment without them refuses every request, so the data is never left open.
@@ -220,9 +223,9 @@ GMs sign in with Google. Anyone can ask to join; you approve them and link their
 - **Joining.** Send GMs the site's link. When someone signs in for the first time they wait for
   approval and show up under **Requests** in the Admin tab, where you pick their team. You can
   also add someone's Google email and team ahead of time, so they get straight in.
-- **Admins.** Emails in `CFL_ADMIN_EMAILS` are always admins, so you can't lock yourself out. One
-  without a linked team manages `FANTRAX_MY_TEAM_ID`'s team. You can make other people admins in
-  the Admin tab.
+- **Admins.** Emails in `CFL_ADMIN_EMAILS` are always admins, so you can't lock yourself out. After
+  your first sign-in, pick your own team on your row in the Admin tab: teams come from there, not
+  from `FANTRAX_MY_TEAM_ID`. You can make other people admins in the Admin tab too.
 - **Sessions.** Signing in sets a cookie that lasts 30 days. Every request checks the `users`
   table, so a new team, role or removal applies on the next click.
 - **Running locally.** Without `GOOGLE_CLIENT_ID` there are no logins: the app and CLI act as the

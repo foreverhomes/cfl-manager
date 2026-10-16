@@ -652,7 +652,9 @@ def load_salary_sources(settings: Settings) -> Dict[str, Dict[str, Any]]:
 
 
 def _resolve_team(conn: Connection, league_id: str, ref: str, my_team_id: Optional[str]) -> str:
-    if ref == "me" and my_team_id:
+    if ref == "me":
+        if not my_team_id:   # the site has no FANTRAX_MY_TEAM_ID: name the team instead
+            raise ValueError("salary sheets: 'me' needs FANTRAX_MY_TEAM_ID; use the team's id or name as the key")
         return my_team_id
     teams = rows(conn, "SELECT id, name FROM teams WHERE league_id=?", (league_id,))
     if any(t["id"] == ref for t in teams):

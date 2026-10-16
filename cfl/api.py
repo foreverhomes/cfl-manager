@@ -130,7 +130,7 @@ def _team(ctx: A.Context, team_id: str, user: User) -> str:
     if team_id == "me":
         if not user.team_id:
             raise HTTPException(400, detail={
-                "error": "No team is linked to your account yet; ask the admin" if get_settings().google_client_id
+                "error": "No team is linked to your account yet: set it in the Admin tab" if get_settings().google_client_id
                          else "Set FANTRAX_MY_TEAM_ID in .env to use 'me'",
                 "teams": [{"id": t, "name": n} for t, n in ctx.teams.items()],
             })
@@ -695,8 +695,6 @@ def admin_users(conn: Connection = Depends(get_conn)):
     users = rows(conn, "SELECT * FROM users ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, created_at")
     for u in users:
         u["always_admin"] = u["email"] in s.admin_emails
-        if u["always_admin"] and not u["team_id"]:
-            u["team_id"] = s.my_team_id       # what auth.load_user falls back to
         u["team_name"] = names.get(u["team_id"])
     return {"users": users, "admin_emails": list(s.admin_emails)}
 

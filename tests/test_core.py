@@ -960,3 +960,24 @@ def test_a_vercel_deployment_without_logins_refuses_every_request(monkeypatch, t
     assert client.get("/").status_code == 200                                          # the page still loads, to say so
     assert "Privacy" in client.get("/privacy").text                                    # public, for Google's setup
     assert not (tmp_path / "never-opened").exists()                                    # refused before the database
+
+
+def test_on_the_site_teams_come_from_each_users_row_not_fantrax_my_team_id(conn, tmp_path, monkeypatch):
+    _logins(monkeypatch, tmp_path)
+    monkeypatch.setenv("FANTRAX_MY_TEAM_ID", "t2")                  # the CLI's default; the site ignores it
+    _two_teams(conn)
+    boss, res = _signed_in("boss")
+    assert res.json()["team_id"] is None and boss.get("/health").json()["my_team_id"] is None
+    assert boss.get("/admin/users").json()["users"][0]["team_id"] is None
+    boss.put("/admin/users/boss@example.com", json={"team_id": "t1", "role": "admin", "status": "active"})
+    assert boss.get("/health").json()["my_team_id"] == "t1"           # linked in the Admin tab
+    assert {t["id"]: t["is_me"] for t in boss.get("/teams").json()} == {"t1": 1, "t2": 0}
+
+
+def test_the_me_salary_sheet_key_needs_fantrax_my_team_id(conn):
+    from cfl.sync import _resolve_team
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'Skullets')", (LEAGUE,))
+    assert _resolve_team(conn, LEAGUE, "me", "t1") == "t1"
+    assert _resolve_team(conn, LEAGUE, "Skull", None) == "t1"          # a name works without it
+    with pytest.raises(ValueError, match="FANTRAX_MY_TEAM_ID"):
+        _resolve_team(conn, LEAGUE, "me", None)
