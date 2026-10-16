@@ -422,9 +422,43 @@ def test_cap_summary_follows_league_rules():
     assert cap["space"] == 18 and cap["ir_relief"] == 8 and cap["minors_relief"] == 3
     assert cap["unknown_salary"] == ["new"]
     assert cap["contract_years"] == 2 + 1 and cap["contract_year_bank"] == 50   # minors and IR excluded
-    assert cap["future"][0] == {"season": "2027/28", "committed": 20 + 8 + 2, "space": 20}   # IR returns
+    assert cap["future"][0] == {"season": "2027/28", "committed": 20 + 8 + 2, "space": 20,   # IR returns
+                                "rfa_holds": 0, "rfa_players": []}     # no birth dates, so no RFAs known
     assert A.cap_summary(ctx, "t2") is None
     assert [A.release_cost(p) for p in players] == [10, 5, 4, 0, 0]   # $3 or less is a free release
+
+
+def test_cap_summary_carries_rfas_forward_as_holds():
+    def signed(fid, salaries, born, status="ACTIVE", contract_type="STANDARD"):
+        p = _with_contract(_p(fid, ["C", "F"], "F", 1, status=status), salaries)
+        p.birth_date, p.contract_type = born, contract_type
+        return p
+
+    players = [
+        signed("rfa", [5, 7], "2005-01-01"),                         # 23 on July 1, 2028: RFA
+        signed("ufa", [10], "1990-01-01"),                           # 37 on July 1, 2027: UFA
+        signed("now", [4], "2004-03-01"),                            # 23 on July 1, 2027: RFA
+        signed("ir", [6], "2003-01-01", status="INJURED_RESERVE"),   # IR counts in later seasons
+        signed("kid", [1], "2006-01-01", status="MINORS"),           # minors don't
+        signed("pickup", [2], "2005-01-01", contract_type="IN_SEASON_UFA"),   # always a UFA
+        signed("unknown", [3], None),                                # no birth date, status unknown
+    ]
+    ctx = _ctx_with(players)
+    ctx.league = {"season_year": 2026}
+    ctx.contract_teams, ctx.salary_caps = {"t1"}, {"t1": 100}
+    future = A.cap_summary(ctx, "t1")["future"]
+
+    first = future[0]
+    assert (first["season"], first["committed"], first["space"]) == ("2027/28", 7, 93)   # holds stay out
+    assert first["rfa_holds"] == 6 + 4
+    assert first["rfa_players"] == [
+        {"fantrax_id": "ir", "name": "ir", "salary": 6, "after_season": "2026/27"},
+        {"fantrax_id": "now", "name": "now", "salary": 4, "after_season": "2026/27"}]
+    # From the season after his last one, each RFA carries over at his final-season salary.
+    for f in future[1:]:
+        assert (f["committed"], f["space"], f["rfa_holds"]) == (0, 100, 7 + 6 + 4)
+        assert [x["fantrax_id"] for x in f["rfa_players"]] == ["rfa", "ir", "now"]
+    assert future[1]["rfa_players"][0]["after_season"] == "2027/28"
 
 
 def test_evaluate_trade_cap_effect_includes_drop_buyouts_and_flags_unknown_salaries():

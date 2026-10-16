@@ -744,6 +744,8 @@ def cap_summary(ctx: Context, team_id: str, players: Optional[List[Player]] = No
     Active and bench salaries count, plus buyouts; players in the minors or on IR don't.
     `players` overrides the team's current roster (used to price a trade); `extra_dead_cap` adds
     buyout charges the caller incurs. Future seasons count everyone under contract except minors.
+    A player whose contract ends with him an RFA is carried into every later season as an RFA
+    hold at his final-season salary, kept apart from `committed` and `space` (no contract yet).
     """
     if team_id not in ctx.contract_teams:
         return None
@@ -753,12 +755,18 @@ def cap_summary(ctx: Context, team_id: str, players: Optional[List[Player]] = No
     counting = [p for p in players if p.roster_status in CAPPED_STATUSES]
     dead = sum(b[0] for b in buyouts if b) + extra_dead_cap
     committed = sum(p.salary for p in counting if p.salary is not None) + dead
+    rfas = [p for p in players if p.roster_status != "MINORS" and p.contract_salaries
+            and (contract_end(ctx, p) or {}).get("status") == "RFA"]
     future = []
     for i in range(1, 5):
         total = sum(p.contract_salaries[i] for p in players
                     if p.roster_status != "MINORS" and len(p.contract_salaries) > i)
         total += sum(b[i] for b in buyouts if len(b) > i)
-        future.append({"season": season_label(ctx, i), "committed": total, "space": cap - total})
+        holds = sorted(({"fantrax_id": p.fantrax_id, "name": p.name, "salary": p.contract_salaries[-1],
+                         "after_season": season_label(ctx, len(p.contract_salaries) - 1)}
+                        for p in rfas if len(p.contract_salaries) <= i), key=lambda x: (-x["salary"], x["name"]))
+        future.append({"season": season_label(ctx, i), "committed": total, "space": cap - total,
+                       "rfa_holds": sum(x["salary"] for x in holds), "rfa_players": holds})
     return {
         "cap": cap, "committed": committed, "space": cap - committed, "dead_cap": dead,
         "ir_relief": sum(p.salary or 0 for p in players if p.roster_status == "INJURED_RESERVE"),
