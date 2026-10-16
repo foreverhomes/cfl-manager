@@ -265,7 +265,6 @@ function wireControls() {
   byId("players-missing").addEventListener("change", loadPlayers);
   byId("team-select").addEventListener("change", (e) => {
     state.team = e.target.value;
-    state.playersTeam = state.team;   // the Players page follows the header's team
     state.trade.give.clear();
     state.trade.get.clear();
     state.trade.pickups.clear();
@@ -389,6 +388,7 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
+  byId("team-field").hidden = view === "players" || view === "admin";   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
@@ -1182,7 +1182,8 @@ const PLAYER_COLUMNS = [
 
 let playersSeq = 0;
 async function loadPlayers() {
-  if (state.playersTeam === undefined) state.playersTeam = state.team;
+  // Its own team choice, separate from the Dashboard's: it starts on your team and stays where you leave it.
+  if (state.playersTeam === undefined) state.playersTeam = state.health.my_team_id || state.team;
   const teamSel = byId("players-team");
   teamSel.replaceChildren(
     h("option", { value: "" }, "All teams"),
