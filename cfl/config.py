@@ -3,7 +3,8 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,6 +37,23 @@ class Settings:
     # Apps Script web app that writes an app-owned team's sheet (see cfl/sheet_publisher.gs).
     sheet_publish_url: Optional[str] = None
     sheet_publish_token: Optional[str] = None
+    # A Postgres database (postgres://...) to use instead of the SQLite file, as on Vercel.
+    database_url: Optional[str] = None
+    # salary_sheets.json's contents, for a deployment that has no such file.
+    salary_sheets_json: Optional[str] = None
+
+    @property
+    def database(self) -> Union[Path, str]:
+        """What db.connect() opens: the Postgres URL if one is set, else the SQLite file."""
+        return self.database_url or self.db_path
+
+    @property
+    def database_label(self) -> str:
+        """The database for logs and /health, without its password."""
+        if not self.database_url:
+            return str(self.db_path)
+        url = urlsplit(self.database_url)
+        return "postgres://{}{}".format(url.hostname or "", url.path)
 
 
 def get_settings() -> Settings:
@@ -50,4 +68,6 @@ def get_settings() -> Settings:
         salary_sheets_path=Path(os.environ.get("CFL_SALARY_SHEETS", ROOT / "salary_sheets.json")),
         sheet_publish_url=os.environ.get("CFL_SHEET_PUBLISH_URL") or None,
         sheet_publish_token=os.environ.get("CFL_SHEET_PUBLISH_TOKEN") or None,
+        database_url=os.environ.get("DATABASE_URL") or None,
+        salary_sheets_json=os.environ.get("CFL_SALARY_SHEETS_JSON") or None,
     )

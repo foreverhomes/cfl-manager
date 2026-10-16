@@ -1,28 +1,53 @@
-"""Offline tests for name matching, rate blending, lineups and need weights."""
+"""Offline tests for name matching, rate blending, lineups and need weights.
 
-import sqlite3
+They use SQLite. Set CFL_TEST_DATABASE_URL to a Postgres database to run them there instead;
+it is wiped before every test.
+"""
+
+import os
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 
 from cfl import analysis as A
+from cfl import db
 from cfl.config import Settings
-from cfl.db import connect, upsert
+from cfl.db import Connection, connect, upsert
 from cfl.sync import match_players, match_sheet_names, normalize_name, parse_salary_sheet, split_fantrax_name
 
 LEAGUE = "L1"
+TEST_POSTGRES = os.environ.get("CFL_TEST_DATABASE_URL")
+
+
+@pytest.fixture(autouse=True)
+def _app_database(monkeypatch):
+    """The database the API opens: the test Postgres, or none (SQLite), never a DATABASE_URL from .env."""
+    monkeypatch.setenv("DATABASE_URL", TEST_POSTGRES or "")
+
+
+def _empty_postgres(url: str) -> None:
+    import psycopg
+    with psycopg.connect(url, autocommit=True) as c:
+        c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+    db._schema_ready.discard(url)
 
 
 @pytest.fixture
-def conn(tmp_path: Path) -> sqlite3.Connection:
-    c = connect(tmp_path / "t.db")
+def conn(tmp_path: Path) -> Iterator[Connection]:
+    if TEST_POSTGRES:
+        _empty_postgres(TEST_POSTGRES)
+        c = connect(TEST_POSTGRES)
+    else:
+        c = connect(tmp_path / "t.db")
     upsert(c, "league", [{"id": LEAGUE, "name": "Test", "season_year": 2026, "scoring_type": "x",
                           "start_date": None, "end_date": None, "draft_type": None,
                           "roster_info": '{"positionConstraints": {"C": {"maxActive": 1}, "D": {"maxActive": 1},'
                                          ' "F": {"maxActive": 1}, "G": {"maxActive": 1}}}',
                           "playoffs": None, "draft_settings": None, "synced_at": None}], ["id"])
     c.commit()
-    return c
+    yield c
+    c.close()
 
 
 def test_name_helpers():
@@ -749,3 +774,49 @@ def test_watch_lineup_check_finds_idle_starters_and_benched_players():
     players[1].roster_status = "ACTIVE"
     assert lineup_check(ctx, "t1", {"TOR"})["possible_starts"] == lineup_check(ctx, "t1", {"TOR"})["starts"] == 2
     assert lineup_check(ctx, "t1", set())["games_today"] is False
+
+
+def test_a_failed_sync_step_is_logged_and_the_next_one_still_runs(conn):
+    from cfl.db import rows
+    from cfl.sync import _logged
+    failed = _logged(conn, "stats", lambda: conn.execute("SELECT * FROM no_such_table").fetchall())
+    ok = _logged(conn, "match", lambda: {"matched": 0})
+    assert (failed["status"], ok["status"]) == ("error", "ok")
+    assert [r["status"] for r in rows(conn, "SELECT status FROM sync_log ORDER BY id")] == ["error", "ok"]
+
+
+def test_copy_database_replaces_every_table_and_numbers_new_sync_runs_after_the_old(conn, tmp_path):
+    from cfl.db import copy_database, rows
+    from cfl.sync import _logged
+    src = connect(tmp_path / "src.db")
+    _player(src, "f1", "Geekie, Morgan", "BOS", "C")
+    src.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[5,5]', 'STANDARD', 'kept', 'x')", (LEAGUE,))
+    _logged(src, "rosters", lambda: {"roster_items": 1})
+    src.commit()
+
+    counts = copy_database(src, conn)
+    assert (counts["players"], counts["contract_overrides"], counts["sync_log"]) == (1, 1, 1)
+    assert counts["league"] == 0 and not rows(conn, "SELECT * FROM league")      # replaced, not merged
+    assert rows(conn, "SELECT name, adp FROM players") == [{"name": "Morgan Geekie", "adp": None}]
+    assert rows(conn, "SELECT note FROM contract_overrides") == [{"note": "kept"}]
+    _logged(conn, "stats", lambda: {})
+    assert [r["id"] for r in rows(conn, "SELECT id FROM sync_log ORDER BY id")] == [1, 2]
+
+
+def test_salary_sheets_can_come_from_an_environment_variable(tmp_path, monkeypatch):
+    from cfl.config import get_settings
+    from cfl.sync import load_salary_sources
+    monkeypatch.setenv("CFL_SALARY_SHEETS", str(tmp_path / "missing.json"))
+    monkeypatch.setenv("CFL_SALARY_SHEETS_JSON", '{"me": "https://example.invalid/a", "_comment": "x"}')
+    assert load_salary_sources(get_settings()) == {"me": {"url": "https://example.invalid/a"}}
+
+
+def test_a_database_url_switches_to_postgres_and_is_shown_without_its_password(monkeypatch):
+    from cfl.config import get_settings
+    url = "postgresql://app:s3cret@ep-x-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
+    monkeypatch.setenv("DATABASE_URL", url)
+    s = get_settings()
+    assert s.database == url and db.is_postgres(s.database)
+    assert s.database_label == "postgres://ep-x-pooler.us-east-1.aws.neon.tech/neondb"
+    monkeypatch.setenv("DATABASE_URL", "")
+    assert get_settings().database == get_settings().db_path

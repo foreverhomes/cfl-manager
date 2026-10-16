@@ -13,14 +13,13 @@ Pipeline:
 
 import json
 import math
-import sqlite3
 from collections import defaultdict
 from datetime import date
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .config import Settings
-from .db import row, rows
+from .db import Connection, row, rows
 from .sync import MAX_CONTRACT_YEARS, app_owned_teams, stat_seasons
 
 # Fantrax category short name -> skater_stats column.
@@ -232,7 +231,7 @@ def _group_for(position: Optional[str]) -> str:
     return "F"
 
 
-def _project_skaters(conn: sqlite3.Connection, ctx: Context, settings: Settings) -> None:
+def _project_skaters(conn: Connection, ctx: Context, settings: Settings) -> None:
     w, k = settings.prior_season_weight, settings.shrink_games
     stats = defaultdict(dict)
     for r in rows(conn, "SELECT * FROM skater_stats WHERE season_id IN (?, ?)", (ctx.cur_season, ctx.prior_season)):
@@ -268,7 +267,7 @@ def _project_skaters(conn: sqlite3.Connection, ctx: Context, settings: Settings)
             p.impact[c.short_name] = -v if c.lower_is_better else v
 
 
-def _project_goalies(conn: sqlite3.Connection, ctx: Context, settings: Settings) -> None:
+def _project_goalies(conn: Connection, ctx: Context, settings: Settings) -> None:
     w, k = settings.prior_season_weight, settings.shrink_games
     stats = defaultdict(dict)
     for r in rows(conn, "SELECT * FROM goalie_stats WHERE season_id IN (?, ?)", (ctx.cur_season, ctx.prior_season)):
@@ -337,7 +336,7 @@ def _assign_z(players: List[Player], cats: List[Category], pool_size: int) -> No
         pool = sorted(pool, key=lambda p: sum(p.z.values()), reverse=True)[:pool_size]
 
 
-def load_context(conn: sqlite3.Connection, settings: Settings) -> Context:
+def load_context(conn: Connection, settings: Settings) -> Context:
     league_id = settings.league_id
     league = row(conn, "SELECT * FROM league WHERE id=?", (league_id,))
     if not league:
@@ -609,7 +608,7 @@ def expected_category_wins(ctx: Context, profiles: Dict[str, Dict], team_id: str
     return total
 
 
-def actual_profiles(conn: sqlite3.Connection, ctx: Context) -> Dict[str, Dict]:
+def actual_profiles(conn: Connection, ctx: Context) -> Dict[str, Dict]:
     """Season-to-date H2H results per category, from stored matchup scores."""
     data = rows(conn, "SELECT period, team_id, category, value, outcome FROM matchup_category_scores "
                       "WHERE league_id=? ORDER BY period", (ctx.league_id,))
@@ -822,7 +821,7 @@ def release_cost(p: Player) -> float:
     return float(math.floor(p.salary / 2))
 
 
-def team_profile(conn: sqlite3.Connection, ctx: Context, team_id: str, **need_kwargs) -> Dict:
+def team_profile(conn: Connection, ctx: Context, team_id: str, **need_kwargs) -> Dict:
     lineup_mode = need_kwargs.pop("lineup", "best")
     projected = projected_profiles(ctx, lineup_mode)
     actual = actual_profiles(conn, ctx)
@@ -870,7 +869,7 @@ def _games_fields(p: Player, lineup_games_per_week: float) -> Dict[str, float]:
     return out
 
 
-def league_overview(conn: sqlite3.Connection, ctx: Context, lineup: str = "best") -> List[Dict]:
+def league_overview(conn: Connection, ctx: Context, lineup: str = "best") -> List[Dict]:
     projected = projected_profiles(ctx, lineup)
     actual = actual_profiles(conn, ctx)
     out = []
@@ -894,7 +893,7 @@ def _overall_rank(projected: Dict[str, Dict], team_id: str) -> int:
     return sorted(totals, key=totals.get, reverse=True).index(team_id) + 1
 
 
-def targets(conn: sqlite3.Connection, ctx: Context, team_id: str, source: str = "fa", position: Optional[str] = None,
+def targets(conn: Connection, ctx: Context, team_id: str, source: str = "fa", position: Optional[str] = None,
             limit: int = 25, min_games: int = 5, include_minors: bool = False, from_team: Optional[str] = None,
             offer: Union[None, str, Sequence[str]] = None, tolerance: float = 0.25,
             drop: Union[None, str, Sequence[str]] = None, **need_kwargs) -> Dict:
@@ -1191,7 +1190,7 @@ def evaluate_trade(ctx: Context, team_id: str, give: Sequence[str], other_team_i
     }
 
 
-def trade_partners(conn: sqlite3.Connection, ctx: Context, team_id: str, per_team: int = 3, **need_kwargs) -> Dict:
+def trade_partners(conn: Connection, ctx: Context, team_id: str, per_team: int = 3, **need_kwargs) -> Dict:
     """Rank other teams by how well their category needs complement yours.
 
     fit = sum over categories of (your edge x their need) + (their edge x your need), using

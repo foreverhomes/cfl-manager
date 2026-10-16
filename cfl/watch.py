@@ -7,19 +7,19 @@ or bench player whose NHL team kept playing without him is probably hurt or scra
 """
 
 import json
-import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import analysis as A
+from .db import Connection
 
 HISTORY = 30          # snapshots of category ranks kept for trends
 MISSED_ALERT = 2      # consecutive team games missed before flagging a skater
 MISSED_ALERT_G = 5    # goalies sit regularly, so wait longer
 
 
-def team_games_between(conn: sqlite3.Connection, after: str, through: str) -> Dict[str, int]:
+def team_games_between(conn: Connection, after: str, through: str) -> Dict[str, int]:
     """Regular-season games per NHL team with after < game_date <= through."""
     counts: Dict[str, int] = {}
     for g in conn.execute("SELECT away, home FROM nhl_games WHERE game_type=2 AND game_date > ? AND game_date <= ?",
@@ -29,14 +29,14 @@ def team_games_between(conn: sqlite3.Connection, after: str, through: str) -> Di
     return counts
 
 
-def stats_through(conn: sqlite3.Connection, today: date) -> str:
+def stats_through(conn: Connection, today: date) -> str:
     """Last game day the stored NHL stats fully cover: the day before the stats sync ran."""
     r = conn.execute("SELECT MAX(synced_at) FROM skater_stats").fetchone()
     synced = date.fromisoformat(r[0][:10]) if r and r[0] else today
     return date.fromordinal(min(synced, today).toordinal() - 1).isoformat()
 
 
-def snapshot(conn: sqlite3.Connection, ctx: A.Context, team_id: str, today: date) -> Dict:
+def snapshot(conn: Connection, ctx: A.Context, team_id: str, today: date) -> Dict:
     prof = A.team_profile(conn, ctx, team_id)
     roster = {p.fantrax_id: {"name": p.name, "nhl_team": p.nhl_team, "status": p.roster_status, "gp": p.gp_cur,
                     "group": p.group}
@@ -98,7 +98,7 @@ def lineup_check(ctx: A.Context, team_id: str, playing: set) -> Dict:
             "sit": [p.name for p in active if p.fantrax_id not in best_ids] + idle}
 
 
-def run(conn: sqlite3.Connection, ctx: A.Context, team_id: str, state_path: Path,
+def run(conn: Connection, ctx: A.Context, team_id: str, state_path: Path,
         today: Optional[date] = None) -> Dict:
     today = today or date.today()
     state = json.loads(state_path.read_text()) if state_path.exists() else {}

@@ -1,7 +1,6 @@
-"""Local HTTP API over the league store. Run: python -m cfl serve"""
+"""HTTP API over the league store. Run: python -m cfl serve (or deploy to Vercel; see README)"""
 
 import json
-import sqlite3
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
@@ -14,7 +13,7 @@ from . import analysis as A
 from . import contracts as C
 from . import publish as P
 from .config import Settings, get_settings
-from .db import connect, row, rows
+from .db import Connection, connect, row, rows
 from .sync import RESOURCES, _logged, current_period, sync_all
 
 app = FastAPI(
@@ -48,8 +47,8 @@ def index():
 CATEGORY_ALIASES = {"pm": "+/-", "plusminus": "+/-", "/-": "+/-", "svpct": "SV%"}
 
 
-def get_conn() -> Iterator[sqlite3.Connection]:
-    conn = connect(get_settings().db_path)
+def get_conn() -> Iterator[Connection]:
+    conn = connect(get_settings().database)
     try:
         yield conn
     finally:
@@ -61,7 +60,7 @@ def _not_synced(_, exc: A.NotSynced):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
-def _ctx(conn: sqlite3.Connection, settings: Settings) -> A.Context:
+def _ctx(conn: Connection, settings: Settings) -> A.Context:
     return A.load_context(conn, settings)
 
 
@@ -128,17 +127,17 @@ LINEUP = Query("best", description="best = daily best lineups from non-minors/IR
 
 
 @app.get("/health")
-def health(conn: sqlite3.Connection = Depends(get_conn)):
+def health(conn: Connection = Depends(get_conn)):
     s = get_settings()
     last = row(conn, "SELECT resource, finished_at, status FROM sync_log ORDER BY id DESC LIMIT 1")
-    return {"ok": True, "league_id": s.league_id, "my_team_id": s.my_team_id, "db_path": str(s.db_path),
+    return {"ok": True, "league_id": s.league_id, "my_team_id": s.my_team_id, "database": s.database_label,
             "last_sync": last}
 
 
 def auto_publish() -> None:
     """Background job: republish app-owned teams' sheets if anything changed. Logged in sync_log."""
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     try:
         if P.publish_status(conn, settings)["configured"]:
             _logged(conn, "publish", lambda: P.publish(conn, settings))
@@ -149,7 +148,7 @@ def auto_publish() -> None:
 @app.post("/sync")
 def sync(background: BackgroundTasks,
          resources: Optional[List[str]] = Query(None, description="Subset of: " + ", ".join(RESOURCES)),
-         conn: sqlite3.Connection = Depends(get_conn)):
+         conn: Connection = Depends(get_conn)):
     try:
         results = sync_all(conn, get_settings(), resources)
     except ValueError as exc:
@@ -159,7 +158,7 @@ def sync(background: BackgroundTasks,
 
 
 @app.get("/publish")
-def publish_status(conn: sqlite3.Connection = Depends(get_conn)):
+def publish_status(conn: Connection = Depends(get_conn)):
     """Whether sheet publishing is set up, and when each app-owned team's sheet was last written."""
     out = P.publish_status(conn, get_settings())
     last = row(conn, "SELECT finished_at, status, detail FROM sync_log WHERE resource='publish' ORDER BY id DESC LIMIT 1")
@@ -171,14 +170,14 @@ def publish_status(conn: sqlite3.Connection = Depends(get_conn)):
 
 @app.post("/publish")
 def publish_now(force: bool = Query(False, description="Write even if nothing changed"),
-                conn: sqlite3.Connection = Depends(get_conn)):
+                conn: Connection = Depends(get_conn)):
     """Write app-owned teams' contracts to their Google Sheets now."""
     s = get_settings()
     return _logged(conn, "publish", lambda: P.publish(conn, s, force=force))
 
 
 @app.get("/sync/log")
-def sync_log(limit: int = 20, conn: sqlite3.Connection = Depends(get_conn)):
+def sync_log(limit: int = 20, conn: Connection = Depends(get_conn)):
     out = rows(conn, "SELECT * FROM sync_log ORDER BY id DESC LIMIT ?", (limit,))
     for r in out:
         r["detail"] = json.loads(r["detail"]) if r["detail"] else None
@@ -186,7 +185,7 @@ def sync_log(limit: int = 20, conn: sqlite3.Connection = Depends(get_conn)):
 
 
 @app.get("/league")
-def league(conn: sqlite3.Connection = Depends(get_conn)):
+def league(conn: Connection = Depends(get_conn)):
     s = get_settings()
     lg = row(conn, "SELECT * FROM league WHERE id=?", (s.league_id,))
     if not lg:
@@ -203,28 +202,28 @@ def league(conn: sqlite3.Connection = Depends(get_conn)):
 
 
 @app.get("/categories")
-def categories(conn: sqlite3.Connection = Depends(get_conn)):
+def categories(conn: Connection = Depends(get_conn)):
     return rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better FROM scoring_categories "
                       "WHERE league_id=? ORDER BY sort_order", (get_settings().league_id,))
 
 
 @app.get("/teams")
-def teams(conn: sqlite3.Connection = Depends(get_conn)):
+def teams(conn: Connection = Depends(get_conn)):
     s = get_settings()
     return rows(conn, """
         SELECT t.id, t.name, t.short_name, s.rank, s.points AS record, s.games_back, s.win_pct,
-               COALESCE(t.id = ?, 0) AS is_me
+               CASE WHEN t.id = ? THEN 1 ELSE 0 END AS is_me
         FROM teams t LEFT JOIN standings s ON s.team_id = t.id AND s.league_id = t.league_id
-        WHERE t.league_id = ? ORDER BY s.rank, t.name""", (s.my_team_id, s.league_id))
+        WHERE t.league_id = ? ORDER BY s.rank NULLS FIRST, t.name""", (s.my_team_id, s.league_id))
 
 
 @app.get("/standings")
-def standings(conn: sqlite3.Connection = Depends(get_conn)):
+def standings(conn: Connection = Depends(get_conn)):
     return teams(conn)
 
 
 @app.get("/teams/{team_id}/roster")
-def team_roster(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+def team_roster(team_id: str, conn: Connection = Depends(get_conn)):
     s = get_settings()
     ctx = _ctx(conn, s)
     team_id = _team(ctx, team_id, s)
@@ -234,7 +233,7 @@ def team_roster(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
 
 
 @app.get("/teams/{team_id}/contracts")
-def team_contracts(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+def team_contracts(team_id: str, conn: Connection = Depends(get_conn)):
     """Contracts from the team's salary sheet, how each line matched a Fantrax player, and the
     cap summary. Empty when no sheet is configured for the team (see salary_sheets.json)."""
     s = get_settings()
@@ -247,7 +246,7 @@ def team_contracts(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
         LEFT JOIN players p ON p.fantrax_id = c.player_id
         LEFT JOIN roster_items ri ON ri.player_id = c.player_id AND ri.league_id = c.league_id
              AND ri.period = (SELECT MAX(period) FROM roster_items WHERE league_id = c.league_id)
-        WHERE c.league_id = ? AND c.team_id = ? ORDER BY c.section, c.salary DESC""", (s.league_id, team_id))
+        WHERE c.league_id = ? AND c.team_id = ? ORDER BY c.section, c.salary DESC NULLS LAST""", (s.league_id, team_id))
     for c in contracts:
         c["salaries"] = json.loads(c["salaries"] or "[]")
         c["on_this_roster"] = c["current_team_id"] == team_id
@@ -256,7 +255,7 @@ def team_contracts(team_id: str, conn: sqlite3.Connection = Depends(get_conn)):
 
 
 @app.get("/matchups")
-def matchups(period: Optional[int] = None, conn: sqlite3.Connection = Depends(get_conn)):
+def matchups(period: Optional[int] = None, conn: Connection = Depends(get_conn)):
     s = get_settings()
     period = period or current_period(conn, s.league_id, "scoring")
     names = {r["id"]: r["name"] for r in rows(conn, "SELECT id, name FROM teams WHERE league_id=?", (s.league_id,))}
@@ -293,7 +292,7 @@ def players(status: str = Query("all", description="all, fa, or rostered"),
             team_id: Optional[str] = None, q: Optional[str] = Query(None, description="Name search"),
             sort: str = Query("value", description="value or adp"),
             min_games: int = 0, limit: int = 50, offset: int = 0,
-            conn: sqlite3.Connection = Depends(get_conn)):
+            conn: Connection = Depends(get_conn)):
     s = get_settings()
     ctx = _ctx(conn, s)
     if team_id:
@@ -325,7 +324,7 @@ def players(status: str = Query("all", description="all, fa, or rostered"),
 
 
 @app.get("/players/{fantrax_id}")
-def player(fantrax_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+def player(fantrax_id: str, conn: Connection = Depends(get_conn)):
     ctx = _ctx(conn, get_settings())
     p = ctx.players.get(fantrax_id)
     if not p:
@@ -354,7 +353,7 @@ def _player_or_404(ctx: A.Context, fantrax_id: str) -> A.Player:
 
 
 @app.get("/players/{fantrax_id}/contract")
-def player_contract(fantrax_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+def player_contract(fantrax_id: str, conn: Connection = Depends(get_conn)):
     """The player's contract as the app uses it, what his salary sheet says, and any edit made here."""
     ctx = _ctx(conn, get_settings())
     _player_or_404(ctx, fantrax_id)
@@ -363,7 +362,7 @@ def player_contract(fantrax_id: str, conn: sqlite3.Connection = Depends(get_conn
 
 @app.put("/players/{fantrax_id}/contract")
 def edit_player_contract(fantrax_id: str, edit: ContractEdit, background: BackgroundTasks,
-                         conn: sqlite3.Connection = Depends(get_conn)):
+                         conn: Connection = Depends(get_conn)):
     """Set how many years are left on a contract (and its type). It overrides the salary sheet, and
     survives syncs, until reverted. The salary stays as it is unless one is given."""
     s = get_settings()
@@ -387,7 +386,7 @@ class BirthDateEdit(BaseModel):
 
 @app.put("/players/{fantrax_id}/birth-date")
 def set_birth_date(fantrax_id: str, edit: BirthDateEdit, background: BackgroundTasks,
-                   conn: sqlite3.Connection = Depends(get_conn)):
+                   conn: Connection = Depends(get_conn)):
     """Set a player's birth date by hand (it decides RFA vs UFA). Syncs never overwrite it."""
     from datetime import date
     s = get_settings()
@@ -409,7 +408,7 @@ def set_birth_date(fantrax_id: str, edit: BirthDateEdit, background: BackgroundT
 
 
 @app.delete("/players/{fantrax_id}/contract")
-def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: sqlite3.Connection = Depends(get_conn)):
+def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: Connection = Depends(get_conn)):
     """Drop the app's contract for this player (for a sheet-read team, the sheet applies again)."""
     s = get_settings()
     _player_or_404(_ctx(conn, s), fantrax_id)
@@ -422,7 +421,7 @@ def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: s
 
 
 @app.get("/analysis/overview")
-def overview(lineup: str = LINEUP, conn: sqlite3.Connection = Depends(get_conn)):
+def overview(lineup: str = LINEUP, conn: Connection = Depends(get_conn)):
     """Every team's projected category ranks (1 = best) and actual H2H category records."""
     ctx = _ctx(conn, get_settings())
     return {"teams": A.league_overview(conn, ctx, lineup)}
@@ -430,7 +429,7 @@ def overview(lineup: str = LINEUP, conn: sqlite3.Connection = Depends(get_conn))
 
 @app.get("/analysis/teams/{team_id}/profile")
 def profile(team_id: str, strategy: str = STRATEGY, spread: float = SPREAD, punt: Optional[str] = PUNT,
-            weights: Optional[str] = WEIGHTS, lineup: str = LINEUP, conn: sqlite3.Connection = Depends(get_conn)):
+            weights: Optional[str] = WEIGHTS, lineup: str = LINEUP, conn: Connection = Depends(get_conn)):
     """Category strengths/weaknesses (projected and actual) plus your roster valued by your needs."""
     s = get_settings()
     ctx = _ctx(conn, s)
@@ -456,7 +455,7 @@ def targets(team_id: str,
             limit: int = 25, min_games: int = Query(5, description="Min NHL games (this + last season)"),
             include_minors: bool = False, strategy: str = STRATEGY, spread: float = SPREAD,
             punt: Optional[str] = PUNT, weights: Optional[str] = WEIGHTS, lineup: str = LINEUP,
-            conn: sqlite3.Connection = Depends(get_conn)):
+            conn: Connection = Depends(get_conn)):
     """Players ranked by how much they help *your* category needs."""
     s = get_settings()
     ctx = _ctx(conn, s)
@@ -494,7 +493,7 @@ def targets(team_id: str,
 @app.get("/analysis/teams/{team_id}/trade-partners")
 def trade_partners(team_id: str, per_team: int = 3, strategy: str = STRATEGY, spread: float = SPREAD,
                    punt: Optional[str] = PUNT, weights: Optional[str] = WEIGHTS, lineup: str = LINEUP,
-                   conn: sqlite3.Connection = Depends(get_conn)):
+                   conn: Connection = Depends(get_conn)):
     """Teams whose strengths cover your weaknesses (and vice versa), with candidate players each way."""
     s = get_settings()
     ctx = _ctx(conn, s)
@@ -513,7 +512,7 @@ class TradeRequest(BaseModel):
 
 
 @app.post("/analysis/trade")
-def trade(req: TradeRequest, conn: sqlite3.Connection = Depends(get_conn)):
+def trade(req: TradeRequest, conn: Connection = Depends(get_conn)):
     """Cost/benefit of a trade for both teams: change in expected category wins per week, per-category
     before/after, games and starts volume, roster-limit drops and the market value moving each way.
     Leave other_team_id empty for a waiver move: `give` players are released and `get` must be

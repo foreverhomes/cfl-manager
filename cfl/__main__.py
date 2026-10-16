@@ -1,4 +1,4 @@
-"""CLI: python -m cfl {sync,serve,publish,teams,profile,targets,watch}"""
+"""CLI: python -m cfl {sync,import-sqlite,serve,publish,teams,profile,targets,watch}"""
 
 import argparse
 import json
@@ -28,7 +28,7 @@ def _team_arg(ctx: A.Context, value: Optional[str]) -> str:
 
 def cmd_sync(args) -> None:
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     try:
         results = sync_all(conn, settings, args.resources or None)
     except ValueError as exc:
@@ -38,9 +38,29 @@ def cmd_sync(args) -> None:
         ok &= r["status"] == "ok"
         detail = r["detail"] if r["status"] == "ok" else r["detail"]["error"]
         print("{:<10} {:<6} {}".format(r["resource"], r["status"], json.dumps(detail)))
-    print("db:", settings.db_path)
+    print("db:", settings.database_label)
     if not ok:
         sys.exit(1)
+
+
+def cmd_import_sqlite(args) -> None:
+    from pathlib import Path
+
+    from .db import TABLES, copy_database, is_postgres
+
+    settings = get_settings()
+    if not is_postgres(settings.database_url):
+        sys.exit("Set DATABASE_URL (in .env or the environment) to the Postgres database to copy into.")
+    source = Path(args.path) if args.path else settings.db_path
+    if not source.exists():
+        sys.exit("No SQLite database at {}".format(source))
+    src, dst = connect(source), connect(settings.database_url)
+    if not args.replace and any(dst.execute("SELECT 1 FROM {} LIMIT 1".format(t)).fetchone() for t in TABLES):
+        sys.exit("{} already has data. Run again with --replace to overwrite all of it with {}.".format(
+            settings.database_label, source))
+    for table, n in copy_database(src, dst).items():
+        print("{:<24} {:>7}".format(table, n))
+    print("Copied {} into {}".format(source, settings.database_label))
 
 
 def cmd_publish(args) -> None:
@@ -65,7 +85,7 @@ def cmd_publish(args) -> None:
         print("Paste it into your sheet: Extensions > Apps Script. Then Deploy > New deployment > Web app,\n"
               "Execute as: Me, Who has access: Anyone. Put the web app URL in .env as CFL_SHEET_PUBLISH_URL.")
         return
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     result = _logged(conn, "publish", lambda: P.publish(conn, settings, force=args.force))
     print(json.dumps(result, indent=2))
     if result["status"] != "ok":
@@ -80,14 +100,14 @@ def cmd_serve(args) -> None:
 
 def cmd_teams(_args) -> None:
     settings = get_settings()
-    ctx = A.load_context(connect(settings.db_path), settings)
+    ctx = A.load_context(connect(settings.database), settings)
     for t, name in ctx.teams.items():
         print("{}  {}{}".format(t, name, "   <- me" if t == settings.my_team_id else ""))
 
 
 def cmd_profile(args) -> None:
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     ctx = A.load_context(conn, settings)
     team = _team_arg(ctx, args.team)
     prof = A.team_profile(conn, ctx, team, strategy=args.strategy, punt=args.punt or [])
@@ -104,7 +124,7 @@ def cmd_profile(args) -> None:
 
 def cmd_targets(args) -> None:
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     ctx = A.load_context(conn, settings)
     team = _team_arg(ctx, args.team)
     from_team = _team_arg(ctx, args.from_team) if args.from_team else None
@@ -155,7 +175,7 @@ def cmd_watch(args) -> None:
     from .config import ROOT
 
     settings = get_settings()
-    conn = connect(settings.db_path)
+    conn = connect(settings.database)
     ctx = A.load_context(conn, settings)
     team = _team_arg(ctx, args.team)
     result = W.run(conn, ctx, team, Path(args.state or ROOT / "data" / "watch_state.json"))
@@ -178,6 +198,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("resources", nargs="*", metavar="RESOURCE",
                    help="Subset to sync (default all): " + ", ".join(RESOURCES))
     p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("import-sqlite", help="Copy the SQLite store into the DATABASE_URL Postgres database")
+    p.add_argument("path", nargs="?", help="SQLite file (default: CFL_DB_PATH, data/league.db)")
+    p.add_argument("--replace", action="store_true", help="Overwrite a Postgres database that already has data")
+    p.set_defaults(func=cmd_import_sqlite)
 
     p = sub.add_parser("serve", help="Run the HTTP API")
     p.add_argument("--host", default="127.0.0.1")

@@ -8,7 +8,6 @@ which rewrites the tab. Totals are sheet formulas, so other GMs can check the ma
 
 import hashlib
 import json
-import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +15,7 @@ import requests
 
 from . import analysis as A
 from .config import ROOT, Settings
-from .db import row, transaction, upsert
+from .db import Connection, row, transaction, upsert
 from .sync import MAX_CONTRACT_YEARS, app_owned_teams, now_iso
 
 WIDTH = 2 + MAX_CONTRACT_YEARS + 2           # Player, Pos, one column per season, At expiry, Notes
@@ -129,17 +128,17 @@ def build_roster_sheet(ctx: A.Context, team_id: str) -> Dict[str, Any]:
     return {"values": values, "styles": styles, "width": WIDTH}
 
 
-def _state(conn: sqlite3.Connection, key: str) -> Optional[Dict[str, Any]]:
+def _state(conn: Connection, key: str) -> Optional[Dict[str, Any]]:
     r = row(conn, "SELECT value FROM app_state WHERE key=?", (key,))
     return json.loads(r["value"]) if r else None
 
 
-def _save_state(conn: sqlite3.Connection, key: str, value: Dict[str, Any]) -> None:
+def _save_state(conn: Connection, key: str, value: Dict[str, Any]) -> None:
     with transaction(conn):
         upsert(conn, "app_state", [{"key": key, "value": json.dumps(value), "updated_at": now_iso()}], ["key"])
 
 
-def publish_status(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
+def publish_status(conn: Connection, settings: Settings) -> Dict[str, Any]:
     owned = app_owned_teams(conn, settings)
     teams = {}
     for team_id, spec in owned.items():
@@ -155,7 +154,7 @@ def publish_status(conn: sqlite3.Connection, settings: Settings) -> Dict[str, An
     return {"configured": bool(owned) and missing is None, "missing": missing, "teams": teams}
 
 
-def publish(conn: sqlite3.Connection, settings: Settings, force: bool = False) -> Dict[str, Any]:
+def publish(conn: Connection, settings: Settings, force: bool = False) -> Dict[str, Any]:
     """Rebuild and send every app-owned team's sheet tab. Skips a team whose content hasn't changed."""
     owned = app_owned_teams(conn, settings)
     if not owned:
