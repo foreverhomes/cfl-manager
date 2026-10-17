@@ -176,7 +176,7 @@ const state = {
   profiles: new Map(),
   rosterSort: { key: "need_value", dir: -1 },
   rosterView: "roster",
-  playersSort: { key: "value", dir: -1 },
+  playersSort: { key: "season0", dir: -1 },
   playersView: "all",
   trade: {
     give: new Set(), get: new Set(), partner: "", tolerance: prefs.get("tolerance", "0.25"),
@@ -1113,7 +1113,7 @@ function sideCard(side, maxDz, waiverMove) {
   if (cap && cap.drop_buyouts) notes.push(`Cutting ${side.auto_dropped.map((p) => p.name).join(", ")} costs a ${fmtMoney(cap.drop_buyouts)} buyout (half salary, $4+ contracts).`);
   if (cap && cap.unknown_incoming.length) {
     notes.push(waiverMove
-      ? `* No salary set for ${cap.unknown_incoming.join(", ")}, so cap space after leaves it out. Set the pickup's contract in the Players tab to include it.`
+      ? `* No salary set for ${cap.unknown_incoming.join(", ")}, so cap space after leaves it out. Set the pickup's contract in the Players & cap tab to include it.`
       : `* Salary unknown for ${cap.unknown_incoming.join(", ")}: their team's sheet isn't loaded, so cap space after is overstated.`);
   }
   if (cap && cap.over_cap) notes.push(`▲ Over the cap by ${fmtMoney(-cap.space_after)} after this ${move}.`);
@@ -1158,7 +1158,6 @@ function renderEvaluation(res) {
 
 /* ================================================================ players + contract editor */
 
-const SOURCE_LABEL = { sheet: "Sheet", override: "Edited", app: "App" };
 const TYPE_SHORT = { STANDARD: null, ELC: "ELC", IN_SEASON_UFA: "In-season UFA" };
 
 function playerLink(p) {
@@ -1170,20 +1169,18 @@ const PLAYER_COLUMNS = [
   { key: "name", label: "Player", left: true, value: (p) => p.name },
   { key: "fantasy_team", label: "Team", left: true, value: (p) => p.fantasy_team || "", render: (p) => p.fantasy_team || "–",
     leagueOnly: true },
-  { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
-  { key: "contract_years", label: "Yrs", value: (p) => p.contract_years, render: (p) => p.contract_years || "–" },
-  { key: "contract_end", label: "At expiry", asc: true, value: endSortKey, render: endPill },
   { key: "age", label: "Age", value: (p) => p.age, render: (p) => (p.age != null ? p.age : "–") },
   { key: "contract_type", label: "Type", left: true, value: (p) => TYPE_SHORT[p.contract_type] || "",
     render: (p) => TYPE_SHORT[p.contract_type] || "" },
-  { key: "contract_source", label: "Source", left: true, value: (p) => p.contract_source || "",
-    render: (p) => (p.contract_source
-      ? h("span", { class: "badge" + (p.contract_source === "override" ? " solid" : "") }, SOURCE_LABEL[p.contract_source])
-      : h("span", { class: "sub" }, "none")) },
-  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
-    render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
-  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
 ];
+const CONTRACT_SEASONS = 5;   // league maximum, sync.MAX_CONTRACT_YEARS
+// A salary for each season under contract, then the RFA/UFA pill in the first season after it ends.
+const seasonColumns = (count) => Array.from({ length: count }, (_, i) => {
+  const y = state.league.season_year + i;
+  return { key: `season${i}`, label: `${y}-${String(y + 1).slice(2)}`, value: (p) => p.contract_salaries[i],
+    render: (p) => (i < p.contract_salaries.length ? fmtMoney(p.contract_salaries[i])
+      : i === p.contract_salaries.length ? endPill(p) : null) };
+});
 
 let playersSeq = 0;
 async function loadPlayers() {
@@ -1215,7 +1212,8 @@ async function loadPlayers() {
     if (missingOnly) players = players.filter((p) => p.salary == null && p.roster_status !== "MINORS");
     byId("players-title").textContent = team ? teamName(team) : `${players.length} matches`;
     out.replaceChildren(sectionedTable({
-      players, columns: PLAYER_COLUMNS.filter((c) => !(team && c.leagueOnly)), view: state.playersView, oneTeam: Boolean(team),
+      players, columns: [...PLAYER_COLUMNS.filter((c) => !(team && c.leagueOnly)), ...seasonColumns(CONTRACT_SEASONS + 1)],
+      view: state.playersView, oneTeam: Boolean(team),
       sort: state.playersSort, onSort: (next) => { state.playersSort = next; loadPlayers(); },
       empty: missingOnly ? "Everyone here has a salary." : "No players found.",
     }));

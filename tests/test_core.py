@@ -577,6 +577,28 @@ def test_contract_edit_api_sets_years_and_keeps_the_salary(conn, tmp_path, monke
     assert client.delete("/players/f1/contract").json()["effective"]["salaries"] == [8] * 5
 
 
+def test_players_list_has_the_salary_for_each_contract_season(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    _player(conn, "f2", "Snuggerud, Jimmy", "STL", "RW")
+    for fid in ("f1", "f2"):
+        conn.execute("INSERT INTO league_players VALUES (?, ?, 'F', 'T')", (LEAGUE, fid))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', 'ACTIVE')", (LEAGUE, fid))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', 8, 3, '[8,9,10]')",
+                 (LEAGUE,))
+    conn.commit()
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+
+    res = TestClient(app).get("/players", params={"team_id": "t1"})
+
+    assert {p["fantrax_id"]: p["contract_salaries"] for p in res.json()["players"]} == {
+        "f1": [8, 9, 10], "f2": []}
+
+
 def _owned_league(conn, tmp_path):
     """t1 is app-owned per a salary_sheets.json; returns Settings pointing at it."""
     import json as _json

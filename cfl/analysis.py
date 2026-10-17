@@ -718,6 +718,7 @@ def player_summary(p: Player, ctx: Context, weights: Optional[Dict[str, Dict[str
         "market_value": round(ctx.market_values().get(p.fantrax_id, 0.0), 2) if p.z else None,
         "salary": p.salary,
         "contract_years": p.contract_years,
+        "contract_salaries": p.contract_salaries,
         "contract_type": p.contract_type if p.salary is not None else None,
         "contract_source": p.contract_source,
         "birth_date": p.birth_date,

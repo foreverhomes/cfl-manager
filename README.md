@@ -29,8 +29,9 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   the league average, with actual weekly W-L-T and need weights. A league heatmap shows every
   team's projected rank in every category. A sortable roster table rounds it out. The team picker
   in the header lets you view any team.
-- **Players.** Search the league or browse a team, filter to players missing a salary, and edit
+- **Players & cap.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
+  Each contract shows its salary for every season it runs, then RFA or UFA in the season after it ends.
 - **Trade builder** (admin only). Select any of your players. Optionally pick a trade partner and
   their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in
@@ -120,7 +121,7 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   `cap` summary covering this season and the next four. Trade evaluations show cap space
   before/after for each team that has a sheet, flag incoming players whose salary is unknown, and
   include buyout costs for auto-dropped players.
-- **Editing contracts:** the **Players** tab (or a click on any name in the roster table) opens a
+- **Editing contracts:** the **Players & cap** tab (or a click on any name in the roster table) opens a
   contract editor. It sets the years left on a contract, plus its type and a note; the salary stays
   as the sheet has it. A player on no sheet also needs a salary. Edits are stored locally as
   overrides. They win over the sheets, survive syncs, and can be reverted to the sheet. Contract
