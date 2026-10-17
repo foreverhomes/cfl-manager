@@ -178,6 +178,8 @@ const state = {
   rosterView: "roster",
   playersSort: { key: "season0", dir: -1 },
   playersView: "all",
+  changesTeam: "",
+  changesKind: "all",
   trade: {
     give: new Set(), get: new Set(), partner: "", tolerance: prefs.get("tolerance", "0.25"),
     giveMinors: false, getMinors: false, giveQuery: "", getQuery: "",
@@ -282,6 +284,7 @@ function wireControls() {
   byId("players-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadPlayers, 250); });
   byId("players-team").addEventListener("change", (e) => { state.playersTeam = e.target.value; loadPlayers(); });
   byId("players-missing").addEventListener("change", loadPlayers);
+  byId("changes-team").addEventListener("change", (e) => { state.changesTeam = e.target.value; loadChanges(); });
   byId("team-select").addEventListener("change", (e) => {
     state.team = e.target.value;
     state.trade.give.clear();
@@ -397,7 +400,7 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "trade", "players", "admin"];
+const VIEWS = ["dashboard", "trade", "players", "changes", "admin"];
 const ADMIN_VIEWS = new Set(["trade", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
@@ -410,7 +413,7 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = view === "players" || view === "admin";   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "admin"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
@@ -419,6 +422,7 @@ function route() {
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
   else if (view === "trade") loadTrade();
+  else if (view === "changes") loadChanges();
   else loadPlayers();
 }
 
@@ -1242,7 +1246,7 @@ async function loadPlayers() {
 }
 
 function describeContract(c) {
-  if (!c) return "no contract";
+  if (!c || !c.salaries.length) return "no contract";
   const s = c.salaries;
   const same = s.every((x) => x === s[0]);
   return same ? `${fmtMoney(s[0])} × ${s.length} season${s.length === 1 ? "" : "s"}` : s.map(fmtMoney).join(" / ");
@@ -1412,9 +1416,52 @@ function afterContractChange(message) {
   const view = currentView();
   if (view === "players") loadPlayers();
   else if (view === "trade") loadTrade();
+  else if (view === "changes") loadChanges();
   else loadDashboard();
 }
 
+/* ================================================================ changes */
+
+const CHANGE_FILTERS = { all: [], roster: ["added", "dropped", "traded"], salary: ["salary"], contract: ["contract"] };
+const CHANGE_LABEL = { added: "Added", dropped: "Dropped", traded: "Traded", salary: "Salary", contract: "Contract" };
+
+function describeChange(c) {
+  if (c.kind === "traded") return `Traded: ${teamName(c.old_value)} → ${teamName(c.new_value)}`;
+  if (CHANGE_FILTERS.roster.includes(c.kind)) return CHANGE_LABEL[c.kind];
+  const typeChanged = c.old_value.contract_type !== c.new_value.contract_type;   // then "Standard" is named too
+  const contract = (v) => describeContract(v) + (v.salaries.length && (TYPE_SHORT[v.contract_type] || typeChanged)
+    ? ` ${TYPE_SHORT[v.contract_type] || "Standard"}` : "");
+  return `${CHANGE_LABEL[c.kind]}: ${contract(c.old_value)} → ${contract(c.new_value)}`;
+}
+
+let changesSeq = 0;
+async function loadChanges() {
+  byId("changes-team").replaceChildren(
+    h("option", { value: "" }, "All teams"),
+    ...state.teams.map((t) => h("option", { value: t.id, selected: t.id === state.changesTeam }, t.name)));
+  segmented(byId("changes-kind"), [["all", "All"], ["roster", "Roster moves"], ["salary", "Salary"], ["contract", "Contract"]],
+    state.changesKind, (v) => { state.changesKind = v; loadChanges(); });
+  const out = byId("changes-table");
+  const token = ++changesSeq;
+  out.classList.add("is-loading");
+  try {
+    const list = await api.get("/changes", { team_id: state.changesTeam || null, kind: CHANGE_FILTERS[state.changesKind] });
+    if (token !== changesSeq) return;
+    out.replaceChildren(list.length ? h("table", { class: "data-table" },
+      h("thead", {}, h("tr", {}, ["When", "Player", "Team", "Change", "By"].map((label) => h("th", { class: "left" }, label)))),
+      h("tbody", {}, list.map((c) => h("tr", {},
+        h("td", { class: "left" }, new Date(c.changed_at).toLocaleString()),
+        h("td", { class: "left" }, playerLink({ fantrax_id: c.player_id, name: c.player_name || c.player_id })),
+        h("td", { class: "left" }, c.team_name || "–"),
+        h("td", { class: "left" }, describeChange(c)),
+        h("td", { class: "left" }, c.source)))))
+      : h("div", { class: "empty" }, "No changes yet. They're recorded from the next sync or contract edit."));
+  } catch (err) {
+    if (token === changesSeq) out.replaceChildren(h("div", { class: "empty" }, err.message));
+  } finally {
+    if (token === changesSeq) out.classList.remove("is-loading");
+  }
+}
 
 /* ================================================================ sign-in */
 

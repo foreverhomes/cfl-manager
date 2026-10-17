@@ -796,4 +796,8 @@ def sync_all(conn: Connection, settings: Settings, resources: Optional[Sequence[
         "salaries": lambda: sync_salaries(conn, settings),
     }
     # Always run in dependency order regardless of the order requested.
-    return [_logged(conn, name, steps[name]) for name in RESOURCES if name in wanted]
+    results = [_logged(conn, name, steps[name]) for name in RESOURCES if name in wanted]
+    from . import analysis, changes   # both import this module, so they can't be imported at the top
+    results.append(_logged(conn, "changes",
+                           lambda: changes.record(conn, analysis.load_context(conn, settings), "Sync")))
+    return results
