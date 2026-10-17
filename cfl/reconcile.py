@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from . import analysis as A
 from .contracts import validate
 from .db import Connection, rows, transaction, upsert
-from .sync import MAX_CONTRACT_YEARS, _money, _season_start, normalize_name, now_iso
+from .sync import MAX_CONTRACT_YEARS, _money, _season_start, league_season, normalize_name, now_iso
 
 # Sheet contract types the app tracks separately; every other signed type is a standard contract.
 SHEET_TYPES = {"elc": "ELC", "in-season ufa": "IN_SEASON_UFA"}
@@ -320,7 +320,7 @@ def reconcile(conn: Connection, ctx: A.Context, sheet_rows: List[List[str]]) -> 
 
 def import_contracts(conn: Connection, league_id: str, imports: Sequence[Dict[str, Any]]) -> int:
     """Save the sheet's contract for each import as an app contract record, all in one transaction."""
-    ts = now_iso()
+    ts, season = now_iso(), league_season(conn, league_id)
     records = []
     for r in imports:
         note = "{}, row {}".format(NOTE_PREFIX, r["sheet_row"])
@@ -330,7 +330,8 @@ def import_contracts(conn: Connection, league_id: str, imports: Sequence[Dict[st
             note += ": " + r["sheet_note"]
         records.append({"league_id": league_id, "player_id": r["fantrax_id"],
                         "salaries": json.dumps(validate(r["sheet"], r["sheet_contract_type"])),
-                        "contract_type": r["sheet_contract_type"], "note": note, "updated_at": ts})
+                        "contract_type": r["sheet_contract_type"], "note": note, "updated_at": ts,
+                        "season_year": season})
     with transaction(conn):
         upsert(conn, "contract_overrides", records, ["league_id", "player_id"])
     return len(records)

@@ -552,6 +552,62 @@ def test_contract_edits_override_the_sheet_and_follow_league_rules(conn, tmp_pat
     assert (ctx.players["f1"].contract_source, ctx.players["f1"].contract_years) == ("sheet", 5)
 
 
+def test_app_contracts_lose_the_seasons_that_have_passed(conn, tmp_path):
+    from cfl import contracts as C
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    _player(conn, "f2", "Snuggerud, Jimmy", "STL", "RW")
+    for fid, pos in (("f1", "G"), ("f2", "RW,F")):
+        conn.execute("INSERT INTO league_players VALUES (?, ?, ?, 'T')", (LEAGUE, fid, pos))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', 'ACTIVE')", (LEAGUE, fid))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Jimmy Snuggerud', 'f2', 'ROSTER', 4, 3, '[4,4,4]')",
+                 (LEAGUE,))
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+    C.save_override(conn, LEAGUE, "f1", [5, 5])                    # saved in 2026/27
+    C.save_override(conn, LEAGUE, "f2", [6])
+    assert conn.execute("SELECT season_year FROM contract_overrides WHERE player_id='f1'").fetchone()[0] == 2026
+
+    for season, f1 in ((2026, [5, 5]), (2027, [5]), (2028, [])):
+        conn.execute("UPDATE league SET season_year=? WHERE id=?", (season, LEAGUE))
+        conn.commit()
+        ctx = A.load_context(conn, settings)
+        p, detail = ctx.players["f1"], C.contract_detail(conn, ctx, "f1")
+        assert p.contract_salaries == f1 and p.contract_years == (len(f1) or None)
+        assert (detail["override"] or {}).get("salaries") == (f1 or None)
+        assert (p.contract_source, p.salary) == (("override", 5) if f1 else (None, None))
+    assert detail["effective"] is None                              # run out: no contract, not 2026's
+    # f2's 1-season edit has run out too; the sheet's contract is his again.
+    assert (ctx.players["f2"].contract_source, ctx.players["f2"].contract_salaries) == ("sheet", [4, 4, 4])
+
+
+def test_contract_records_from_before_seasons_were_kept_belong_to_the_current_season(tmp_path):
+    import sqlite3
+    from cfl.db import rows
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(str(path))
+    old.executescript("""
+        CREATE TABLE league (id TEXT PRIMARY KEY, name TEXT NOT NULL, season_year INTEGER);
+        CREATE TABLE contract_overrides (league_id TEXT NOT NULL, player_id TEXT NOT NULL, salaries TEXT NOT NULL,
+            contract_type TEXT NOT NULL DEFAULT 'STANDARD', note TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY (league_id, player_id));
+        INSERT INTO league VALUES ('L1', 'Test', 2026);
+        INSERT INTO contract_overrides VALUES ('L1', 'f1', '[5,5]', 'STANDARD', NULL, 'x');
+    """)
+    old.close()
+    c = connect(path)
+    assert rows(c, "SELECT player_id, season_year FROM contract_overrides") == [{"player_id": "f1", "season_year": 2026}]
+    c.execute("UPDATE league SET season_year=2027")
+    c.execute("INSERT INTO contract_overrides (league_id, player_id, salaries, updated_at) VALUES ('L1', 'f2', '[1]', 'x')")
+    c.commit()
+    c.close()
+    c = connect(path)                                               # only filled in when the column was added
+    assert rows(c, "SELECT player_id, season_year FROM contract_overrides ORDER BY player_id") == [
+        {"player_id": "f1", "season_year": 2026}, {"player_id": "f2", "season_year": None}]
+    c.close()
+
+
 def test_contract_edit_api_sets_years_and_keeps_the_salary(conn, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from cfl.api import app
@@ -682,7 +738,7 @@ def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):
     _player(conn, "f1", "Geekie, Morgan", "BOS", "C")
     conn.execute("INSERT INTO league_players VALUES (?, 'f1', 'C,F', 'T')", (LEAGUE,))
     conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f1', 'C', 'ACTIVE')", (LEAGUE,))
-    conn.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[5,5,5]', 'STANDARD', NULL, 'x')", (LEAGUE,))
+    conn.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[5,5,5]', 'STANDARD', NULL, 'x', 2026)", (LEAGUE,))
     conn.commit()
     sent = []
 
@@ -855,6 +911,35 @@ def test_changes_record_saves_a_baseline_then_logs_what_changed_since(conn, tmp_
     assert json.loads(logged["new_value"]) == {"salaries": [9, 9], "contract_type": "STANDARD"}
 
 
+def test_a_new_season_is_not_logged_as_a_change_to_every_contract(conn, tmp_path):
+    from cfl import changes
+    from cfl import contracts as C
+    from cfl.db import rows
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    for fid, name in (("f1", "Daccord, Joey"), ("f2", "Snuggerud, Jimmy")):
+        _player(conn, fid, name, "SEA", "C")
+        conn.execute("INSERT INTO league_players VALUES (?, ?, 'C,F', 'T')", (LEAGUE, fid))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'C', 'ACTIVE')", (LEAGUE, fid))
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+    C.save_override(conn, LEAGUE, "f1", [5, 5])
+    C.save_override(conn, LEAGUE, "f2", [3], "ELC")
+    # A snapshot saved before snapshots carried their season: taken as this season's.
+    upsert(conn, "app_state", [{"key": "changes:" + LEAGUE, "updated_at": "x",
+                                "value": json.dumps(changes.snapshot(A.load_context(conn, settings)))}], ["key"])
+    conn.commit()
+    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 0}
+
+    conn.execute("UPDATE league SET season_year=2027 WHERE id=?", (LEAGUE,))
+    conn.commit()
+    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 0}
+    C.save_override(conn, LEAGUE, "f1", [7])                       # a real change, in the new season
+    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 1}
+    (logged,) = rows(conn, "SELECT * FROM player_changes")
+    assert (logged["player_id"], logged["kind"]) == ("f1", "salary")
+    assert json.loads(logged["old_value"])["salaries"] == [5]
+
+
 def test_every_sync_ends_by_recording_player_changes(conn, tmp_path, monkeypatch):
     import cfl.sync as sync
     monkeypatch.setattr(sync, "sync_standings", lambda conn, fx: {"teams": 0})
@@ -879,7 +964,7 @@ def test_copy_database_replaces_every_table_and_numbers_new_sync_runs_after_the_
     from cfl.sync import _logged
     src = connect(tmp_path / "src.db")
     _player(src, "f1", "Geekie, Morgan", "BOS", "C")
-    src.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[5,5]', 'STANDARD', 'kept', 'x')", (LEAGUE,))
+    src.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[5,5]', 'STANDARD', 'kept', 'x', 2026)", (LEAGUE,))
     _logged(src, "rosters", lambda: {"roster_items": 1})
     src.commit()
 

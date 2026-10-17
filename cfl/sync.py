@@ -678,22 +678,38 @@ def app_owned_teams(conn: Connection, settings: Settings) -> Dict[str, Dict[str,
     return out
 
 
+def league_season(conn: Connection, league_id: str) -> Optional[int]:
+    """The league's current season (2026 for 2026/27), as of the last league sync."""
+    return (row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,)) or {}).get("season_year")
+
+
+def current_salaries(record: Dict[str, Any], season_year: Optional[int]) -> List[float]:
+    """An app contract record's salaries from season_year on. Its list starts at the season it was
+    saved in, so the seasons since then have passed; empty once the contract has run out."""
+    salaries = json.loads(record["salaries"])
+    if season_year and record.get("season_year"):
+        salaries = salaries[max(season_year - record["season_year"], 0):]
+    return salaries
+
+
 def adopt_sheet_contracts(conn: Connection, league_id: str, team_id: str) -> Dict[str, Any]:
     """Move a team's sheet contracts into the app's own contract records (contract_overrides), once.
 
-    Players who already have an app record keep it. Buyout rows stay in `contracts`, since they
-    have no player to attach to. Returns what was adopted.
+    Players who already have an app record keep it, unless it has run out. Buyout rows stay in
+    `contracts`, since they have no player to attach to. Returns what was adopted.
     """
+    season = league_season(conn, league_id)
     sheet_rows = rows(conn, "SELECT * FROM contracts WHERE league_id=? AND team_id=? AND section != 'BUYOUT'",
                       (league_id, team_id))
-    have = {r["player_id"] for r in rows(conn, "SELECT player_id FROM contract_overrides WHERE league_id=?",
-                                         (league_id,))}
+    have = {r["player_id"] for r in rows(conn, "SELECT * FROM contract_overrides WHERE league_id=?", (league_id,))
+            if current_salaries(r, season)}
     adopt = [r for r in sheet_rows if r["player_id"] and r["player_id"] not in have]
     ts = now_iso()
     with transaction(conn):
         upsert(conn, "contract_overrides", [{
             "league_id": league_id, "player_id": r["player_id"], "salaries": r["salaries"],
-            "contract_type": "STANDARD", "note": None, "updated_at": ts} for r in adopt], ["league_id", "player_id"])
+            "contract_type": "STANDARD", "note": None, "updated_at": ts, "season_year": season}
+            for r in adopt], ["league_id", "player_id"])
         conn.execute("DELETE FROM contracts WHERE league_id=? AND team_id=? AND section != 'BUYOUT'", (league_id, team_id))
     return {"adopted": len(adopt), "already_in_app": sum(1 for r in sheet_rows if r["player_id"] in have),
             "unmatched_dropped": [r["sheet_name"] for r in sheet_rows if not r["player_id"]]}

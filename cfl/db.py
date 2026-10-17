@@ -208,10 +208,11 @@ CREATE INDEX IF NOT EXISTS idx_contracts_player ON contracts(player_id);
 CREATE TABLE IF NOT EXISTS contract_overrides (
     league_id       TEXT NOT NULL,
     player_id       TEXT NOT NULL,
-    salaries        TEXT NOT NULL,      -- JSON list, current season first
+    salaries        TEXT NOT NULL,      -- JSON list, from season_year on
     contract_type   TEXT NOT NULL DEFAULT 'STANDARD',   -- STANDARD / ELC / IN_SEASON_UFA
     note            TEXT,
     updated_at      TEXT NOT NULL,
+    season_year     INTEGER,            -- the league season it was saved in (salaries[0]); see current_salaries
     PRIMARY KEY (league_id, player_id)
 );
 
@@ -288,6 +289,14 @@ CREATE TABLE IF NOT EXISTS sync_log (
 ADDED_COLUMNS = {
     "teams": {"salary_cap": "REAL"},
     "players": {"birth_date": "TEXT", "birth_date_source": "TEXT"},
+    "contract_overrides": {"season_year": "INTEGER"},
+}
+# Filling in an added column for the rows already there, run once, right after the column is added.
+BACKFILLS = {
+    # Every record saved before the column existed was saved in the league's current season.
+    ("contract_overrides", "season_year"): "UPDATE contract_overrides SET season_year = (SELECT league.season_year "
+                                           "FROM league WHERE league.id = contract_overrides.league_id) "
+                                           "WHERE season_year IS NULL",
 }
 
 TABLES = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", SCHEMA)
@@ -394,6 +403,8 @@ def _add_missing_columns(conn: Connection) -> None:
                 if isinstance(conn, PostgresConnection):
                     sql_type = _postgres_ddl(sql_type)
                 conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, sql_type))
+                if (table, column) in BACKFILLS:
+                    conn.execute(BACKFILLS[table, column])
 
 
 def connect(target: Union[Path, str]) -> Connection:

@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .config import Settings
 from .db import Connection, row, rows
-from .sync import MAX_CONTRACT_YEARS, app_owned_teams, stat_seasons
+from .sync import MAX_CONTRACT_YEARS, app_owned_teams, current_salaries, stat_seasons
 
 # Fantrax category short name -> skater_stats column.
 SKATER_STATS = {
@@ -390,14 +390,15 @@ def load_context(conn: Connection, settings: Settings) -> Context:
         if p is not None and (p.salary is None or p.team_id == c["team_id"]):
             p.salary, p.contract_years, p.contract_salaries = c["salary"], c["years_remaining"], salaries
             p.contract_source = "sheet"
-    # Contracts kept in the app (edits, or every contract of an app-owned team) win over the sheets.
+    # Contracts kept in the app (edits, or every contract of an app-owned team) win over the sheets,
+    # for the seasons they still cover.
     ctx.app_owned = set(app_owned_teams(conn, settings))
     ctx.contract_teams |= ctx.app_owned
     for o in rows(conn, "SELECT * FROM contract_overrides WHERE league_id=?", (league_id,)):
         p = players.get(o["player_id"])
-        if p is None:
+        salaries = current_salaries(o, league["season_year"])
+        if p is None or not salaries:
             continue
-        salaries = json.loads(o["salaries"])
         p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), salaries
         p.contract_type = o["contract_type"]
         p.contract_source = "app" if p.team_id in ctx.app_owned else "override"
