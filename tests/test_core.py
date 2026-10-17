@@ -1203,3 +1203,82 @@ def test_reconcile_imports_missing_contracts_and_lists_the_rest(conn, tmp_path):
     assert note.startswith("From the CFL Contracts sheet, row 4 (length not posted; 1 season assumed)")
     again = R.reconcile(conn, ctx, CONTRACT_SHEET)
     assert again["imports"] == [] and again["agree"] == 4 and len(again["review"]) == 2
+
+
+# --------------------------------------------------------------------------- draft picks
+
+
+def _pick(year, rnd, team):
+    return {"draft_year": year, "round": rnd, "original_team_id": team}
+
+
+def _owned(picks):
+    return sorted((p["draft_year"], p["round"], p["original_team_id"]) for p in picks)
+
+
+def test_every_team_starts_with_five_picks_in_each_upcoming_draft_and_trades_move_them(conn):
+    from cfl import picks as PK
+    teams = ["t1", "t2", "t3"]
+    start = PK.all_picks(conn, LEAGUE, teams, 2026)
+    assert PK.draft_years(2026) == [2027, 2028, 2029]
+    assert len(start) == 3 * 5 * 3 and all(p["owner_team_id"] == p["original_team_id"] for p in start)
+
+    deal = PK.move(conn, LEAGUE, teams, 2026, "trade",
+                   [("t1", "t2", [_pick(2027, 1, "t1")]), ("t2", "t1", [_pick(2028, 2, "t2"), _pick(2027, 5, "t2")])],
+                   "for a 2nd and a 5th", "Boss")
+    owner = {(p["draft_year"], p["round"], p["original_team_id"]): p["owner_team_id"]
+             for p in PK.all_picks(conn, LEAGUE, teams, 2026)}
+    assert (owner[(2027, 1, "t1")], owner[(2028, 2, "t2")], owner[(2027, 5, "t2")]) == ("t2", "t1", "t1")
+    PK.move(conn, LEAGUE, teams, 2026, "rfa", [("t2", "t3", [_pick(2027, 1, "t1")])], "Lucas Raymond", "Boss")
+    assert PK.latest_moves(conn, LEAGUE)[(2027, 1, "t1")]["to_team_id"] == "t3"      # passed on: t3 has t1's 1st
+
+    with pytest.raises(ValueError, match="doesn't own"):                             # t1 sent it away
+        PK.move(conn, LEAGUE, teams, 2026, "trade", [("t1", "t2", [_pick(2027, 1, "t1")])], None, "Boss")
+    with pytest.raises(ValueError, match="no 2031 round 1"):                         # outside the drafts in range
+        PK.move(conn, LEAGUE, teams, 2026, "trade", [("t1", "t2", [_pick(2031, 1, "t1")])], None, "Boss")
+    with pytest.raises(ValueError, match="one way"):
+        PK.move(conn, LEAGUE, teams, 2026, "rfa", [("t1", "t2", [_pick(2028, 1, "t1")]),
+                                                   ("t2", "t1", [_pick(2028, 1, "t2")])], None, "Boss")
+    with pytest.raises(ValueError, match="moved again"):                             # t1's 1st went on to t3
+        PK.undo(conn, LEAGUE, deal)
+    assert PK.all_picks(conn, LEAGUE, teams, 2027)[0]["draft_year"] == 2028           # a new season, a new draft
+
+
+def test_gms_send_their_own_picks_see_every_teams_and_undo_their_own_deals(conn, tmp_path, monkeypatch):
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    boss, _ = _signed_in("boss")
+    boss.post("/admin/users", json={"email": "gm@example.com", "team_id": "t1"})
+    gm, _ = _signed_in("gm")
+    mine = gm.get("/teams/me/picks").json()
+    assert (mine["can_edit"], mine["draft_years"], len(mine["owned"]), mine["sent"]) == (True, [2027, 2028, 2029], 15, [])
+    assert gm.get("/teams/t2/picks").json()["can_edit"] is False                     # every team's, read-only
+
+    trade = {"kind": "trade", "team_id": "t1", "other_team_id": "t2", "send": [_pick(2027, 1, "t1")]}
+    assert gm.post("/picks/deals", json={**trade, "team_id": "t2", "other_team_id": "t1"}).status_code == 403
+    assert gm.post("/picks/deals", json={**trade, "receive": [_pick(2027, 2, "t2")]}).status_code == 403
+    assert gm.post("/picks/deals", json={**trade, "kind": "rfa", "receive": [_pick(2027, 2, "t2")]}).status_code == 403
+    assert gm.post("/picks/deals", json={**trade, "send": [_pick(2027, 1, "t2")]}).status_code == 400   # not t1's
+
+    after = gm.post("/picks/deals", json={**trade, "note": "for Snuggerud"}).json()
+    assert (len(after["owned"]), after["sent"][0]["owner_team_name"]) == (14, "Two")
+    theirs = gm.get("/teams/t2/picks").json()
+    got = [p for p in theirs["owned"] if p["original_team_id"] == "t1"]
+    assert [(p["draft_year"], p["round"], p["last_move"]["from_team_name"], p["last_move"]["kind"]) for p in got] == [
+        (2027, 1, "One", "trade")]
+    deal = theirs["deals"][0]
+    assert (deal["note"], deal["source"], deal["can_undo"]) == ("for Snuggerud", "Gm", True)
+
+    boss.post("/picks/deals", json={"kind": "rfa", "team_id": "t2", "other_team_id": "t1",
+                                    "send": [_pick(2028, 3, "t2")], "note": "Daccord"})       # the admin sends anyone's
+    assert [d["can_undo"] for d in gm.get("/teams/me/picks").json()["deals"]] == [False, True]   # t2 sent the RFA comp
+    picks = gm.get("/changes", params={"kind": "pick"}).json()
+    assert [(c["pick"]["draft_year"], c["pick"]["round"], c["pick"]["move"], c["team_name"], c["source"]) for c in picks] == [
+        (2028, 3, "rfa", "One", "Boss"), (2027, 1, "trade", "Two", "Gm")]
+    assert gm.get("/changes", params={"kind": "salary"}).json() == []                 # picks only when asked for
+    assert len(gm.get("/changes").json()) == 2
+
+    assert gm.delete("/picks/deals/{}".format(picks[0]["pick"]["deal_id"])).status_code == 403   # t2 sent that one
+    assert gm.delete("/picks/deals/{}".format(deal["deal_id"])).json() == {"ok": True, "picks": 1}
+    assert len(gm.get("/teams/me/picks").json()["owned"]) == 16                       # own 15, plus t2's 3rd
+    assert gm.delete("/picks/deals/{}".format(deal["deal_id"])).status_code == 404

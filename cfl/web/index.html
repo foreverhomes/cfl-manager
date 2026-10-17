@@ -147,6 +147,17 @@
         </header>
         <div id="players-table" class="scroll-x"></div>
       </article>
+      <!-- The chosen team's picks in the upcoming drafts. Hidden for "All teams". -->
+      <article class="card" id="picks-card" hidden>
+        <header class="card-head">
+          <div>
+            <h2>Draft picks</h2>
+            <p class="card-sub" id="picks-sub"></p>
+          </div>
+          <div id="picks-actions"></div>
+        </header>
+        <div id="picks-body"></div>
+      </article>
     </section>
 
     <!-- Changes: roster moves and contract changes, newest first -------- -->
@@ -165,7 +176,7 @@
         <header class="card-head">
           <div>
             <h2>Player and contract changes</h2>
-            <p class="card-sub">Newest first. Roster moves come from Fantrax syncs; salaries and contracts from the salary sheets and from edits in this app.</p>
+            <p class="card-sub">Newest first. Roster moves come from Fantrax syncs; salaries and contracts from the salary sheets and from edits in this app; draft picks from deals recorded on the Players &amp; cap tab.</p>
           </div>
         </header>
         <div id="changes-table" class="scroll-x"></div>
@@ -238,6 +249,10 @@
 
   <dialog id="player-dialog" class="dialog" aria-labelledby="pd-title">
     <div id="player-dialog-body"></div>
+  </dialog>
+
+  <dialog id="picks-dialog" class="dialog" aria-labelledby="pk-title">
+    <div id="picks-dialog-body"></div>
   </dialog>
 
   <div class="tooltip" id="tooltip" role="tooltip" hidden></div>

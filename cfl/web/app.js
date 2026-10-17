@@ -1219,6 +1219,7 @@ async function loadPlayers() {
   if (!team) views.push(["fa", "Free agents"]);
   if (team && state.playersView === "fa") state.playersView = "all";
   segmented(byId("players-view"), views, state.playersView, (v) => { state.playersView = v; loadPlayers(); });
+  loadPicks();
   if (!team && q.length < 2) {
     byId("players-title").textContent = "Players";
     out.replaceChildren(h("div", { class: "empty" }, "Type at least two letters of a name, or pick a team."));
@@ -1420,12 +1421,229 @@ function afterContractChange(message) {
   else loadDashboard();
 }
 
+/* ================================================================ draft picks */
+
+const MOVE_LABEL = { trade: "Trade", rfa: "RFA compensation" };
+const shortDate = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+// "2027 R1", plus whose pick it was unless it's the holder's own. withYear: false where a row already says the year.
+function pickLabel(p, holder, withYear = true) {
+  return (withYear ? `${p.draft_year} ` : "") + `R${p.round}` + (p.original_team_id === holder ? "" : ` (${p.original_team_name})`);
+}
+
+let picksSeq = 0;
+let picksShown = null;   // the team whose picks the card shows
+async function loadPicks({ force = false } = {}) {
+  const team = state.playersTeam;
+  byId("picks-card").hidden = !team;
+  if (!team || (team === picksShown && !force)) return;
+  const body = byId("picks-body");
+  const token = ++picksSeq;
+  body.classList.add("is-loading");
+  try {
+    const res = await api.get(`/teams/${encodeURIComponent(team)}/picks`);
+    if (token !== picksSeq) return;
+    picksShown = team;
+    renderPicks(res);
+  } catch (err) {
+    if (token === picksSeq) body.replaceChildren(h("div", { class: "empty" }, err.message));
+  } finally {
+    if (token === picksSeq) body.classList.remove("is-loading");
+  }
+}
+
+// Own picks it still holds, picks from other teams, and (dashed) own picks it sent away.
+function pickChip(p, teamId) {
+  const own = p.original_team_id === teamId, gone = p.owner_team_id !== teamId, m = p.last_move;
+  const chip = h("span", { class: "pick-chip " + (gone ? "gone" : own ? "own" : "got"), tabindex: "0" },
+    gone ? `→ ${p.owner_team_name}` : own ? "Own" : p.original_team_name);
+  bindTip(chip, () => tipContent(`${p.draft_year} round ${p.round}`,
+    own ? (gone ? "Own pick, sent away" : "Own pick") : `${possessive(p.original_team_name)} pick`,
+    m ? [
+      ...(gone ? [["Now with", p.owner_team_name]] : []),
+      [MOVE_LABEL[m.kind], `${m.from_team_name} → ${p.owner_team_name}`],
+      ["When", shortDate(m.moved_at)],
+      ...(m.note ? [["Note", m.note]] : []),
+      ["Recorded by", m.source],
+    ] : []));
+  return chip;
+}
+
+// "One → Two: 2027 R1; Two → One: 2028 R2 (Skullets)"
+function describeDeal(d) {
+  const legs = new Map();
+  for (const m of d.moves) {
+    const leg = `${m.from_team_id}>${m.to_team_id}`;
+    if (!legs.has(leg)) legs.set(leg, { from: m.from_team_name, to: m.to_team_name, picks: [] });
+    legs.get(leg).picks.push(pickLabel(m, m.from_team_id));
+  }
+  return [...legs.values()].map((l) => `${l.from} → ${l.to}: ${l.picks.join(", ")}`).join("; ");
+}
+
+function renderPicks(res) {
+  const count = res.owned.length;
+  byId("picks-sub").textContent = `${count} pick${count === 1 ? "" : "s"} in the next ${res.draft_years.length} drafts. ` +
+    `Every team gets ${res.rounds} a year; they move in trades and as RFA compensation.`;
+  byId("picks-actions").replaceChildren(...(res.can_edit
+    ? [h("button", { class: "btn small", type: "button", onclick: () => openPickDeal(res) }, "Trade or send picks…")] : []));
+  const rounds = Array.from({ length: res.rounds }, (_, i) => i + 1);
+  const at = (list, y, r) => list.filter((p) => p.draft_year === y && p.round === r);
+  const ownFirst = (a, b) => (b.original_team_id === res.team_id) - (a.original_team_id === res.team_id);
+  const grid = h("div", { class: "scroll-x" }, h("table", { class: "data-table picks-table" },
+    h("thead", {}, h("tr", {}, h("th", { class: "left narrow" }, "Draft"),
+      rounds.map((r) => h("th", { class: "left" }, `Round ${r}`)), h("th", { class: "narrow" }, "Picks"))),
+    h("tbody", {}, res.draft_years.map((y) => h("tr", {},
+      h("td", { class: "left pick-year" }, String(y)),
+      rounds.map((r) => {
+        const chips = [...at(res.owned, y, r).sort(ownFirst), ...at(res.sent, y, r)].map((p) => pickChip(p, res.team_id));
+        return h("td", { class: "left" }, chips.length ? chips : h("span", { class: "sub" }, "–"));
+      }),
+      h("td", { class: "num" }, String(res.owned.filter((p) => p.draft_year === y).length)))))));
+  const legend = h("div", { class: "picks-legend" },
+    h("span", { class: "pick-chip own" }, "Own"), "its own pick",
+    h("span", { class: "pick-chip got" }, "Team"), "from that team",
+    h("span", { class: "pick-chip gone" }, "→ Team"), "sent away, not counted");
+  const deals = !res.deals.length ? null : h("div", { class: "pick-deals" },
+    h("h3", {}, "Pick deals"),
+    h("div", { class: "scroll-x" }, h("table", { class: "data-table" },
+      h("thead", {}, h("tr", {}, ["When", "Deal", "Note", "By"].map((c) => h("th", { class: "left" }, c)), h("th", {}, ""))),
+      h("tbody", {}, res.deals.map((d) => h("tr", {},
+        h("td", { class: "left" }, shortDate(d.moved_at)),
+        h("td", { class: "left wrap" }, h("strong", {}, MOVE_LABEL[d.kind]), ` · ${describeDeal(d)}`),
+        h("td", { class: "left wrap" }, d.note || ""),
+        h("td", { class: "left" }, d.source),
+        h("td", {}, d.can_undo ? h("button", { class: "btn small ghost", type: "button", onclick: () => undoDeal(d) }, "Undo") : "")))))));
+  byId("picks-body").replaceChildren(grid, legend, ...(deals ? [deals] : []));
+}
+
+async function undoDeal(d) {
+  const ok = await confirmDialog({
+    title: "Undo this pick deal?", danger: true, confirmLabel: "Undo deal",
+    body: [h("p", { class: "dialog-text" }, `The picks go back to the teams that sent them. ${describeDeal(d)}.`)],
+  });
+  if (!ok) return;
+  try {
+    await api.del(`/picks/deals/${encodeURIComponent(d.deal_id)}`);
+    byId("sync-status").textContent = "Undid the pick deal.";
+    loadPicks({ force: true });
+  } catch (err) {
+    showError(err);
+  }
+}
+
+// Record a trade (picks both ways; the other team's side needs its GM or the admin) or RFA
+// compensation (this team signed another team's RFA and sends it picks).
+function openPickDeal(res) {
+  const dialog = byId("picks-dialog");
+  let kind = "trade";
+  let partner = null;   // the other team's picks
+  const sendSel = new Set(), getSel = new Set();
+  const key = (p) => `${p.draft_year}|${p.round}|${p.original_team_id}`;
+  const ref = (k) => { const [y, r, t] = k.split("|"); return { draft_year: Number(y), round: Number(r), original_team_id: t }; };
+
+  const kindEl = h("div", { class: "segmented", role: "group", "aria-label": "Kind of deal" });
+  const teamLabel = h("span", { class: "field-label" });
+  const teamSel = h("select", { "aria-label": "Other team" }, h("option", { value: "" }, "Pick a team"),
+    state.teams.filter((t) => t.id !== res.team_id).map((t) => h("option", { value: t.id }, t.name)));
+  const sendBox = h("div", { class: "pick-picker" });
+  const getTitle = h("h3", {});
+  const getBox = h("div", { class: "pick-picker" });
+  const getSection = h("div", {}, getTitle, getBox);
+  const help = h("p", { class: "card-sub" });
+  const note = h("input", { type: "text", "aria-label": "Note" });
+  const error = h("div", { class: "banner error", hidden: true });
+  const save = h("button", { class: "btn", type: "button", disabled: true }, "Record deal");
+  const showErr = (message) => { error.textContent = message; error.hidden = false; };
+  const refreshSave = () => { save.disabled = !teamSel.value || !(sendSel.size || (kind === "trade" && getSel.size)); };
+
+  function picker(box, picks, holder, selected) {
+    box.replaceChildren(...res.draft_years.map((y) => {
+      const list = picks.filter((p) => p.draft_year === y);
+      return h("div", { class: "pick-year-row" }, h("span", { class: "pick-year" }, String(y)),
+        list.length ? list.map((p) => {
+          const k = key(p);
+          const input = h("input", { type: "checkbox", checked: selected.has(k) });
+          input.addEventListener("change", () => { if (input.checked) selected.add(k); else selected.delete(k); refreshSave(); });
+          return h("label", { class: "check" }, input, pickLabel(p, holder, false));
+        }) : h("span", { class: "sub" }, "None left"));
+    }));
+  }
+  function renderSides() {
+    const other = partner ? partner.team_name : null;
+    segmented(kindEl, Object.entries(res.kinds), kind, (v) => { kind = v; renderSides(); });
+    teamLabel.textContent = kind === "rfa" ? "The RFA's old team (gets the picks)" : "Trade with";
+    help.textContent = kind === "rfa"
+      ? `${res.team_name} signed another team's RFA and sends that team these picks as compensation.`
+      : "Picks move as soon as you record the deal. You can undo it from the Pick deals list.";
+    note.placeholder = kind === "rfa" ? "Which RFA? e.g. Lucas Raymond" : "Optional, e.g. the players in the deal";
+    getSection.hidden = kind !== "trade";
+    getTitle.textContent = `${other || "The other team"} sends`;
+    if (!teamSel.value) getBox.replaceChildren(h("p", { class: "sub" }, "Pick the other team first."));
+    else if (!partner) getBox.replaceChildren(h("p", { class: "sub" }, "Loading…"));
+    else if (!partner.can_edit) getBox.replaceChildren(h("p", { class: "sub" },
+      `${possessive(other)} GM records the picks they send, from their own team. Or ask the admin.`));
+    else picker(getBox, partner.owned, partner.team_id, getSel);
+    refreshSave();
+  }
+  teamSel.addEventListener("change", async () => {
+    const id = teamSel.value;
+    partner = null;
+    getSel.clear();
+    renderSides();
+    if (!id) return;
+    try {
+      const p = await api.get(`/teams/${encodeURIComponent(id)}/picks`);
+      if (teamSel.value === id) { partner = p; renderSides(); }
+    } catch (err) {
+      showErr(err.message);
+    }
+  });
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      const out = await api.post("/picks/deals", { kind, team_id: res.team_id, other_team_id: teamSel.value,
+        send: [...sendSel].map(ref), receive: kind === "trade" ? [...getSel].map(ref) : [], note: note.value });
+      dialog.close();
+      picksShown = out.team_id;
+      renderPicks(out);
+      byId("sync-status").textContent = `Recorded the ${MOVE_LABEL[kind].toLowerCase()}. It shows on the Changes tab.`;
+    } catch (err) {
+      showErr(err.message);
+      refreshSave();
+    }
+  });
+
+  picker(sendBox, res.owned, res.team_id, sendSel);
+  renderSides();
+  byId("picks-dialog-body").replaceChildren(
+    h("header", { class: "dialog-head" },
+      h("div", {}, h("h2", { id: "pk-title" }, "Trade or send picks"), help),
+      h("button", { class: "btn ghost small", type: "button", "aria-label": "Close", onclick: () => dialog.close() }, "✕")),
+    h("div", { class: "dialog-row" },
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "Kind"), kindEl),
+      h("label", { class: "field grow" }, teamLabel, teamSel)),
+    h("h3", { class: "picker-title" }, `${res.team_name} sends`),
+    sendBox,
+    getSection,
+    h("div", { class: "dialog-row" }, h("label", { class: "field grow" }, h("span", { class: "field-label" }, "Note"), note)),
+    error,
+    h("div", { class: "dialog-actions" },
+      h("span", { class: "spacer" }),
+      h("button", { class: "btn ghost", type: "button", onclick: () => dialog.close() }, "Cancel"),
+      save));
+  dialog.showModal();
+}
+
 /* ================================================================ changes */
 
-const CHANGE_FILTERS = { all: [], roster: ["added", "dropped", "traded"], salary: ["salary"], contract: ["contract"] };
+const CHANGE_FILTERS = {
+  all: [], roster: ["added", "dropped", "traded"], salary: ["salary"], contract: ["contract"], picks: ["pick"],
+};
 const CHANGE_LABEL = { added: "Added", dropped: "Dropped", traded: "Traded", salary: "Salary", contract: "Contract" };
 
 function describeChange(c) {
+  if (c.kind === "pick") {
+    return `${MOVE_LABEL[c.pick.move]}: ${teamName(c.old_value)} → ${teamName(c.new_value)}` + (c.pick.note ? ` · ${c.pick.note}` : "");
+  }
   if (c.kind === "traded") return `Traded: ${teamName(c.old_value)} → ${teamName(c.new_value)}`;
   if (CHANGE_FILTERS.roster.includes(c.kind)) return CHANGE_LABEL[c.kind];
   const typeChanged = c.old_value.contract_type !== c.new_value.contract_type;   // then "Standard" is named too
@@ -1439,8 +1657,8 @@ async function loadChanges() {
   byId("changes-team").replaceChildren(
     h("option", { value: "" }, "All teams"),
     ...state.teams.map((t) => h("option", { value: t.id, selected: t.id === state.changesTeam }, t.name)));
-  segmented(byId("changes-kind"), [["all", "All"], ["roster", "Roster moves"], ["salary", "Salary"], ["contract", "Contract"]],
-    state.changesKind, (v) => { state.changesKind = v; loadChanges(); });
+  segmented(byId("changes-kind"), [["all", "All"], ["roster", "Roster moves"], ["salary", "Salary"], ["contract", "Contract"],
+    ["picks", "Draft picks"]], state.changesKind, (v) => { state.changesKind = v; loadChanges(); });
   const out = byId("changes-table");
   const token = ++changesSeq;
   out.classList.add("is-loading");
@@ -1448,14 +1666,17 @@ async function loadChanges() {
     const list = await api.get("/changes", { team_id: state.changesTeam || null, kind: CHANGE_FILTERS[state.changesKind] });
     if (token !== changesSeq) return;
     out.replaceChildren(list.length ? h("table", { class: "data-table" },
-      h("thead", {}, h("tr", {}, ["When", "Player", "Team", "Change", "By"].map((label) => h("th", { class: "left" }, label)))),
+      h("thead", {}, h("tr", {}, ["When", "Player or pick", "Team", "Change", "By"].map((label) => h("th", { class: "left" }, label)))),
       h("tbody", {}, list.map((c) => h("tr", {},
         h("td", { class: "left" }, new Date(c.changed_at).toLocaleString()),
-        h("td", { class: "left" }, playerLink({ fantrax_id: c.player_id, name: c.player_name || c.player_id })),
+        h("td", { class: "left" }, c.kind === "pick"
+          ? [`${c.pick.draft_year} round ${c.pick.round}`, h("div", { class: "sub" }, `${possessive(c.pick.original_team_name)} pick`)]
+          : playerLink({ fantrax_id: c.player_id, name: c.player_name || c.player_id })),
         h("td", { class: "left" }, c.team_name || "–"),
         h("td", { class: "left" }, describeChange(c)),
         h("td", { class: "left" }, c.source)))))
-      : h("div", { class: "empty" }, "No changes yet. They're recorded from the next sync or contract edit."));
+      : h("div", { class: "empty" }, state.changesKind === "picks" ? "No draft picks have changed hands yet."
+        : "No changes yet. They're recorded from the next sync or contract edit."));
   } catch (err) {
     if (token === changesSeq) out.replaceChildren(h("div", { class: "empty" }, err.message));
   } finally {

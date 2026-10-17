@@ -228,6 +228,22 @@ CREATE TABLE IF NOT EXISTS player_changes (
     changed_at      TEXT NOT NULL
 );
 
+-- Draft picks that changed hands (see picks.py). A pick no move mentions is still its original team's.
+CREATE TABLE IF NOT EXISTS pick_moves (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id       TEXT NOT NULL,
+    deal_id         TEXT NOT NULL,      -- picks moved together, in one trade or one RFA signing
+    draft_year      INTEGER NOT NULL,
+    round           INTEGER NOT NULL,
+    original_team_id TEXT NOT NULL,     -- the team the pick was first given to
+    from_team_id    TEXT NOT NULL,
+    to_team_id      TEXT NOT NULL,
+    kind            TEXT NOT NULL,      -- trade / rfa (compensation for signing another team's RFA)
+    note            TEXT,
+    source          TEXT NOT NULL,      -- who recorded it
+    moved_at        TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS nhl_games (
     game_id         INTEGER PRIMARY KEY,
     game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
@@ -418,7 +434,7 @@ def copy_database(src: Connection, dst: Connection) -> Dict[str, int]:
             counts[table] = len(data)
         if isinstance(dst, PostgresConnection):
             # Ids came across as they were; new rows are numbered after them.
-            for table in ("sync_log", "player_changes"):
+            for table in ("sync_log", "player_changes", "pick_moves"):
                 dst.execute("SELECT setval(pg_get_serial_sequence('{0}', 'id'), COALESCE(MAX(id), 0) + 1, false) "
                             "FROM {0}".format(table))
     return counts
