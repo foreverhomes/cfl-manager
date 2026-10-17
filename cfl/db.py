@@ -215,6 +215,19 @@ CREATE TABLE IF NOT EXISTS contract_overrides (
     PRIMARY KEY (league_id, player_id)
 );
 
+-- Player and contract changes, written by changes.record after syncs and contract edits.
+CREATE TABLE IF NOT EXISTS player_changes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id       TEXT NOT NULL,
+    player_id       TEXT NOT NULL,
+    team_id         TEXT,               -- his team after the change, or the one he left
+    kind            TEXT NOT NULL,      -- added / dropped / traded / salary / contract
+    old_value       TEXT,               -- JSON: a team id, or {"salaries", "contract_type"}
+    new_value       TEXT,               -- JSON
+    source          TEXT NOT NULL,      -- Sync, Contracts sheet, or who edited the contract
+    changed_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS nhl_games (
     game_id         INTEGER PRIMARY KEY,
     game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
@@ -404,9 +417,10 @@ def copy_database(src: Connection, dst: Connection) -> Dict[str, int]:
                             [tuple(r) for r in data])
             counts[table] = len(data)
         if isinstance(dst, PostgresConnection):
-            # sync_log ids came across as they were; new runs are numbered after them.
-            dst.execute("SELECT setval(pg_get_serial_sequence('sync_log', 'id'), COALESCE(MAX(id), 0) + 1, false) "
-                        "FROM sync_log")
+            # Ids came across as they were; new rows are numbered after them.
+            for table in ("sync_log", "player_changes"):
+                dst.execute("SELECT setval(pg_get_serial_sequence('{0}', 'id'), COALESCE(MAX(id), 0) + 1, false) "
+                            "FROM {0}".format(table))
     return counts
 
 

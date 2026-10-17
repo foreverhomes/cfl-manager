@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from . import analysis as A
 from . import auth
+from . import changes
 from . import contracts as C
 from . import publish as P
 from .auth import User
@@ -431,6 +432,13 @@ def _contract_detail(conn: Connection, ctx: A.Context, fantrax_id: str, user: Us
     return out
 
 
+def _record_edit(conn: Connection, user: User) -> A.Context:
+    """Log the contract edit just saved, as made by this user. Returns the context that includes it."""
+    ctx = _ctx(conn, get_settings())
+    changes.record(conn, ctx, user.name or user.email)
+    return ctx
+
+
 @data.get("/players/{fantrax_id}/contract")
 def player_contract(fantrax_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """The player's contract as the app uses it, what his salary sheet says, and any edit made here."""
@@ -457,7 +465,7 @@ def edit_player_contract(fantrax_id: str, edit: ContractEdit, background: Backgr
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
     background.add_task(auto_publish)
-    return _contract_detail(conn, _ctx(conn, s), fantrax_id, user)
+    return _contract_detail(conn, _record_edit(conn, user), fantrax_id, user)
 
 
 class BirthDateEdit(BaseModel):
@@ -495,7 +503,30 @@ def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: C
     _editable_player(_ctx(conn, s), fantrax_id, user)
     C.delete_override(conn, s.league_id, fantrax_id)
     background.add_task(auto_publish)
-    return _contract_detail(conn, _ctx(conn, s), fantrax_id, user)
+    return _contract_detail(conn, _record_edit(conn, user), fantrax_id, user)
+
+
+@data.get("/changes")
+def change_log(team_id: Optional[str] = None,
+               kind: List[str] = Query([], description="Subset of: added, dropped, traded, salary, contract"),
+               limit: int = 200, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Player and contract changes, newest first: roster moves from Fantrax syncs, salary and contract changes."""
+    s = get_settings()
+    sql = ("SELECT pc.*, p.name AS player_name, t.name AS team_name FROM player_changes pc "
+           "LEFT JOIN players p ON p.fantrax_id = pc.player_id LEFT JOIN teams t ON t.id = pc.team_id "
+           "WHERE pc.league_id = ?")
+    params: List = [s.league_id]
+    if team_id:
+        team_id = _team(_ctx(conn, s), team_id, user)        # accepts "me", like every team_id
+        sql += " AND (pc.team_id = ? OR (pc.kind = 'traded' AND pc.old_value = ?))"
+        params += [team_id, json.dumps(team_id)]
+    if kind:
+        sql += " AND pc.kind IN ({})".format(", ".join("?" for _ in kind))
+        params += kind
+    out = rows(conn, sql + " ORDER BY pc.id DESC LIMIT ?", params + [limit])
+    for c in out:
+        c["old_value"], c["new_value"] = json.loads(c["old_value"]), json.loads(c["new_value"])
+    return out
 
 
 # --------------------------------------------------------------------------- analysis

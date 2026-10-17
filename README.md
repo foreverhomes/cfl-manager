@@ -31,6 +31,12 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   in the header lets you view any team.
 - **Players.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
+- **Changes.** Roster moves and contract changes, newest first: players added, dropped or
+  traded (from Fantrax syncs), salary changes, and other contract changes (years, later
+  seasons, type). Filter by team or kind. The **By** column says where each came from:
+  `Sync`, `Contracts sheet`, or the name of the person who edited the contract. History
+  starts with the first sync or edit after this view shipped. Lineup status moves (bench,
+  IR, minors) and contract notes aren't logged.
 - **Trade builder** (admin only). Select any of your players. Optionally pick a trade partner and
   their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in
@@ -79,6 +85,7 @@ Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `sc
 and rostered prospects are looked up one by one through NHL.com's player search, which also
 handles transliterations like Yegor/Egor. Lookups happen only for players still missing a date. Matchup scores
 for completed periods are fetched once and skipped after that. Every run is recorded in `sync_log`.
+Every run ends with a `changes` step that logs what changed for the **Changes** view.
 
 ## Salaries and the cap
 
@@ -289,6 +296,7 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 | `GET /matchups?period=N` | schedule + category scores for a week |
 | `GET /players?status=fa&position=D&sort=value` | search the player pool |
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
+| `GET /changes?team_id=me&kind=salary` | player and contract changes, newest first (`kind`: added, dropped, traded, salary, contract; repeat for several) |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |
@@ -345,6 +353,7 @@ cfl/
   web/          dashboard + trade builder (HTML/CSS/JS, no build)
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
   reconcile.py  compare a league-wide contract sheet with the app; import missing contracts
+  changes.py    change log: compares every player's team and contract after each sync and edit
   __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)

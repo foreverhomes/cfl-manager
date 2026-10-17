@@ -21,6 +21,7 @@
         <a class="tab" role="tab" href="#dashboard" id="tab-dashboard">Dashboard</a>
         <a class="tab" role="tab" href="#trade" id="tab-trade" hidden>Trade builder</a>
         <a class="tab" role="tab" href="#players" id="tab-players">Players</a>
+        <a class="tab" role="tab" href="#changes" id="tab-changes">Changes</a>
         <a class="tab" role="tab" href="#admin" id="tab-admin" hidden>Admin</a>
       </nav>
       <div class="topbar-actions" id="topbar-actions" hidden>
@@ -146,6 +147,29 @@
           </div>
         </header>
         <div id="players-table" class="scroll-x"></div>
+      </article>
+    </section>
+
+    <!-- Changes: roster moves and contract changes, newest first -------- -->
+    <section id="view-changes" class="view" hidden>
+      <div class="filters">
+        <label class="field">
+          <span class="field-label">Team</span>
+          <select id="changes-team"></select>
+        </label>
+        <div class="field">
+          <span class="field-label">Show</span>
+          <div class="segmented" id="changes-kind" role="group" aria-label="Which changes to show"></div>
+        </div>
+      </div>
+      <article class="card">
+        <header class="card-head">
+          <div>
+            <h2>Player and contract changes</h2>
+            <p class="card-sub">Newest first. Roster moves come from Fantrax syncs; salaries and contracts from the salary sheets and from edits in this app.</p>
+          </div>
+        </header>
+        <div id="changes-table" class="scroll-x"></div>
       </article>
     </section>
 

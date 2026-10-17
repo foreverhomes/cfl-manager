@@ -96,6 +96,7 @@ def cmd_reconcile_contracts(args) -> None:
     import csv
     import io
 
+    from . import changes
     from . import publish as P
     from . import reconcile as R
     from .clients import fetch_sheet_csv
@@ -124,6 +125,8 @@ def cmd_reconcile_contracts(args) -> None:
         return
     n = R.import_contracts(conn, settings.league_id, report["imports"])
     print("\nSaved {} contracts to {}.".format(n, settings.database_label))
+    print("changes:", json.dumps(_logged(conn, "changes", lambda: changes.record(
+        conn, A.load_context(conn, settings), "Contracts sheet"))["detail"]))
     if P.publish_status(conn, settings)["configured"]:
         print("publish:", json.dumps(_logged(conn, "publish", lambda: P.publish(conn, settings))["detail"]))
 

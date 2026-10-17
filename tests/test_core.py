@@ -780,6 +780,68 @@ def test_watch_lineup_check_finds_idle_starters_and_benched_players():
     assert lineup_check(ctx, "t1", set())["games_today"] is False
 
 
+def _entry(team_id, salaries=(), contract_type="STANDARD"):
+    return {"team_id": team_id, "salaries": list(salaries), "contract_type": contract_type}
+
+
+def test_changes_diff_logs_players_added_dropped_and_traded():
+    from cfl.changes import diff
+    old = {"f1": _entry("t1"), "f2": _entry("t1"), "f3": _entry("t2")}
+    new = {"f1": _entry("t1"), "f2": _entry("t2"), "f4": _entry("t1")}
+    assert diff(old, new) == [
+        {"player_id": "f2", "team_id": "t2", "kind": "traded", "old_value": "t1", "new_value": "t2"},
+        {"player_id": "f3", "team_id": "t2", "kind": "dropped", "old_value": "t2", "new_value": None},
+        {"player_id": "f4", "team_id": "t1", "kind": "added", "old_value": None, "new_value": "t1"},
+    ]
+
+
+@pytest.mark.parametrize("was, now, kind", [
+    (_entry("t1", [5, 5]), _entry("t1", [7, 7]), "salary"),         # this season's salary
+    (_entry("t1"), _entry("t1", [2]), "salary"),                    # a first contract
+    (_entry("t1", [5, 5]), _entry("t1", [5, 5, 5]), "contract"),    # one more season
+    (_entry("t1", [5, 5]), _entry("t1", [5, 7]), "contract"),       # a later season's salary
+    (_entry("t1", [3]), _entry("t1", [3], "ELC"), "contract"),      # the type
+])
+def test_changes_diff_tells_a_salary_change_from_other_contract_changes(was, now, kind):
+    from cfl.changes import diff
+    assert diff({"f1": was}, {"f1": now}) == [{
+        "player_id": "f1", "team_id": "t1", "kind": kind,
+        "old_value": {"salaries": was["salaries"], "contract_type": was["contract_type"]},
+        "new_value": {"salaries": now["salaries"], "contract_type": now["contract_type"]}}]
+
+
+def test_changes_record_saves_a_baseline_then_logs_what_changed_since(conn, tmp_path):
+    from cfl import changes
+    from cfl.db import rows
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    conn.execute("INSERT INTO league_players VALUES (?, 'f1', 'G', 'T')", (LEAGUE,))
+    conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f1', 'G', 'ACTIVE')", (LEAGUE,))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', 8, 2, '[8,8]')",
+                 (LEAGUE,))
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+
+    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": True, "changes": 0}
+    conn.execute("UPDATE contracts SET salary=9, salaries='[9,9]' WHERE player_id='f1'")   # the sheet changed
+    conn.commit()
+    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 1}
+    (logged,) = rows(conn, "SELECT * FROM player_changes")
+    assert (logged["player_id"], logged["team_id"], logged["kind"], logged["source"]) == ("f1", "t1", "salary", "Sync")
+    assert json.loads(logged["new_value"]) == {"salaries": [9, 9], "contract_type": "STANDARD"}
+
+
+def test_every_sync_ends_by_recording_player_changes(conn, tmp_path, monkeypatch):
+    import cfl.sync as sync
+    monkeypatch.setattr(sync, "sync_standings", lambda conn, fx: {"teams": 0})
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+
+    results = sync.sync_all(conn, settings, ["standings"])
+    assert [(r["resource"], r["status"]) for r in results] == [("standings", "ok"), ("changes", "ok")]
+    assert results[-1]["detail"] == {"baseline": True, "changes": 0}
+
+
 def test_a_failed_sync_step_is_logged_and_the_next_one_still_runs(conn):
     from cfl.db import rows
     from cfl.sync import _logged
@@ -973,6 +1035,28 @@ def test_on_the_site_teams_come_from_each_users_row_not_fantrax_my_team_id(conn,
     boss.put("/admin/users/boss@example.com", json={"team_id": "t1", "role": "admin", "status": "active"})
     assert boss.get("/health").json()["my_team_id"] == "t1"           # linked in the Admin tab
     assert {t["id"]: t["is_me"] for t in boss.get("/teams").json()} == {"t1": 1, "t2": 0}
+
+
+def test_contract_edits_are_logged_with_who_made_them_and_listed_newest_first(conn, tmp_path, monkeypatch):
+    from cfl import changes
+    from cfl.config import get_settings
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    changes.record(conn, A.load_context(conn, get_settings()), "Sync")    # the baseline
+    boss, _ = _signed_in("boss")
+    boss.post("/admin/users", json={"email": "gm@example.com", "team_id": "t2"})
+    gm, _ = _signed_in("gm")
+
+    boss.put("/players/f1/contract", json={"years": 2})
+    gm.put("/players/f2/contract", json={"years": 1})
+    boss.delete("/players/f1/contract")
+    listed = gm.get("/changes").json()
+    assert [(c["player_name"], c["team_name"], c["kind"], c["source"]) for c in listed] == [
+        ("Joey Daccord", "One", "contract", "Boss"), ("Jimmy Snuggerud", "Two", "contract", "Gm"),
+        ("Joey Daccord", "One", "contract", "Boss")]
+    assert listed[0]["old_value"] == {"salaries": [8, 8], "contract_type": "STANDARD"}
+    assert [c["player_name"] for c in gm.get("/changes", params={"team_id": "t2"}).json()] == ["Jimmy Snuggerud"]
+    assert gm.get("/changes", params={"kind": "salary"}).json() == []
 
 
 def test_the_me_salary_sheet_key_needs_fantrax_my_team_id(conn):
