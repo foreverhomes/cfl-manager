@@ -46,9 +46,14 @@ def local_admin(settings: Settings) -> User:
     return User("local", None, settings.my_team_id, True)
 
 
+def can_edit_team(user: User, team_id: Optional[str]) -> bool:
+    """Admins edit any team; a GM edits their own team's contracts and sends its draft picks."""
+    return user.is_admin or (user.team_id is not None and team_id == user.team_id)
+
+
 def can_edit_player(user: User, team_id: Optional[str]) -> bool:
     """Admins edit any player's contract; a GM edits players on their own team."""
-    return user.is_admin or (user.team_id is not None and team_id == user.team_id)
+    return can_edit_team(user, team_id)
 
 
 # --------------------------------------------------------------------------- Google + cookie

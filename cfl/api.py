@@ -17,6 +17,7 @@ from . import auth
 from . import changes
 from . import contracts as C
 from . import offseason as O
+from . import picks as PK
 from . import publish as P
 from .auth import User
 from .config import Settings, get_settings
@@ -528,27 +529,154 @@ def revert_player_contract(fantrax_id: str, background: BackgroundTasks, conn: C
     return _contract_detail(conn, _record_edit(conn, user), fantrax_id, user)
 
 
+# --------------------------------------------------------------------------- draft picks
+
+
+def _pick_out(pick: Dict, teams: Dict[str, str]) -> Dict:
+    last = pick["last_move"]
+    return {"draft_year": pick["draft_year"], "round": pick["round"],
+            "original_team_id": pick["original_team_id"], "original_team_name": teams[pick["original_team_id"]],
+            "owner_team_id": pick["owner_team_id"], "owner_team_name": teams.get(pick["owner_team_id"]),
+            "last_move": None if last is None else {
+                "deal_id": last["deal_id"], "kind": last["kind"], "from_team_id": last["from_team_id"],
+                "from_team_name": teams.get(last["from_team_id"]), "note": last["note"], "source": last["source"],
+                "moved_at": last["moved_at"]}}
+
+
+def _team_picks(conn: Connection, ctx: A.Context, team_id: str, user: User) -> Dict:
+    season = ctx.league.get("season_year")
+    teams = ctx.teams
+    picks = [_pick_out(p, teams) for p in PK.all_picks(conn, ctx.league_id, list(teams), season)]
+    latest = {(m["draft_year"], m["round"], m["original_team_id"]): m["id"]
+              for m in PK.latest_moves(conn, ctx.league_id).values()}
+    deals: Dict[str, Dict] = {}
+    for m in rows(conn, "SELECT * FROM pick_moves WHERE league_id=? AND (from_team_id=? OR to_team_id=?) "
+                        "ORDER BY id DESC", (ctx.league_id, team_id, team_id)):
+        d = deals.setdefault(m["deal_id"], {"deal_id": m["deal_id"], "kind": m["kind"], "note": m["note"],
+                                            "source": m["source"], "moved_at": m["moved_at"], "moves": [],
+                                            "can_undo": True})
+        d["moves"].append({"draft_year": m["draft_year"], "round": m["round"],
+                           "original_team_id": m["original_team_id"], "original_team_name": teams.get(m["original_team_id"]),
+                           "from_team_id": m["from_team_id"], "from_team_name": teams.get(m["from_team_id"]),
+                           "to_team_id": m["to_team_id"], "to_team_name": teams.get(m["to_team_id"])})
+        # Undo puts picks back, so it's for whoever could have sent them, and only while none has moved since.
+        moved_again = latest[(m["draft_year"], m["round"], m["original_team_id"])] != m["id"]
+        if moved_again or not auth.can_edit_team(user, m["from_team_id"]):
+            d["can_undo"] = False
+    for d in deals.values():
+        d["moves"].reverse()
+    return {"team_id": team_id, "team_name": teams[team_id], "draft_years": PK.draft_years(season),
+            "rounds": PK.PICK_ROUNDS, "kinds": PK.MOVE_KINDS, "can_edit": auth.can_edit_team(user, team_id),
+            "owned": [p for p in picks if p["owner_team_id"] == team_id],
+            "sent": [p for p in picks if p["original_team_id"] == team_id and p["owner_team_id"] != team_id],
+            "deals": list(deals.values())}
+
+
+@data.get("/teams/{team_id}/picks")
+def team_picks(team_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """The team's draft picks in the upcoming drafts: its own picks it hasn't sent away, plus picks it
+    received in trades or as RFA compensation. Also lists its own picks that are now elsewhere, and
+    every pick deal it was part of, newest first."""
+    ctx = _ctx(conn, get_settings())
+    return _team_picks(conn, ctx, _team(ctx, team_id, user), user)
+
+
+class PickRef(BaseModel):
+    draft_year: int
+    round: int
+    original_team_id: str               # whose pick it was to start with
+
+
+class PickDeal(BaseModel):
+    kind: str = "trade"                 # trade / rfa (compensation for signing another team's RFA)
+    team_id: str                        # sends `send`
+    other_team_id: str                  # gets `send`; in a trade, sends `receive` back
+    send: List[PickRef] = []
+    receive: List[PickRef] = []
+    note: Optional[str] = None
+
+
+@data.post("/picks/deals")
+def record_pick_deal(deal: PickDeal, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Move draft picks between two teams. A GM sends their own team's picks; picks coming back in a
+    trade need the other team's GM or the admin. RFA compensation goes one way only."""
+    s = get_settings()
+    ctx = _ctx(conn, s)
+    team_id, other = _team(ctx, deal.team_id, user), _team(ctx, deal.other_team_id, user)
+    for side, sender in ((deal.send, team_id), (deal.receive, other)):
+        if side and not auth.can_edit_team(user, sender):
+            raise HTTPException(403, detail="Only {}'s GM or the admin can send its picks".format(ctx.teams[sender]))
+    if deal.kind == "rfa" and deal.receive:
+        raise HTTPException(400, detail="RFA compensation goes one way: from the team that signed him to the "
+                                        "team that lost him")
+    sends = [(team_id, other, [p.model_dump() for p in deal.send]),
+             (other, team_id, [p.model_dump() for p in deal.receive])]
+    try:
+        PK.move(conn, s.league_id, list(ctx.teams), ctx.league.get("season_year"), deal.kind, sends, deal.note,
+                user.name or user.email)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    return _team_picks(conn, ctx, team_id, user)
+
+
+@data.delete("/picks/deals/{deal_id}")
+def undo_pick_deal(deal_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Undo a pick deal, e.g. one recorded by mistake: its picks go back to the teams that sent them."""
+    s = get_settings()
+    moves = PK.deal_moves(conn, s.league_id, deal_id)
+    if not moves:
+        raise HTTPException(404, detail="No pick deal {}".format(deal_id))
+    if not all(auth.can_edit_team(user, m["from_team_id"]) for m in moves):
+        raise HTTPException(403, detail="Only the GMs who sent these picks, or the admin, can undo this")
+    try:
+        return {"ok": True, "picks": PK.undo(conn, s.league_id, deal_id)}
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc))
+
+
 @data.get("/changes")
 def change_log(team_id: Optional[str] = None,
-               kind: List[str] = Query([], description="Subset of: added, dropped, traded, salary, contract"),
+               kind: List[str] = Query([], description="Subset of: added, dropped, traded, salary, contract, pick"),
                limit: int = 200, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
-    """Player and contract changes, newest first: roster moves from Fantrax syncs, salary and contract changes."""
+    """Player and contract changes, newest first: roster moves from Fantrax syncs, salary and contract
+    changes, and draft picks changing hands (kind `pick`, one row per pick)."""
     s = get_settings()
-    sql = ("SELECT pc.*, p.name AS player_name, t.name AS team_name FROM player_changes pc "
-           "LEFT JOIN players p ON p.fantrax_id = pc.player_id LEFT JOIN teams t ON t.id = pc.team_id "
-           "WHERE pc.league_id = ?")
-    params: List = [s.league_id]
     if team_id:
         team_id = _team(_ctx(conn, s), team_id, user)        # accepts "me", like every team_id
-        sql += " AND (pc.team_id = ? OR (pc.kind = 'traded' AND pc.old_value = ?))"
-        params += [team_id, json.dumps(team_id)]
-    if kind:
-        sql += " AND pc.kind IN ({})".format(", ".join("?" for _ in kind))
-        params += kind
-    out = rows(conn, sql + " ORDER BY pc.id DESC LIMIT ?", params + [limit])
-    for c in out:
-        c["old_value"], c["new_value"] = json.loads(c["old_value"]), json.loads(c["new_value"])
-    return out
+    player_kinds = [k for k in kind if k != "pick"]
+    out: List[Dict] = []
+    if player_kinds or not kind:
+        sql = ("SELECT pc.*, p.name AS player_name, t.name AS team_name FROM player_changes pc "
+               "LEFT JOIN players p ON p.fantrax_id = pc.player_id LEFT JOIN teams t ON t.id = pc.team_id "
+               "WHERE pc.league_id = ?")
+        params: List = [s.league_id]
+        if team_id:
+            sql += " AND (pc.team_id = ? OR (pc.kind = 'traded' AND pc.old_value = ?))"
+            params += [team_id, json.dumps(team_id)]
+        if player_kinds:
+            sql += " AND pc.kind IN ({})".format(", ".join("?" for _ in player_kinds))
+            params += player_kinds
+        out = rows(conn, sql + " ORDER BY pc.id DESC LIMIT ?", params + [limit])
+        for c in out:
+            c["old_value"], c["new_value"] = json.loads(c["old_value"]), json.loads(c["new_value"])
+    if "pick" in kind or not kind:
+        sql = ("SELECT m.*, t.name AS team_name, o.name AS original_team_name FROM pick_moves m "
+               "LEFT JOIN teams t ON t.id = m.to_team_id LEFT JOIN teams o ON o.id = m.original_team_id "
+               "WHERE m.league_id = ?")
+        params = [s.league_id]
+        if team_id:
+            sql += " AND (m.from_team_id = ? OR m.to_team_id = ?)"
+            params += [team_id, team_id]
+        for m in rows(conn, sql + " ORDER BY m.id DESC LIMIT ?", params + [limit]):
+            out.append({"kind": "pick", "player_id": None, "player_name": None, "team_id": m["to_team_id"],
+                        "team_name": m["team_name"], "old_value": m["from_team_id"], "new_value": m["to_team_id"],
+                        "source": m["source"], "changed_at": m["moved_at"],
+                        "pick": {"draft_year": m["draft_year"], "round": m["round"], "deal_id": m["deal_id"],
+                                 "original_team_id": m["original_team_id"],
+                                 "original_team_name": m["original_team_name"], "move": m["kind"], "note": m["note"]}})
+    # Each list is newest first; a stable sort interleaves them by time and keeps that order within a second.
+    out.sort(key=lambda c: c["changed_at"], reverse=True)
+    return out[:limit]
 
 
 @data.get("/offseason", dependencies=ADMIN_ONLY)
