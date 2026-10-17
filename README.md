@@ -146,6 +146,30 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   bench players. Minors and IR don't count, and in-season UFA deals are exempt. The dashboard
   flags a team over the bank, and trades show contract years before → after.
 
+### Checking against the league-wide contract sheet
+
+A GM keeps a "CFL Contracts" sheet with every player in the league on one tab: Player, Team, Pos,
+Owner, Birthday, Type, and a column per season (`26-27`, `27-28`, ...). It must be shared as
+"anyone with the link can view".
+
+```bash
+python -m cfl reconcile-contracts "<sheet URL>" --csv data/contract-review.csv            # dry run
+python -m cfl reconcile-contracts "<sheet URL>" --apply                                  # save the imports
+```
+
+- **Matching:** rows match Fantrax players by name. When several players share a name, the
+  birthday, the owner's team and the position decide. Without an exact name, a player with the
+  same birthday and a similar name matches (Matt/Matthew, Yegor/Egor), and then a fuzzy match on
+  the owner's roster. Each sheet owner maps to the Fantrax team that rosters most of their players.
+- **Import:** a rostered player with no contract in the app gets the sheet's: its salaries, plus
+  its type when that's ELC or in-season UFA. It's saved like a contract edit, with a note that starts
+  "From the CFL Contracts sheet", so it survives syncs and wins over the GM's salary sheet. A
+  salary with no posted length is saved as one season, and its note says so.
+- **Review:** nothing else changes. The report (and the `--csv` file) lists contracts where the
+  app and the sheet disagree on salary, years or later seasons, or where the sheet has no contract. It
+  also lists players the two sources put on different teams, same-salary contracts where only the
+  sheet records the type, unmatched sheet rows, and rostered players with no contract anywhere.
+
 ## Publishing your team to its Google Sheet
 
 For teams marked `"owner": "app"` in `salary_sheets.json` (yours), the app is the source of truth:
@@ -320,7 +344,8 @@ cfl/
   auth.py       Sign in with Google, sessions, who may do what
   web/          dashboard + trade builder (HTML/CSS/JS, no build)
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
-  __main__.py   CLI (sync / import-sqlite / serve / publish / teams / profile / targets / watch)
+  reconcile.py  compare a league-wide contract sheet with the app; import missing contracts
+  __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)
 data/           league.db (git-ignored)

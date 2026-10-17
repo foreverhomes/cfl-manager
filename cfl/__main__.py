@@ -1,4 +1,4 @@
-"""CLI: python -m cfl {sync,import-sqlite,serve,publish,teams,profile,targets,watch}"""
+"""CLI: python -m cfl {sync,import-sqlite,serve,publish,reconcile-contracts,teams,profile,targets,watch}"""
 
 import argparse
 import json
@@ -90,6 +90,42 @@ def cmd_publish(args) -> None:
     print(json.dumps(result, indent=2))
     if result["status"] != "ok":
         sys.exit(1)
+
+
+def cmd_reconcile_contracts(args) -> None:
+    import csv
+    import io
+
+    from . import publish as P
+    from . import reconcile as R
+    from .clients import fetch_sheet_csv
+    from .sync import _logged
+
+    settings = get_settings()
+    conn = connect(settings.database)
+    ctx = A.load_context(conn, settings)
+    try:
+        report = R.reconcile(conn, ctx, list(csv.reader(io.StringIO(fetch_sheet_csv(args.sheet)))))
+    except (ValueError, RuntimeError) as exc:
+        sys.exit(str(exc))
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(R.format_report(report))
+    if args.csv:
+        with open(args.csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=R.CSV_COLUMNS)
+            w.writeheader()
+            w.writerows(R.csv_rows(report))
+        print("\nWrote the players to review to", args.csv)
+    if not args.apply:
+        print("\nDry run: nothing saved. Add --apply to save the {} imports to {}.".format(
+            len(report["imports"]), settings.database_label))
+        return
+    n = R.import_contracts(conn, settings.league_id, report["imports"])
+    print("\nSaved {} contracts to {}.".format(n, settings.database_label))
+    if P.publish_status(conn, settings)["configured"]:
+        print("publish:", json.dumps(_logged(conn, "publish", lambda: P.publish(conn, settings))["detail"]))
 
 
 def cmd_serve(args) -> None:
@@ -214,6 +250,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--force", action="store_true", help="Write even if nothing changed")
     p.add_argument("--script", action="store_true", help="Write the Apps Script (with your token) to set up publishing")
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser("reconcile-contracts",
+                       help="Compare a league-wide contract sheet with the app; import contracts the app lacks")
+    p.add_argument("sheet", help="Google Sheet URL (its contracts tab) or a CSV file")
+    p.add_argument("--apply", action="store_true", help="Save the imports (default: dry run)")
+    p.add_argument("--csv", help="Also write the players to review to this CSV file")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_reconcile_contracts)
 
     p = sub.add_parser("teams", help="List team ids")
     p.set_defaults(func=cmd_teams)
