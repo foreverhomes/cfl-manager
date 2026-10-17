@@ -4,6 +4,7 @@ They use SQLite. Set CFL_TEST_DATABASE_URL to a Postgres database to run them th
 it is wiped before every test.
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Iterator
@@ -981,3 +982,82 @@ def test_the_me_salary_sheet_key_needs_fantrax_my_team_id(conn):
     assert _resolve_team(conn, LEAGUE, "Skull", None) == "t1"          # a name works without it
     with pytest.raises(ValueError, match="FANTRAX_MY_TEAM_ID"):
         _resolve_team(conn, LEAGUE, "me", None)
+
+
+CONTRACT_SHEET = [
+    ["", "", "", "", "", "", "Salary"],
+    ["Player", "Team", "Pos", "Owner", "Birthday", "Type", "26-27", "27-28", "28-29", "Notes"],
+    ["Matthew Tkachuk", "FLA", "F", "Adam", "", "UFA Draft", "$17", "$17", "UFA", "2026 auction"],
+    ["Jake Guentzel", "TBL", "F", "Adam", "", "UFA Draft", "$11", "", "", "$11 x ? (length not posted)"],
+    ["Matthew Savoie", "EDM", "F", "Adam", "2004-01-01", "ELC", "$3", "RFA", "", ""],     # Fantrax: Matt Savoie
+    ["Joey Daccord", "SEA", "G", "Adam", "", "UFA Draft", "$3", "$3", "UFA", ""],           # app: 5 years
+    ["Lane Hutson", "MTL", "D", "Adam", "", "ELC", "$3", "RFA", "", ""],                    # app: same, no type
+    ["Andrei Vasilevsky", "TBL", "G", "Free agent", "1994-07-25", "Free Agent", "", "", "", "stale copy"],
+    ["Andrei Vasilevskiy", "TBL", "G", "Adam", "1994-07-25", "UFA Draft", "$23", "UFA", "", ""],
+    ["Josh Manson", "COL", "D", "Adam", "", "In-Season UFA", "$1", "UFA", "", ""],          # a free agent in Fantrax
+    ["Ivan Demidov", "MTL", "F", "Adam", "", "ELC", "$5", "RFA", "", ""],                   # ELCs are $3
+    ["Gavin McKenna", "TOR", "F", "Adam", "", "Prospect", "", "", "", "unsigned"],
+]
+
+
+def test_parse_contract_sheet_reads_seasons_until_the_expiry_marker():
+    from cfl.reconcile import parse_contract_sheet
+    entries = {e.name: e for e in parse_contract_sheet(CONTRACT_SHEET, 2026)}
+    assert entries["Matthew Tkachuk"].salaries == [17, 17] and entries["Matthew Tkachuk"].length_known
+    assert entries["Jake Guentzel"].salaries == [11] and not entries["Jake Guentzel"].length_known
+    assert entries["Matthew Savoie"].contract_type == "ELC" and entries["Matthew Savoie"].row == 5
+    assert entries["Josh Manson"].contract_type == "IN_SEASON_UFA"
+    assert entries["Andrei Vasilevsky"].owner is None and entries["Gavin McKenna"].salaries == []
+    with pytest.raises(ValueError, match="No 2030-31 season column"):
+        parse_contract_sheet(CONTRACT_SHEET, 2030)
+
+
+def test_reconcile_imports_missing_contracts_and_lists_the_rest(conn, tmp_path):
+    from cfl import reconcile as R
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'Daigle')", (LEAGUE,))
+    players = [("f1", "Tkachuk, Matthew", "FLA", "LW"), ("f2", "Guentzel, Jake", "TBL", "C"),
+               ("f3", "Savoie, Matt", "EDM", "C"), ("f4", "Daccord, Joey", "SEA", "G"),
+               ("f5", "Hutson, Lane", "MTL", "D"), ("f6", "Vasilevskiy, Andrei", "TBL", "G"),
+               ("f7", "Manson, Josh", "COL", "D"), ("f8", "Demidov, Ivan", "MTL", "RW"),
+               ("f9", "McKenna, Gavin", "TOR", "C")]
+    for fid, name, team, pos in players:
+        _player(conn, fid, name, team, pos)
+        conn.execute("INSERT INTO league_players VALUES (?, ?, ?, ?)", (LEAGUE, fid, pos, "FA" if fid == "f7" else "T"))
+        if fid != "f7":
+            conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', ?)",
+                         (LEAGUE, fid, "MINORS" if fid == "f9" else "ACTIVE"))
+    conn.execute("UPDATE players SET birth_date='2004-01-01' WHERE fantrax_id='f3'")
+    conn.execute("UPDATE players SET birth_date='1994-07-25' WHERE fantrax_id='f6'")
+    for fid, name, salaries in (("f4", "Joey Daccord", [3] * 5), ("f5", "Lane Hutson", [3])):
+        conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                     "years_remaining, salaries) VALUES (?, 't1', ?, ?, 'ROSTER', ?, ?, ?)",
+                     (LEAGUE, name, fid, salaries[0], len(salaries), json.dumps(salaries)))
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+    ctx = A.load_context(conn, settings)
+
+    report = R.reconcile(conn, ctx, CONTRACT_SHEET)
+    assert report["owner_teams"] == {"Adam": "Daigle"}
+    assert [(r["name"], r["sheet"], r["match"]) for r in report["imports"]] == [
+        ("Andrei Vasilevskiy", [23], "name"),          # the stale free-agent copy is set aside
+        ("Jake Guentzel", [11], "name"),
+        ("Matt Savoie", [3], "birthday"),
+        ("Matthew Tkachuk", [17, 17], "name")]
+    assert {r["name"]: r["reasons"] for r in report["review"]} == {
+        "Joey Daccord": ["years"],
+        "Ivan Demidov": ["sheet contract breaks a league rule: An ELC is $3 a season for at most 3 seasons"]}
+    assert report["review"][0]["app_source"] == "Daigle salary sheet"
+    assert [r["name"] for r in report["type_only"]] == ["Lane Hutson"]
+    assert [(r["name"], r["reasons"]) for r in report["roster_only"]] == [
+        ("Josh Manson", ["sheet has him on Daigle, Fantrax on no team"])]
+    assert report["unmatched_signed"] == [] and report["agree"] == 0
+    assert {r["category"] for r in R.csv_rows(report)} == {"review", "type_only", "roster_only"}
+
+    assert R.import_contracts(conn, LEAGUE, report["imports"]) == 4
+    ctx = A.load_context(conn, settings)
+    g, s = ctx.players["f2"], ctx.players["f3"]
+    assert (g.contract_salaries, g.contract_source, s.contract_type) == ([11], "override", "ELC")
+    note = conn.execute("SELECT note FROM contract_overrides WHERE player_id='f2'").fetchone()[0]
+    assert note.startswith("From the CFL Contracts sheet, row 4 (length not posted; 1 season assumed)")
+    again = R.reconcile(conn, ctx, CONTRACT_SHEET)
+    assert again["imports"] == [] and again["agree"] == 4 and len(again["review"]) == 2
