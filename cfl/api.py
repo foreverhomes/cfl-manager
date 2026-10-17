@@ -16,6 +16,7 @@ from . import analysis as A
 from . import auth
 from . import changes
 from . import contracts as C
+from . import offseason as O
 from . import picks as PK
 from . import publish as P
 from .auth import User
@@ -676,6 +677,17 @@ def change_log(team_id: Optional[str] = None,
     # Each list is newest first; a stable sort interleaves them by time and keeps that order within a second.
     out.sort(key=lambda c: c["changed_at"], reverse=True)
     return out[:limit]
+
+
+@data.get("/offseason", dependencies=ADMIN_ONLY)
+def offseason(year: Optional[int] = Query(None, description="The offseason's year: RFA or UFA is decided on July 1 "
+                                                            "of it. Defaults to the next one, after this season"),
+              conn: Connection = Depends(get_conn)):
+    """Rostered players whose contracts end in an offseason, each an RFA or a UFA by league rules."""
+    try:
+        return O.expiring(_ctx(conn, get_settings()), year)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
 
 
 # --------------------------------------------------------------------------- analysis
