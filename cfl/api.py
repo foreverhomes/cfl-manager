@@ -16,6 +16,7 @@ from . import analysis as A
 from . import auth
 from . import changes
 from . import contracts as C
+from . import offseason as O
 from . import publish as P
 from .auth import User
 from .config import Settings, get_settings
@@ -548,6 +549,17 @@ def change_log(team_id: Optional[str] = None,
     for c in out:
         c["old_value"], c["new_value"] = json.loads(c["old_value"]), json.loads(c["new_value"])
     return out
+
+
+@data.get("/offseason", dependencies=ADMIN_ONLY)
+def offseason(year: Optional[int] = Query(None, description="The offseason's year: RFA or UFA is decided on July 1 "
+                                                            "of it. Defaults to the next one, after this season"),
+              conn: Connection = Depends(get_conn)):
+    """Rostered players whose contracts end in an offseason, each an RFA or a UFA by league rules."""
+    try:
+        return O.expiring(_ctx(conn, get_settings()), year)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
 
 
 # --------------------------------------------------------------------------- analysis

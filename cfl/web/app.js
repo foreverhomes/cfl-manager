@@ -180,6 +180,11 @@ const state = {
   playersView: "all",
   changesTeam: "",
   changesKind: "all",
+  offseason: null,      // the last /offseason response, so team and status filters redraw without a request
+  offseasonYear: null,  // null: the next offseason, whatever season the league is in
+  offseasonTeam: "",
+  offseasonView: "all",
+  offseasonSort: { key: "final_salary", dir: -1 },
   trade: {
     give: new Set(), get: new Set(), partner: "", tolerance: prefs.get("tolerance", "0.25"),
     giveMinors: false, getMinors: false, giveQuery: "", getQuery: "",
@@ -285,6 +290,8 @@ function wireControls() {
   byId("players-team").addEventListener("change", (e) => { state.playersTeam = e.target.value; loadPlayers(); });
   byId("players-missing").addEventListener("change", loadPlayers);
   byId("changes-team").addEventListener("change", (e) => { state.changesTeam = e.target.value; loadChanges(); });
+  byId("offseason-year").addEventListener("change", (e) => { state.offseasonYear = Number(e.target.value); loadOffseason(); });
+  byId("offseason-team").addEventListener("change", (e) => { state.offseasonTeam = e.target.value; renderOffseason(); });
   byId("team-select").addEventListener("change", (e) => {
     state.team = e.target.value;
     state.trade.give.clear();
@@ -400,8 +407,8 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "trade", "players", "changes", "admin"];
-const ADMIN_VIEWS = new Set(["trade", "admin"]);
+const VIEWS = ["dashboard", "trade", "players", "changes", "offseason", "admin"];
+const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
 function currentView() {
@@ -413,12 +420,13 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = ["players", "changes", "admin"].includes(view);   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "offseason", "admin"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
   }
   if (view === "admin") { loadAdmin(); return; }
+  if (view === "offseason") { loadOffseason(); return; }
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
   else if (view === "trade") loadTrade();
@@ -707,9 +715,11 @@ function playerCell(p) {
     h("div", { class: "sub" }, [positions(p), p.nhl_team].filter(Boolean).join(" · ")));
 }
 
-// One table, with a section per roster segment and position group so columns line up across
-// sections. Sorting applies within each section.
-function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true }) {
+// One table, with a section per roster segment (or the given `segments`) and position group so
+// columns line up across sections. Sorting applies within each section. `salary` is the amount
+// each section totals.
+function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true, segments = SEGMENTS,
+  salary = (p) => p.salary }) {
   const col = columns.find((c) => c.key === sort.key) || columns[0];
   const cmp = (a, b) => {
     const va = col.value(a), vb = col.value(b);
@@ -733,9 +743,9 @@ function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam =
     }
     return th;
   }));
-  const money = (list) => list.reduce((sum, p) => sum + (p.salary || 0), 0);
+  const money = (list) => list.reduce((sum, p) => sum + (salary(p) || 0), 0);
   const bodies = [];
-  for (const seg of SEGMENTS.filter((x) => view === "all" || x.key === view)) {
+  for (const seg of segments.filter((x) => view === "all" || x.key === view)) {
     const inSeg = players.filter(seg.test);
     if (!inSeg.length) continue;
     bodies.push(h("tbody", { class: "seg" }, h("tr", { class: "seg-row" }, h("th", { colspan: String(columns.length) },
@@ -1417,6 +1427,7 @@ function afterContractChange(message) {
   if (view === "players") loadPlayers();
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
+  else if (view === "offseason") loadOffseason();   // a birth date or contract length can move a player
   else loadDashboard();
 }
 
@@ -1463,6 +1474,93 @@ async function loadChanges() {
   }
 }
 
+/* ================================================================ offseason */
+
+// What each player becomes when his contract ends. Every listed player has a contract_end.
+const EXPIRY_SEGMENTS = [
+  { key: "rfa", label: "RFAs", sub: "restricted free agents", test: (p) => p.contract_end.status === "RFA" },
+  { key: "ufa", label: "UFAs", sub: "unrestricted free agents", test: (p) => p.contract_end.status === "UFA" },
+  { key: "unknown", label: "Status unknown", sub: "no birth date on file", test: (p) => !p.contract_end.status },
+];
+
+// `res`: the /offseason response, for the season the final salary is from. `team`: the team filter.
+const offseasonColumns = (res, team) => [
+  { key: "name", label: "Player", left: true, value: (p) => p.name },
+  team ? null : { key: "fantasy_team", label: "Team", left: true, value: (p) => p.fantasy_team || "",
+    render: (p) => p.fantasy_team || "–" },
+  { key: "age_at_expiry", label: "Age July 1", value: (p) => p.contract_end.age_at_expiry,
+    render: (p) => (p.contract_end.age_at_expiry != null ? p.contract_end.age_at_expiry : "–") },
+  { key: "contract_type", label: "Type", left: true, value: (p) => TYPE_SHORT[p.contract_type] || "",
+    render: (p) => TYPE_SHORT[p.contract_type] || "" },
+  { key: "final_salary", label: `${res.after_season} salary`, value: (p) => p.final_salary, render: (p) => fmtMoney(p.final_salary) },
+  // Every contract ending in the next offseason has one season left, so the column only helps later ones.
+  res.year !== res.offseasons[0].year ? { key: "contract_years", label: "Yrs left", value: (p) => p.contract_years } : null,
+  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
+  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
+    render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
+  { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
+    render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
+].filter(Boolean);
+
+let offseasonSeq = 0;
+async function loadOffseason() {
+  const out = byId("offseason-table");
+  const token = ++offseasonSeq;
+  out.classList.add("is-loading");
+  try {
+    const res = await api.get("/offseason", { year: state.offseasonYear });
+    if (token !== offseasonSeq) return;
+    state.offseason = res;
+    renderOffseason();
+  } catch (err) {
+    if (token !== offseasonSeq) return;
+    // A remembered year can fall out of range once the league moves on a season: go back to the next one.
+    if (err.status === 400 && state.offseasonYear != null) { state.offseasonYear = null; loadOffseason(); return; }
+    out.replaceChildren(h("div", { class: "empty" }, err.message));
+  } finally {
+    if (token === offseasonSeq) out.classList.remove("is-loading");
+  }
+}
+
+function renderOffseason() {
+  const res = state.offseason;
+  const team = state.offseasonTeam;
+  const players = res.players.filter((p) => !team || p.fantasy_team_id === team);
+  const missing = res.no_contract.filter((p) => !team || p.fantasy_team_id === team);
+
+  byId("offseason-year").replaceChildren(...res.offseasons.map((o) =>
+    h("option", { value: o.year, selected: o.year === res.year }, `${o.year} (after ${o.after_season})`)));
+  byId("offseason-team").replaceChildren(
+    h("option", { value: "" }, "All teams"),
+    ...state.teams.map((t) => h("option", { value: t.id, selected: t.id === team }, t.name)));
+  const views = [["all", "All"], ["rfa", "RFAs"], ["ufa", "UFAs"]];
+  if (res.players.some((p) => !p.contract_end.status)) views.push(["unknown", "Unknown"]);
+  if (!views.some(([v]) => v === state.offseasonView)) state.offseasonView = "all";
+  segmented(byId("offseason-status"), views, state.offseasonView, (v) => { state.offseasonView = v; renderOffseason(); });
+
+  const total = (list) => list.reduce((sum, p) => sum + (p.final_salary || 0), 0);
+  byId("offseason-kpis").replaceChildren(...EXPIRY_SEGMENTS.map((seg) => {
+    const list = players.filter(seg.test);
+    if (seg.key === "unknown" && !list.length) return null;
+    return tile(seg.label, String(list.length), list.length === 1 ? "player" : "players",
+      seg.key === "unknown" ? "Add birth dates to place them" : `${fmtMoney(total(list))} in ${res.after_season} salaries`);
+  }).filter(Boolean));
+
+  byId("offseason-title").textContent = `${team ? possessive(teamName(team)) : "All"} contracts ending after ${res.after_season}`;
+  byId("offseason-sub").textContent = `Free agency is decided on July 1, ${res.year}: players ${res.ufa_age} or older ` +
+    `become UFAs, younger players RFAs, and in-season pickups are always UFAs. Click a player to open his contract.`;
+  byId("offseason-table").replaceChildren(sectionedTable({
+    players, columns: offseasonColumns(res, team), view: state.offseasonView, oneTeam: Boolean(team),
+    segments: EXPIRY_SEGMENTS, salary: (p) => p.final_salary,
+    sort: state.offseasonSort, onSort: (next) => { state.offseasonSort = next; renderOffseason(); },
+    empty: `No contracts on file end after ${res.after_season}.`,
+  }));
+  byId("offseason-missing").replaceChildren(missing.length ? h("details", { class: "offseason-missing" },
+    h("summary", {}, `${missing.length} rostered player${missing.length === 1 ? " has" : "s have"} no contract on file, ` +
+      "so they can't be placed in any offseason"),
+    h("p", { class: "player-links" }, missing.map((p) => playerLink(p)))) : "");
+}
+
 /* ================================================================ sign-in */
 
 // What the signed-in person sees: GMs get the dashboard and players; the admin gets everything.
@@ -1471,6 +1569,7 @@ function applyRole() {
   byId("tabs").hidden = false;
   byId("topbar-actions").hidden = false;
   byId("tab-trade").hidden = !me.is_admin;
+  byId("tab-offseason").hidden = !me.is_admin;
   byId("tab-admin").hidden = !me.is_admin;
   byId("sync-btn").hidden = !me.is_admin;
   byId("players-sub").textContent = me.is_admin
@@ -1652,7 +1751,7 @@ function renderAdmin(res) {
   byId("admin-body").replaceChildren(
     adminCard("Requests", "People who signed in with Google and are waiting for you. Pick their team to approve them.", requests),
     adminCard("People with access",
-      "GMs see every team and edit their own team's contracts. Admins also get the trade builder, full syncs, publishing and this page.",
+      "GMs see every team and edit their own team's contracts. Admins also get the trade builder, the offseason list, full syncs, publishing and this page.",
       people),
     adminCard("Add someone", "They get straight in the first time they sign in with this Google account.",
       h("div", { class: "filters" },

@@ -49,6 +49,13 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
     selection becomes the players you'd drop. Suggestions rank free agents by simulated gain,
     with the best drop for each when you haven't chosen one. Search the free agents to add any of
     them, and the evaluation prices the pickup like a trade, including buyouts for the drop.
+- **Offseason** (admin only). Every rostered player whose contract ends after a season, grouped
+  into RFAs, UFAs, and players with no birth date (status unknown; click one to add it). Shows each
+  player's age on July 1, contract type, final-season salary and value. Filter by team or status.
+  It defaults to the next offseason, the summer after the current season. The picker also
+  looks ahead to each later season a contract can run. Everything follows the league's current
+  season, so the list moves on by itself once Fantrax starts a new season. A note under the table
+  lists rostered players with no contract on file; the list can't place them.
 - **Admin** (admin only). Approve GMs who signed in, link each to their team, change roles, and
   remove access.
 
@@ -253,7 +260,7 @@ GMs sign in with Google. Anyone can ask to join; you approve them and link their
 
 - **Who sees what.** A GM sees every team's dashboard and players, and edits contracts and birth
   dates for players on their own team. They can run **Refresh rosters & stats**. Admins also get
-  full syncs, sheet publishing, the trade builder and the **Admin** tab. The API enforces all of
+  full syncs, sheet publishing, the trade builder, the **Offseason** list and the **Admin** tab. The API enforces all of
   this, not just the page.
 - **Joining.** Send GMs the site's link. When someone signs in for the first time they wait for
   approval and show up under **Requests** in the Admin tab, where you pick their team. You can
@@ -301,6 +308,7 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 | `GET /players?status=fa&position=D&sort=value` | search the player pool |
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
 | `GET /changes?team_id=me&kind=salary` | player and contract changes, newest first (`kind`: added, dropped, traded, salary, contract; repeat for several) |
+| `GET /offseason?year=2027` | *admin*: rostered players whose contracts end in that offseason (July 1 of `year`), RFAs then UFAs then unknown, plus rostered players with no contract on file. `year` defaults to the next offseason |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |
@@ -358,6 +366,7 @@ cfl/
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
   reconcile.py  compare a league-wide contract sheet with the app; import missing contracts
   changes.py    change log: compares every player's team and contract after each sync and edit
+  offseason.py  contracts ending in each offseason, and whether each player becomes an RFA or a UFA
   __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)

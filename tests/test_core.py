@@ -722,6 +722,48 @@ def test_contract_end_status_follows_the_july_1_age_rule():
     assert A.contract_end(ctx, _p("y", ["C", "F"], "F", 1)) is None   # no contract, nothing to expire
 
 
+def test_offseason_lists_expiring_contracts_by_status_and_moves_on_with_the_season():
+    from cfl import offseason as O
+
+    def signed(fid, salaries, born, team="t1", status="ACTIVE", contract_type="STANDARD"):
+        p = _with_contract(_p(fid, ["C", "F"], "F", 1, team=team, status=status), salaries)
+        p.birth_date, p.contract_type = born, contract_type
+        return p
+
+    ctx = _ctx_with([
+        signed("young", [4], "2004-03-01"),                                   # 23 on July 1, 2027: RFA
+        signed("vet", [10], "1990-01-01", team="t2"),                         # 37: UFA
+        signed("pickup", [2], "2005-01-01", contract_type="IN_SEASON_UFA"),   # always a UFA
+        signed("cheap", [1], "1992-01-01"),                                   # UFA, smaller salary
+        signed("nodob", [3], None),                                           # status unknown
+        signed("kid", [1], "2007-01-01", status="MINORS"),                    # prospects are listed too
+        signed("later", [5, 9], "2003-01-01"),                                # ends after 2027/28
+        signed("dropped", [6], "2000-01-01", team=None),                      # on no roster: nobody's to keep
+        _p("unsigned", ["C", "F"], "F", 1),                                   # rostered, no contract on file
+        _p("prospect", ["C", "F"], "F", 1, status="MINORS"),                  # unsigned prospect: not missing
+    ])
+    ctx.league = {"season_year": 2026}
+
+    res = O.expiring(ctx)
+    assert (res["year"], res["after_season"], res["ufa_age"]) == (2027, "2026/27", 27)
+    assert [o["year"] for o in res["offseasons"]] == [2027, 2028, 2029, 2030, 2031]
+    # RFAs, then UFAs, then unknown; the biggest final-season salary first within each.
+    assert [(p["fantrax_id"], p["contract_end"]["status"]) for p in res["players"]] == [
+        ("young", "RFA"), ("kid", "RFA"), ("vet", "UFA"), ("pickup", "UFA"), ("cheap", "UFA"), ("nodob", None)]
+    assert res["players"][0]["fantasy_team_id"] == "t1" and res["players"][0]["contract_end"]["age_at_expiry"] == 23
+    assert [p["fantrax_id"] for p in res["no_contract"]] == ["unsigned"]
+
+    later = O.expiring(ctx, 2028)
+    assert [(p["fantrax_id"], p["final_salary"]) for p in later["players"]] == [("later", 9)]   # last season's salary
+    assert later["after_season"] == "2027/28"
+    with pytest.raises(ValueError):
+        O.expiring(ctx, 2026)
+
+    # A season on, the next offseason is the one after it, with no code or setting to change.
+    ctx.league = {"season_year": 2027}
+    assert (O.expiring(ctx)["year"], O.expiring(ctx)["after_season"]) == (2028, "2027/28")
+
+
 def test_bios_sync_fills_birth_dates_and_keeps_manual_ones(conn):
     from cfl.sync import sync_bios
     conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
@@ -982,9 +1024,15 @@ def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_th
     assert gm.put("/players/f2/contract", json={"years": 2}).status_code == 403       # someone else's player
     assert gm.delete("/players/f2/contract").status_code == 403
     assert gm.put("/players/f2/birth-date", json={"birth_date": "2000-01-01"}).status_code == 403
-    for path in ("/analysis/teams/me/targets", "/analysis/teams/me/trade-partners", "/admin/users", "/publish"):
+    for path in ("/analysis/teams/me/targets", "/analysis/teams/me/trade-partners", "/admin/users", "/publish",
+                 "/offseason"):
         assert gm.get(path).status_code == 403, path                                  # the trade builder is the admin's
     assert gm.post("/analysis/trade", json={"give": ["f1"]}).status_code == 403
+    assert boss.get("/offseason").json()["year"] == 2027                              # the offseason list is too
+    # f1's edit left 2 seasons: it ends after 2027/28. f2's 3-year sheet contract ends after 2028/29.
+    assert [p["fantrax_id"] for p in boss.get("/offseason", params={"year": 2028}).json()["players"]] == ["f1"]
+    assert [p["fantrax_id"] for p in boss.get("/offseason", params={"year": 2029}).json()["players"]] == ["f2"]
+    assert boss.get("/offseason", params={"year": 2026}).status_code == 400
     assert boss.put("/players/f2/contract", json={"years": 1}).status_code == 200     # the admin edits anyone
 
     assert boss.delete("/admin/users/boss@example.com").status_code == 400            # can't remove yourself
