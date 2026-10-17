@@ -69,6 +69,9 @@ In the app, **Refresh rosters & stats** pulls today's Fantrax rosters and NHL.co
 replaces each team's salary-sheet contracts with what the sheets say now. Neither touches contract
 edits made in the app, and neither writes to Fantrax or Google.
 
+**Refresh rosters & stats** runs at most once every 10 minutes for the whole league, admins included.
+The button shows when it's available again. **Full sync…** has no limit.
+
 ```bash
 python -m cfl sync                    # everything, in dependency order
 python -m cfl sync rosters matchups   # just the fast-changing bits
@@ -282,7 +285,7 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 
 | Endpoint | |
 |---|---|
-| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`) |
+| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`; those run at most once every 10 minutes league-wide, 429 otherwise) |
 | `GET /league`, `/categories`, `/teams`, `/standings` | league data |
 | `GET /teams/{id}/roster` | roster with per-game projections and z-scores |
 | `GET /teams/{id}/contracts` | salary-sheet contracts, how each matched, and the cap summary |
