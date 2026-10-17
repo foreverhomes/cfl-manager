@@ -32,9 +32,11 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
 - **Players & cap.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
   Each contract shows its salary for every season it runs, then RFA or UFA in the season after it ends.
+  A team's page also shows its [draft picks](#draft-picks), where its GM records pick trades and RFA
+  compensation.
 - **Changes.** Roster moves and contract changes, newest first: players added, dropped or
-  traded (from Fantrax syncs), salary changes, and other contract changes (years, later
-  seasons, type). Filter by team or kind. The **By** column says where each came from:
+  traded (from Fantrax syncs), salary changes, other contract changes (years, later
+  seasons, type), and draft picks changing hands. Filter by team or kind. The **By** column says where each came from:
   `Sync`, `Contracts sheet`, or the name of the person who edited the contract. History
   starts with the first sync or edit after this view shipped. Lineup status moves (bench,
   IR, minors) and contract notes aren't logged.
@@ -181,6 +183,26 @@ python -m cfl reconcile-contracts "<sheet URL>" --apply                         
   also lists players the two sources put on different teams, same-salary contracts where only the
   sheet records the type, unmatched sheet rows, and rostered players with no contract anywhere.
 
+## Draft picks
+
+Every team gets 5 picks in each draft. Picks change hands in trades, and as compensation when a team
+signs another team's RFA. Fantrax doesn't track them for this league, so the app does.
+
+- **Which drafts:** the next three, starting with the one after this season (2027, 2028 and 2029
+  in 2026-27). When the season rolls over, the oldest drops off and a new one appears. Nothing
+  needs setting up: a pick no deal has moved still belongs to its original team.
+- **On the Players & cap tab:** a team's page shows a grid of drafts by round. Each cell lists the
+  picks the team owns: `Own`, or the name of the team the pick came from. Its own picks that went
+  elsewhere show dashed, as `→ Team`, and don't count. Hover a pick for how it moved, when, and who
+  recorded it. Below the grid, **Pick deals** lists every deal the team was part of.
+- **Recording a deal:** **Trade or send picks…** on your own team's page. A trade can move picks
+  both ways. RFA compensation goes one way: your team signed another team's RFA and sends it the
+  picks. A GM sends only their own team's picks, so in a trade each GM records the picks they send.
+  The admin can record both sides at once, for any team.
+- **Undo:** a deal recorded by mistake can be undone by whoever could have sent its picks, until one
+  of them moves again.
+- Every pick that moves shows on the **Changes** tab, under **Draft picks**.
+
 ## Publishing your team to its Google Sheet
 
 For teams marked `"owner": "app"` in `salary_sheets.json` (yours), the app is the source of truth:
@@ -300,7 +322,10 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 | `GET /matchups?period=N` | schedule + category scores for a week |
 | `GET /players?status=fa&position=D&sort=value` | search the player pool |
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
-| `GET /changes?team_id=me&kind=salary` | player and contract changes, newest first (`kind`: added, dropped, traded, salary, contract; repeat for several) |
+| `GET /changes?team_id=me&kind=salary` | player and contract changes, newest first (`kind`: added, dropped, traded, salary, contract, pick; repeat for several) |
+| `GET /teams/{id}/picks` | the team's picks in the upcoming drafts, its own picks now elsewhere, and its pick deals |
+| `POST /picks/deals` | move picks: `{"kind": "trade", "team_id": "me", "other_team_id": "...", "send": [{"draft_year": 2027, "round": 1, "original_team_id": "..."}], "receive": [...], "note": "..."}` (`kind`: trade or rfa; `receive` is for trades) |
+| `DELETE /picks/deals/{deal_id}` | undo a pick deal |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |
@@ -358,6 +383,7 @@ cfl/
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
   reconcile.py  compare a league-wide contract sheet with the app; import missing contracts
   changes.py    change log: compares every player's team and contract after each sync and edit
+  picks.py      draft picks: who owns each one, and the trades and RFA compensation that moved them
   __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)
