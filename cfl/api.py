@@ -1,6 +1,8 @@
 """HTTP API over the league store. Run: python -m cfl serve (or deploy to Vercel; see README)"""
 
 import json
+from datetime import datetime, timedelta, timezone
+from math import ceil
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 from urllib.parse import urlsplit
@@ -195,7 +197,7 @@ def health(conn: Connection = Depends(get_conn), user: User = Depends(current_us
     s = get_settings()
     last = row(conn, "SELECT resource, finished_at, status FROM sync_log ORDER BY id DESC LIMIT 1")
     return {"ok": True, "league_id": s.league_id, "my_team_id": user.team_id, "database": s.database_label,
-            "last_sync": last}
+            "last_sync": last, "refresh_wait_seconds": refresh_wait(conn)}
 
 
 def auto_publish() -> None:
@@ -209,12 +211,31 @@ def auto_publish() -> None:
         conn.close()
 
 
+REFRESH_COOLDOWN = timedelta(minutes=10)
+
+
+def refresh_wait(conn: Connection) -> int:
+    """Seconds until the next refresh may start. One cooldown for the whole league."""
+    last = row(conn, "SELECT started_at FROM sync_log WHERE resource IN ({}) ORDER BY id DESC LIMIT 1"
+               .format(", ".join("?" * len(auth.GM_SYNC_RESOURCES))), tuple(auth.GM_SYNC_RESOURCES))
+    if not last:
+        return 0
+    left = datetime.fromisoformat(last["started_at"]) + REFRESH_COOLDOWN - datetime.now(timezone.utc)
+    return max(0, ceil(left.total_seconds()))
+
+
 @data.post("/sync")
 def sync(background: BackgroundTasks,
          resources: Optional[List[str]] = Query(None, description="Subset of: " + ", ".join(RESOURCES)),
          conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
-    if not user.is_admin and not (resources and set(resources) <= auth.GM_SYNC_RESOURCES):
+    quick = resources and set(resources) <= auth.GM_SYNC_RESOURCES
+    if not user.is_admin and not quick:
         raise HTTPException(403, detail="Only the admin can run a full sync")
+    wait = refresh_wait(conn) if quick else 0
+    if wait:
+        raise HTTPException(429, headers={"Retry-After": str(wait)},
+                            detail="Rosters and stats were refreshed in the last 10 minutes. "
+                                   "Try again in {} min.".format(ceil(wait / 60)))
     try:
         results = sync_all(conn, get_settings(), resources)
     except ValueError as exc:

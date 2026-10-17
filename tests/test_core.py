@@ -6,6 +6,7 @@ it is wiped before every test.
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -577,6 +578,28 @@ def test_contract_edit_api_sets_years_and_keeps_the_salary(conn, tmp_path, monke
     assert client.delete("/players/f1/contract").json()["effective"]["salaries"] == [8] * 5
 
 
+def test_players_list_has_the_salary_for_each_contract_season(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    _player(conn, "f2", "Snuggerud, Jimmy", "STL", "RW")
+    for fid in ("f1", "f2"):
+        conn.execute("INSERT INTO league_players VALUES (?, ?, 'F', 'T')", (LEAGUE, fid))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, 'F', 'ACTIVE')", (LEAGUE, fid))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', 8, 3, '[8,9,10]')",
+                 (LEAGUE,))
+    conn.commit()
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+
+    res = TestClient(app).get("/players", params={"team_id": "t1"})
+
+    assert {p["fantrax_id"]: p["contract_salaries"] for p in res.json()["players"]} == {
+        "f1": [8, 9, 10], "f2": []}
+
+
 def _owned_league(conn, tmp_path):
     """t1 is app-owned per a salary_sheets.json; returns Settings pointing at it."""
     import json as _json
@@ -989,6 +1012,41 @@ def test_gms_refresh_rosters_and_stats_but_only_the_admin_runs_a_full_sync(conn,
 
     assert gm.post("/auth/logout").status_code == 200
     assert gm.get("/teams").status_code == 401
+
+
+def _rosters_synced(conn, minutes_ago):
+    started = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    conn.execute("INSERT INTO sync_log (resource, started_at, status) VALUES ('rosters', ?, 'ok')",
+                 (started.isoformat(timespec="seconds"),))
+    conn.commit()
+
+
+def test_a_refresh_waits_ten_minutes_after_the_last_one_league_wide(conn, tmp_path, monkeypatch):
+    import cfl.api as api
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    monkeypatch.setattr(api, "sync_all", lambda conn, settings, resources: [])
+    boss, _ = _signed_in("boss")
+    boss.post("/admin/users", json={"email": "gm@example.com", "team_id": "t2"})
+    gm, _ = _signed_in("gm")
+    quick = {"resources": ["rosters", "stats", "match", "bios"]}
+
+    _rosters_synced(conn, minutes_ago=11)
+    assert gm.post("/sync", params=quick).status_code == 200
+    _rosters_synced(conn, minutes_ago=9)
+    assert gm.post("/sync", params=quick).status_code == 429
+    assert boss.post("/sync", params=quick).status_code == 429     # admins wait too
+    assert boss.post("/sync").status_code == 200                   # a full sync never waits
+
+
+def test_health_says_how_long_until_the_next_refresh(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    client = TestClient(app)                                     # logins off: the local admin
+    assert client.get("/health").json()["refresh_wait_seconds"] == 0
+    _rosters_synced(conn, minutes_ago=9)
+    assert 0 < client.get("/health").json()["refresh_wait_seconds"] <= 60
 
 
 def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(conn, tmp_path, monkeypatch):

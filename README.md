@@ -29,8 +29,9 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   the league average, with actual weekly W-L-T and need weights. A league heatmap shows every
   team's projected rank in every category. A sortable roster table rounds it out. The team picker
   in the header lets you view any team.
-- **Players.** Search the league or browse a team, filter to players missing a salary, and edit
+- **Players & cap.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
+  Each contract shows its salary for every season it runs, then RFA or UFA in the season after it ends.
 - **Changes.** Roster moves and contract changes, newest first: players added, dropped or
   traded (from Fantrax syncs), salary changes, and other contract changes (years, later
   seasons, type). Filter by team or kind. The **By** column says where each came from:
@@ -74,6 +75,9 @@ In the app, **Refresh rosters & stats** pulls today's Fantrax rosters and NHL.co
 (`rosters`, `stats`, `match`, plus `bios` for any new player's birth date). **Full sync…** re-reads every source after a confirmation, and
 replaces each team's salary-sheet contracts with what the sheets say now. Neither touches contract
 edits made in the app, and neither writes to Fantrax or Google.
+
+**Refresh rosters & stats** runs at most once every 10 minutes for the whole league, admins included.
+The button shows when it's available again. **Full sync…** has no limit.
 
 ```bash
 python -m cfl sync                    # everything, in dependency order
@@ -127,7 +131,7 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   `cap` summary covering this season and the next four. Trade evaluations show cap space
   before/after for each team that has a sheet, flag incoming players whose salary is unknown, and
   include buyout costs for auto-dropped players.
-- **Editing contracts:** the **Players** tab (or a click on any name in the roster table) opens a
+- **Editing contracts:** the **Players & cap** tab (or a click on any name in the roster table) opens a
   contract editor. It sets the years left on a contract, plus its type and a note; the salary stays
   as the sheet has it. A player on no sheet also needs a salary. Edits are stored locally as
   overrides. They win over the sheets, survive syncs, and can be reverted to the sheet. Contract
@@ -289,7 +293,7 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 
 | Endpoint | |
 |---|---|
-| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`) |
+| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`; those run at most once every 10 minutes league-wide, 429 otherwise) |
 | `GET /league`, `/categories`, `/teams`, `/standings` | league data |
 | `GET /teams/{id}/roster` | roster with per-game projections and z-scores |
 | `GET /teams/{id}/contracts` | salary-sheet contracts, how each matched, and the cap summary |
