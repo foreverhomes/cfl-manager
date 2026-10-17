@@ -33,6 +33,11 @@ def season_id_for(season_year: int) -> int:
     return int("{}{}".format(season_year, season_year + 1))
 
 
+def league_season(conn: Connection, league_id: str) -> Optional[int]:
+    """The league's current season (2026 for 2026/27), as of the last league sync."""
+    return (row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,)) or {}).get("season_year")
+
+
 def normalize_name(value: Optional[str]) -> str:
     if not value:
         return ""
@@ -264,10 +269,9 @@ def _goalie_record(g: Dict[str, Any], season_id: int, ts: str) -> Dict[str, Any]
 
 def stat_seasons(conn: Connection, league_id: str) -> List[int]:
     """Current NHL season for the league plus the previous one (used as the prior)."""
-    lg = row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,))
-    if not lg or not lg["season_year"]:
+    year = league_season(conn, league_id)
+    if not year:
         raise RuntimeError("League not synced yet; sync 'league' first")
-    year = lg["season_year"]
     return [season_id_for(year), season_id_for(year - 1)]
 
 
@@ -678,11 +682,6 @@ def app_owned_teams(conn: Connection, settings: Settings) -> Dict[str, Dict[str,
     return out
 
 
-def league_season(conn: Connection, league_id: str) -> Optional[int]:
-    """The league's current season (2026 for 2026/27), as of the last league sync."""
-    return (row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,)) or {}).get("season_year")
-
-
 def current_salaries(record: Dict[str, Any], season_year: Optional[int]) -> List[float]:
     """An app contract record's salaries from season_year on. Its list starts at the season it was
     saved in, so the seasons since then have passed; empty once the contract has run out."""
@@ -692,23 +691,22 @@ def current_salaries(record: Dict[str, Any], season_year: Optional[int]) -> List
     return salaries
 
 
-def adopt_sheet_contracts(conn: Connection, league_id: str, team_id: str) -> Dict[str, Any]:
+def adopt_sheet_contracts(conn: Connection, league_id: str, team_id: str, season_year: int) -> Dict[str, Any]:
     """Move a team's sheet contracts into the app's own contract records (contract_overrides), once.
 
     Players who already have an app record keep it, unless it has run out. Buyout rows stay in
     `contracts`, since they have no player to attach to. Returns what was adopted.
     """
-    season = league_season(conn, league_id)
     sheet_rows = rows(conn, "SELECT * FROM contracts WHERE league_id=? AND team_id=? AND section != 'BUYOUT'",
                       (league_id, team_id))
     have = {r["player_id"] for r in rows(conn, "SELECT * FROM contract_overrides WHERE league_id=?", (league_id,))
-            if current_salaries(r, season)}
+            if current_salaries(r, season_year)}
     adopt = [r for r in sheet_rows if r["player_id"] and r["player_id"] not in have]
     ts = now_iso()
     with transaction(conn):
         upsert(conn, "contract_overrides", [{
             "league_id": league_id, "player_id": r["player_id"], "salaries": r["salaries"],
-            "contract_type": "STANDARD", "note": None, "updated_at": ts, "season_year": season}
+            "contract_type": "STANDARD", "note": None, "updated_at": ts, "season_year": season_year}
             for r in adopt], ["league_id", "player_id"])
         conn.execute("DELETE FROM contracts WHERE league_id=? AND team_id=? AND section != 'BUYOUT'", (league_id, team_id))
     return {"adopted": len(adopt), "already_in_app": sum(1 for r in sheet_rows if r["player_id"] in have),
@@ -722,8 +720,8 @@ def sync_salaries(conn: Connection, settings: Settings) -> Dict[str, Any]:
     if not sources:
         return {"skipped": "no salary sheets configured ({})".format(settings.salary_sheets_path.name)}
     league_id = settings.league_id
-    lg = row(conn, "SELECT season_year FROM league WHERE id=?", (league_id,))
-    if not lg:
+    season = league_season(conn, league_id)
+    if not season:
         raise RuntimeError("League not synced yet; sync 'league' first")
     period = (row(conn, "SELECT MAX(period) AS p FROM roster_items WHERE league_id=?", (league_id,)) or {}).get("p")
     pool = [(r["fantrax_id"], r["name"]) for r in rows(conn, "SELECT p.fantrax_id, p.name FROM players p "
@@ -734,10 +732,10 @@ def sync_salaries(conn: Connection, settings: Settings) -> Dict[str, Any]:
         team = row(conn, "SELECT name FROM teams WHERE id=?", (team_id,))
         if spec.get("owner") == "app":
             out[team["name"] if team else team_id] = dict(
-                {"owner": "app", "sheet_read": False}, **adopt_sheet_contracts(conn, league_id, team_id))
+                {"owner": "app", "sheet_read": False}, **adopt_sheet_contracts(conn, league_id, team_id, season))
             continue
         source = spec["url"]
-        parsed = parse_salary_sheet(list(csv.reader(io.StringIO(fetch_sheet_csv(source)))), lg["season_year"],
+        parsed = parse_salary_sheet(list(csv.reader(io.StringIO(fetch_sheet_csv(source)))), season,
                                     salary_column=spec.get("salary_column"), years_column=spec.get("years_column"))
         contracts = parsed["contracts"]
         roster = rows(conn, "SELECT p.fantrax_id, p.name, ri.status FROM roster_items ri "

@@ -39,8 +39,9 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   seasons, type), and draft picks changing hands. Filter by team or kind. The **By** column says where each came from:
   `Sync`, `Contracts sheet`, or the name of the person who edited the contract. History
   starts with the first sync or edit after this view shipped. Lineup status moves (bench,
-  IR, minors) and contract notes aren't logged, and neither is a new season: contracts
-  getting a season shorter, or running out, at the rollover.
+  IR, minors) and contract notes aren't logged. Neither is the first sync of a new season, since
+  every contract is a season shorter by then. That sync only saves a new starting point, so a
+  roster move it picks up isn't logged either.
 - **Trade builder** (admin only). Select any of your players. Optionally pick a trade partner and
   their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in

@@ -32,18 +32,6 @@ def diff(old: Snapshot, new: Snapshot) -> List[Dict[str, Any]]:
     return out
 
 
-def aged(old: Snapshot, seasons: int) -> Snapshot:
-    """A snapshot as it reads `seasons` seasons later, when every contract has that many fewer
-    seasons left. A new season isn't a change, so it is diffed against this."""
-    if seasons <= 0:
-        return old
-    out = {}
-    for pid, e in old.items():
-        salaries = e["salaries"][seasons:]
-        out[pid] = dict(e, salaries=salaries, contract_type=e["contract_type"] if salaries else "STANDARD")
-    return out
-
-
 def snapshot(ctx: A.Context) -> Snapshot:
     """Every player on a team or with a contract."""
     return {p.fantrax_id: {"team_id": p.team_id, "salaries": p.contract_salaries, "contract_type": p.contract_type}
@@ -51,18 +39,17 @@ def snapshot(ctx: A.Context) -> Snapshot:
 
 
 def record(conn: Connection, ctx: A.Context, source: str) -> Dict[str, Any]:
-    """Log what changed since the last snapshot, then save this one. The first run only saves a baseline."""
+    """Log what changed since the last snapshot, then save this one. The first run only saves a baseline,
+    and so does the first run in a new season: every contract is a season shorter then, which isn't a change."""
     key = "changes:{}".format(ctx.league_id)
     saved = row(conn, "SELECT value FROM app_state WHERE key=?", (key,))
     season = ctx.league.get("season_year")
+    old = json.loads(saved["value"]) if saved else None
+    if old is not None and "players" not in old:      # saved before snapshots carried their season
+        old = {"season_year": season, "players": old}
+    baseline = old is None or old["season_year"] != season
     new = snapshot(ctx)
-    found = []
-    if saved:
-        old = json.loads(saved["value"])
-        if "players" not in old:      # saved before snapshots carried their season
-            old = {"season_year": season, "players": old}
-        passed = season - old["season_year"] if season and old["season_year"] else 0
-        found = diff(aged(old["players"], passed), new)
+    found = [] if baseline else diff(old["players"], new)
     ts = now_iso()
     with transaction(conn):
         conn.executemany("INSERT INTO player_changes (league_id, player_id, team_id, kind, old_value, new_value, "
@@ -71,4 +58,4 @@ def record(conn: Connection, ctx: A.Context, source: str) -> Dict[str, Any]:
                            json.dumps(c["new_value"]), source, ts) for c in found])
         upsert(conn, "app_state", [{"key": key, "value": json.dumps({"season_year": season, "players": new}),
                                     "updated_at": ts}], ["key"])
-    return {"baseline": saved is None, "changes": len(found)}
+    return {"baseline": baseline, "changes": len(found)}

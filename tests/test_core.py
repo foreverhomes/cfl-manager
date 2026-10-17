@@ -588,15 +588,21 @@ def test_contract_records_from_before_seasons_were_kept_belong_to_the_current_se
     path = tmp_path / "old.db"
     old = sqlite3.connect(str(path))
     old.executescript("""
-        CREATE TABLE league (id TEXT PRIMARY KEY, name TEXT NOT NULL, season_year INTEGER);
+        CREATE TABLE league (id TEXT PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE contract_overrides (league_id TEXT NOT NULL, player_id TEXT NOT NULL, salaries TEXT NOT NULL,
             contract_type TEXT NOT NULL DEFAULT 'STANDARD', note TEXT, updated_at TEXT NOT NULL,
             PRIMARY KEY (league_id, player_id));
-        INSERT INTO league VALUES ('L1', 'Test', 2026);
+        INSERT INTO league VALUES ('L1', 'Test');
         INSERT INTO contract_overrides VALUES ('L1', 'f1', '[5,5]', 'STANDARD', NULL, 'x');
     """)
     old.close()
-    c = connect(path)
+    with pytest.raises(sqlite3.OperationalError):                   # no league season to fill in...
+        connect(path)
+    old = sqlite3.connect(str(path))
+    assert "season_year" not in db._columns(old, "contract_overrides")   # ...so the column isn't added either
+    old.executescript("ALTER TABLE league ADD COLUMN season_year INTEGER; UPDATE league SET season_year = 2026;")
+    old.close()
+    c = connect(path)                                               # the next connect tries again
     assert rows(c, "SELECT player_id, season_year FROM contract_overrides") == [{"player_id": "f1", "season_year": 2026}]
     c.execute("UPDATE league SET season_year=2027")
     c.execute("INSERT INTO contract_overrides (league_id, player_id, salaries, updated_at) VALUES ('L1', 'f2', '[1]', 'x')")
@@ -673,11 +679,15 @@ def test_app_owned_team_adopts_its_sheet_contracts_once(conn, tmp_path):
                  " salaries) VALUES (?, 't1', 'Morgan Geekie', 'f1', 'ROSTER', 5, 3, '[5,5,5]')", (LEAGUE,))
     conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, years_remaining,"
                  " salaries) VALUES (?, 't1', 'Typo Name', NULL, 'ROSTER', 2, 1, '[2]')", (LEAGUE,))
+    # An app record from 2025/26 that has run out: it doesn't keep the sheet's contract out.
+    conn.execute("INSERT INTO contract_overrides VALUES (?, 'f1', '[4]', 'STANDARD', NULL, 'x', 2025)", (LEAGUE,))
     conn.commit()
     first = sync_salaries(conn, settings)["One"]
     assert first["adopted"] == 1 and first["unmatched_dropped"] == ["Typo Name"] and not first["sheet_read"]
+    assert first["already_in_app"] == 0
     import json as _json
-    assert _json.loads(conn.execute("SELECT salaries FROM contract_overrides WHERE player_id='f1'").fetchone()[0]) == [5, 5, 5]
+    salaries, season = conn.execute("SELECT salaries, season_year FROM contract_overrides WHERE player_id='f1'").fetchone()
+    assert (_json.loads(salaries), season) == ([5, 5, 5], 2026)
     assert conn.execute("SELECT COUNT(*) FROM contracts WHERE team_id='t1'").fetchone()[0] == 0
     assert sync_salaries(conn, settings)["One"]["adopted"] == 0      # the sheet is never read again
 
@@ -930,9 +940,9 @@ def test_a_new_season_is_not_logged_as_a_change_to_every_contract(conn, tmp_path
     conn.commit()
     assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 0}
 
-    conn.execute("UPDATE league SET season_year=2027 WHERE id=?", (LEAGUE,))
+    conn.execute("UPDATE league SET season_year=2027 WHERE id=?", (LEAGUE,))   # f1 down to [5], f2's ELC run out
     conn.commit()
-    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 0}
+    assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": True, "changes": 0}
     C.save_override(conn, LEAGUE, "f1", [7])                       # a real change, in the new season
     assert changes.record(conn, A.load_context(conn, settings), "Sync") == {"baseline": False, "changes": 1}
     (logged,) = rows(conn, "SELECT * FROM player_changes")
@@ -1284,8 +1294,9 @@ def test_reconcile_imports_missing_contracts_and_lists_the_rest(conn, tmp_path):
     ctx = A.load_context(conn, settings)
     g, s = ctx.players["f2"], ctx.players["f3"]
     assert (g.contract_salaries, g.contract_source, s.contract_type) == ([11], "override", "ELC")
-    note = conn.execute("SELECT note FROM contract_overrides WHERE player_id='f2'").fetchone()[0]
+    note, season = conn.execute("SELECT note, season_year FROM contract_overrides WHERE player_id='f2'").fetchone()
     assert note.startswith("From the CFL Contracts sheet, row 4 (length not posted; 1 season assumed)")
+    assert season == 2026                                               # the season it was imported in
     again = R.reconcile(conn, ctx, CONTRACT_SHEET)
     assert again["imports"] == [] and again["agree"] == 4 and len(again["review"]) == 2
 
