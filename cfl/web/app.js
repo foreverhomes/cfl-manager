@@ -260,6 +260,20 @@ function renderHeader() {
   const last = state.health.last_sync;
   byId("sync-status").textContent = last && last.finished_at
     ? `Last sync ${new Date(last.finished_at).toLocaleString()}` : "";
+  renderRefreshButton(state.health.refresh_wait_seconds);
+}
+
+const REFRESH_LABEL = byId("refresh-btn").textContent;
+let refreshTimer = null;
+
+function renderRefreshButton(wait) {
+  const btn = byId("refresh-btn");
+  clearTimeout(refreshTimer);
+  btn.disabled = wait > 0;
+  btn.textContent = wait > 0
+    ? `Refresh available ${new Date(Date.now() + wait * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+    : REFRESH_LABEL;
+  if (wait > 0) refreshTimer = setTimeout(() => renderRefreshButton(0), wait * 1000);
 }
 
 function wireControls() {
@@ -374,9 +388,12 @@ async function runSync(mode) {
     route();
   } catch (err) {
     showError(err);
+    if (err.status === 429) state.health = await api.get("/health");   // someone refreshed after this page loaded
+    renderHeader();
   } finally {
     buttons.forEach((b) => { b.disabled = false; });
     btn.textContent = label;
+    renderRefreshButton(state.health.refresh_wait_seconds);
   }
 }
 
