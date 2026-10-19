@@ -598,6 +598,72 @@ def test_players_list_has_the_salary_for_each_contract_season(conn, tmp_path, mo
 
     assert {p["fantrax_id"]: p["contract_salaries"] for p in res.json()["players"]} == {
         "f1": [8, 9, 10], "f2": []}
+    cap = res.json()["cap"]                                     # the Players & cap tab's cap card
+    assert (cap["committed"], cap["unknown_salary"]) == (8, ["Jimmy Snuggerud"])
+    assert TestClient(app).get("/players", params={"q": "Dacc"}).json()["cap"] is None
+
+
+def test_dashboard_overview_has_this_weeks_matchup_season_records_and_nhl_stats(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    for i, (short, name, grp, lower) in enumerate((("A", "Assists", "SKATER", 0), ("GAA", "GAA", "GOALIE", 1),
+                                                   ("G", "Goals", "SKATER", 0), ("W", "Wins", "GOALIE", 0))):
+        conn.execute("INSERT INTO scoring_categories (league_id, short_name, name, grp, lower_is_better, sort_order) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", (LEAGUE, short, name, grp, lower, i))
+    for tid, name in (("t1", "One"), ("t2", "Two"), ("t3", "Three")):
+        conn.execute("INSERT INTO teams (id, league_id, name) VALUES (?, ?, ?)", (tid, LEAGUE, name))
+    # Week 1 is over; week 2 is on now. t1 plays t2 both weeks; t3 has a bye in week 2.
+    conn.execute("INSERT INTO periods VALUES (?, 'scoring', 1, '2020-01-01T13:00:00.0-0500', '2020-01-07T18:59:59.0-0500')",
+                 (LEAGUE,))
+    conn.execute("INSERT INTO periods VALUES (?, 'scoring', 2, '2020-01-08T13:00:00.0-0500', '2099-01-07T18:59:59.0-0500')",
+                 (LEAGUE,))
+    conn.execute("INSERT INTO matchups VALUES (?, 2, 0, 't1', 't2'), (?, 2, 1, 't3', NULL)", (LEAGUE, LEAGUE))
+    scores = {1: {"t1": {"G": 5, "A": 1, "W": 2, "GAA": 2.0}, "t2": {"G": 2, "A": 3, "W": 1, "GAA": 3.0}},
+              2: {"t1": {"G": 3, "A": 2, "W": 1, "GAA": 2.5}, "t2": {"G": 1, "A": 4, "W": 1, "GAA": 2.1}}}
+    for period, teams in scores.items():
+        for me, opp in (("t1", "t2"), ("t2", "t1")):
+            outcomes = []
+            for cat, v in teams[me].items():
+                theirs = teams[opp][cat]
+                better = v < theirs if cat == "GAA" else v > theirs
+                outcomes.append("TIE" if v == theirs else "WIN" if better else "LOSS")
+                conn.execute("INSERT INTO matchup_category_scores VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             (LEAGUE, period, me, opp, cat, v, outcomes[-1]))
+            conn.execute("INSERT INTO matchup_results VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL)",
+                         (LEAGUE, period, me, opp, *(outcomes.count(o) for o in ("WIN", "LOSS", "TIE"))))
+    conn.execute("INSERT INTO sync_log (resource, started_at, finished_at, status) "
+                 "VALUES ('matchups', '2026-10-19T14:00:00+00:00', '2026-10-19T14:00:05+00:00', 'ok')")
+    for fid, name, pos, status, nhl_id in (("f1", "Connor, Kyle", "LW", "ACTIVE", 1), ("f2", "Daccord, Joey", "G", "RESERVE", 2),
+                                           ("f3", "Kid, Some", "C", "MINORS", None)):
+        _player(conn, fid, name, "WPG", pos)
+        conn.execute("UPDATE players SET nhl_id=? WHERE fantrax_id=?", (nhl_id, fid))
+        conn.execute("INSERT INTO league_players VALUES (?, ?, ?, 'T')", (LEAGUE, fid, pos))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, ?, ?)", (LEAGUE, fid, pos, status))
+    _skater(conn, 1, "Kyle Connor", "WPG", "L", gp=7, goals=4, assists=6)
+    _skater(conn, 1, "Kyle Connor", "WPG", "L", season=20252026, gp=82, goals=41, assists=56)   # last season: not shown
+    upsert(conn, "goalie_stats", [{"nhl_id": 2, "season_id": 20262027, "gp": 3, "wins": 2, "goals_against": 6,
+                                   "toi_seconds": 3 * 3600, "saves": 90, "shots_against": 96, "shutouts": 0}],
+           ["nhl_id", "season_id"])
+    conn.commit()
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+    client = TestClient(app)
+
+    res = client.get("/teams/t1/overview").json()
+
+    week = res["week"]
+    assert (week["period"], week["bye"], week["scores_as_of"]) == (2, False, "2026-10-19T14:00:05+00:00")
+    assert [(m["team_id"], m["record"]) for m in week["matchups"]] == [("t2", [1, 2, 1])]
+    assert week["matchups"][0]["categories"]["G"] == {"value": 3, "opponent_value": 1, "outcome": "WIN"}
+    # Categories read like a stat line, each with its season record (both weeks) and league rank.
+    assert [(c["category"], c["record"], c["rank"]) for c in res["categories"]] == [
+        ("G", "2-0-0", 1), ("A", "0-2-0", 2), ("W", "1-0-1", 1), ("GAA", "1-1-0", 1)]
+    assert {p["fantrax_id"]: p["season"] for p in res["roster"]} == {
+        "f1": {"G": 4, "A": 6}, "f2": {"W": 2, "GAA": 2.0}, "f3": None}
+    assert res["roster_spots"] == {"used": 2, "limit": None}   # the prospect doesn't take a spot
+
+    bye = client.get("/teams/t3/overview").json()["week"]
+    assert (bye["bye"], bye["matchups"]) == (True, [])
 
 
 def _owned_league(conn, tmp_path):
@@ -1051,7 +1117,7 @@ def test_gms_refresh_rosters_and_stats_but_only_the_admin_runs_a_full_sync(conn,
     gm, res = _signed_in("gm")
     assert (res.json()["status"], res.json()["team_id"]) == ("active", "t2")          # straight in
 
-    quick = {"resources": ["rosters", "stats", "match", "bios"]}
+    quick = {"resources": ["rosters", "standings", "matchups", "stats", "match", "bios"]}
     assert gm.post("/sync", params=quick).status_code == 200
     assert gm.post("/sync").status_code == 403
     assert gm.post("/sync", params={"resources": ["salaries"]}).status_code == 403
@@ -1077,7 +1143,7 @@ def test_a_refresh_waits_ten_minutes_after_the_last_one_league_wide(conn, tmp_pa
     boss, _ = _signed_in("boss")
     boss.post("/admin/users", json={"email": "gm@example.com", "team_id": "t2"})
     gm, _ = _signed_in("gm")
-    quick = {"resources": ["rosters", "stats", "match", "bios"]}
+    quick = {"resources": ["rosters", "standings", "matchups", "stats", "match", "bios"]}
 
     _rosters_synced(conn, minutes_ago=11)
     assert gm.post("/sync", params=quick).status_code == 200

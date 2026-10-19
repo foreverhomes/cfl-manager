@@ -155,13 +155,6 @@ function divBar(z, maxAbs, { mini = false, label = "" } = {}) {
   }
   return el;
 }
-function heatStyle(z) {
-  if (z == null) return { background: "var(--wash)" };
-  const t = Math.max(-1, Math.min(1, z / 2));
-  const pct = Math.round(Math.abs(t) * 100);
-  const pole = t >= 0 ? "var(--div-pos)" : "var(--div-neg)";
-  return { background: `color-mix(in oklab, ${pole} ${pct}%, var(--div-mid))`, color: pct > 55 ? "#ffffff" : "var(--ink)" };
-}
 
 /* ================================================================ state */
 
@@ -171,10 +164,9 @@ const state = {
   league: null,
   teams: [],
   team: null,
-  strategy: prefs.get("strategy", "marginal"),
-  overview: null,
-  profiles: new Map(),
-  rosterSort: { key: "need_value", dir: -1 },
+  overviews: new Map(),   // the Dashboard's /teams/{id}/overview, by team
+  profiles: new Map(),    // the Trade builder's /analysis/teams/{id}/profile, by team
+  rosterSort: { key: "salary", dir: -1 },
   rosterView: "roster",
   playersSort: { key: "season0", dir: -1 },
   playersView: "all",
@@ -204,28 +196,22 @@ function showError(err) {
 }
 function clearError() { byId("error").hidden = true; }
 
-function getProfile(teamId) {
-  const key = `${teamId}|${state.strategy}`;
-  if (!state.profiles.has(key)) {
-    const p = api.get(`/analysis/teams/${encodeURIComponent(teamId)}/profile`, { strategy: state.strategy });
-    p.catch(() => state.profiles.delete(key));
-    state.profiles.set(key, p);
+// One request per team until something changes (a sync or an edit clears them).
+function cached(map, teamId, path) {
+  if (!map.has(teamId)) {
+    const p = api.get(path);
+    p.catch(() => map.delete(teamId));
+    map.set(teamId, p);
   }
-  return state.profiles.get(key);
+  return map.get(teamId);
 }
-function getOverview() {
-  if (!state.overview) {
-    state.overview = api.get("/analysis/overview");
-    state.overview.catch(() => { state.overview = null; });
-  }
-  return state.overview;
-}
-function resetCaches() { state.profiles.clear(); state.overview = null; }
+const getOverview = (id) => cached(state.overviews, id, `/teams/${encodeURIComponent(id)}/overview`);
+const getProfile = (id) => cached(state.profiles, id, `/analysis/teams/${encodeURIComponent(id)}/profile`);
+function resetCaches() { state.profiles.clear(); state.overviews.clear(); }
 
 /* ================================================================ header / boot */
 
 async function boot() {
-  byId("strategy-select").value = state.strategy;
   byId("tolerance-select").value = state.trade.tolerance;
   wireControls();
   try {
@@ -300,11 +286,6 @@ function wireControls() {
     if (state.trade.partner === state.team) state.trade.partner = "";
     route();
   });
-  byId("strategy-select").addEventListener("change", (e) => {
-    state.strategy = e.target.value;
-    prefs.set("strategy", state.strategy);
-    loadDashboard();
-  });
   byId("refresh-btn").addEventListener("click", () => runSync("quick"));
   byId("sync-btn").addEventListener("click", confirmFullSync);
 
@@ -334,8 +315,9 @@ function wireControls() {
 
 // "quick" only refreshes what changes day to day; "full" re-reads every source.
 const SYNC_MODES = {
-  quick: { resources: ["rosters", "stats", "match", "bios"], busy: "Refreshing…",
-    status: "Pulling today's Fantrax rosters and NHL.com stats…", done: "Rosters and stats refreshed" },
+  quick: { resources: ["rosters", "standings", "matchups", "stats", "match", "bios"], busy: "Refreshing…",
+    status: "Pulling today's Fantrax rosters, standings and matchup scores, and NHL.com stats…",
+    done: "Rosters and stats refreshed" },
   full: { resources: null, busy: "Syncing…",
     status: "Full sync: Fantrax league, rosters and matchups, NHL.com stats and schedule, salary sheets…",
     done: "Full sync finished" },
@@ -436,24 +418,17 @@ function route() {
 
 /* ================================================================ dashboard */
 
-const STRATEGY_HINT = {
-  marginal: "Weights categories where several teams are close to you: that's where one more goal or hit flips a weekly matchup.",
-  weakness: "Weights your lowest-ranked categories most.",
-  even: "Every category counts the same.",
-};
-
 async function loadDashboard() {
   const view = byId("view-dashboard");
   const token = ++seqs.dashboard;
-  byId("strategy-hint").textContent = STRATEGY_HINT[state.strategy];
   view.classList.add("is-loading");
   try {
-    const [profile, overview] = await Promise.all([getProfile(state.team), getOverview()]);
+    const ov = await getOverview(state.team);
     if (token !== seqs.dashboard) return;
-    renderKpis(profile);
-    renderCategoryProfile(profile);
-    renderHeatmap(overview);
-    renderRoster(profile);
+    renderKpis(ov);
+    renderWeek(ov);
+    renderStandings(ov);
+    renderRoster(ov);
     clearError();
   } catch (err) {
     if (token === seqs.dashboard) showError(err);
@@ -462,44 +437,172 @@ async function loadDashboard() {
   }
 }
 
-function tile(label, value, unit, sub, { hero = false } = {}) {
-  return h("div", { class: "tile" + (hero ? " hero-tile" : "") },
+// `error`: over a league limit (cap, contract-year bank, roster). The sub says by how much, with overBy().
+function tile(label, value, unit, sub, { error = false } = {}) {
+  return h("div", { class: "tile" + (error ? " error" : "") },
     h("div", { class: "tile-label" }, label),
-    h("div", { class: "tile-value" + (hero ? " hero" : "") }, value, unit ? h("small", {}, unit) : null),
+    h("div", { class: "tile-value" }, value, unit ? h("small", {}, unit) : null),
     sub ? h("div", { class: "tile-sub" }, sub) : null);
 }
+const overBy = (text) => [h("span", { class: "down", "aria-hidden": "true" }, "▲ "), text];
 
-function renderKpis(profile) {
-  const nCats = profile.categories.length;
+// "Oct 4" from a Fantrax period date such as 2026-10-04T13:00:00.0-0400.
+const periodDay = (iso) => new Date(`${iso.slice(0, 10)}T12:00`).toLocaleDateString([], { month: "short", day: "numeric" });
+const weekDates = (week) => `${periodDay(week.start_date)} – ${periodDay(week.end_date)}`;
+// A category total as Fantrax shows it: ratios to 2 or 3 decimals, counts whole.
+function fmtScore(cat, v) {
+  if (v == null) return "–";
+  if (RATIO.has(cat)) return fmtCat(cat, v);
+  return cat === "+/-" ? fmtSigned(v, 0) : String(Math.round(v));
+}
+// This week's category score against one opponent, from the team's side. Null before it starts.
+function weekScore(m) {
+  if (!m.record) return null;
+  const [w, l, t] = m.record;
+  const dir = w > l ? "up" : w < l ? "down" : "flat";
+  return { text: `${w}–${l}–${t}`, dir, says: { up: "Winning vs", down: "Losing to", flat: "Tied with" }[dir] };
+}
+const RESULT = { WIN: ["W", "up", "won"], LOSS: ["L", "down", "lost"], TIE: ["T", "flat", "tied"] };
+
+function renderKpis(ov) {
   const standing = state.teams.find((t) => t.id === state.team) || {};
-  const skaterGames = profile.roster.filter((p) => p.position !== "G")
-    .reduce((s, p) => s + (p.lineup_games_per_week || 0), 0);
-  const goalieStarts = profile.roster.reduce((s, p) => s + (p.expected_starts_per_week || 0), 0);
   byId("kpis").replaceChildren(...[
-    tile("Expected category wins per week", fmtNum(profile.expected_category_wins, 2), `of ${nCats}`,
-      "Against an average opponent, from projected rest-of-season lineups", { hero: true }),
-    tile("Projected strength", ordinal(profile.projected_overall_rank), `of ${state.teams.length}`,
-      "Total category strength across the league"),
-    tile("Standings", standing.rank ? ordinal(standing.rank) : "–", standing.record || "",
-      "Fantrax head-to-head standings"),
-    tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins"),
-    tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all your goalies"),
-    profile.cap ? tile("Cap space", fmtMoney(profile.cap.space), `of ${fmtMoney(profile.cap.cap)}`,
-      `${fmtMoney(profile.cap.committed)} committed` +
-      (profile.cap.unknown_salary.length ? ` · no salary for ${profile.cap.unknown_salary.join(", ")}` : "")) : null,
-    profile.cap ? yearsTile(profile.cap) : null,
+    weekTile(ov.week),
+    tile("Standings", standing.rank ? ordinal(standing.rank) : "–", `of ${state.teams.length}`,
+      [standing.record, standing.games_back ? `${fmtNum(standing.games_back, 1)} games back` : null]
+        .filter(Boolean).join(" · ") || "Fantrax standings"),
+    spotsTile(ov),
   ].filter(Boolean));
-  renderCap(profile.cap);
+}
+
+// The week's score, one line per opponent (some weeks have two), or the bye.
+function weekTile(week) {
+  if (!week) return null;
+  if (!week.matchups.length) {
+    return tile(`Week ${week.period}`, week.bye ? "Bye" : "–", null, week.bye ? "No matchup this week" : "No matchup found");
+  }
+  return h("div", { class: "tile" },
+    h("div", { class: "tile-label" }, `Week ${week.period} · ${weekDates(week)}`),
+    week.matchups.map((m) => {
+      const s = weekScore(m);
+      return [
+        h("div", { class: "tile-value" }, s ? s.text : "0–0–0"),
+        h("div", { class: "tile-sub" }, s ? [h("span", { class: s.dir, "aria-hidden": "true" }, ICON[s.dir]), ` ${s.says} `] : "vs ",
+          m.team_name),
+      ];
+    }));
+}
+
+// Active and bench players count against the roster limit; IR and prospects don't.
+function spotsTile(ov) {
+  const { used, limit } = ov.roster_spots;
+  const count = (status) => ov.roster.filter((p) => p.roster_status === status).length;
+  const ir = count("INJURED_RESERVE"), minors = count("MINORS");
+  const others = [ir ? `${ir} on IR` : null, minors ? `${minors} prospect${minors === 1 ? "" : "s"}` : null];
+  if (!limit) return tile("Roster", String(used), "active and bench", others.filter(Boolean).join(" · "));
+  const over = used - limit;
+  return tile("Roster spots", String(used), `of ${limit}`,
+    [over > 0 ? overBy(`${over} over the limit`) : over === 0 ? "Full" : `${-over} open`,
+      others.filter(Boolean).map((x) => ` · ${x}`)], { error: over > 0 });
+}
+
+// This week's head-to-head in each category, next to the season's record and league rank.
+function renderWeek(ov) {
+  const week = ov.week;
+  const games = week ? week.matchups : [];
+  const mine = state.team === state.health.my_team_id;
+  byId("week-title").textContent = !week ? "Categories"
+    : games.length ? `Week ${week.period} vs ${games.map((m) => m.team_name).join(" and ")}`
+      : `Week ${week.period}${week.bye ? ": bye" : ""}`;
+  const asOf = week && week.scores_as_of ? new Date(week.scores_as_of).toLocaleString([],
+    { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : null;
+  byId("week-sub").textContent = [
+    week ? weekDates(week) : null,
+    games.length ? (asOf ? `scores as of ${asOf}` : "no scores yet") : null,
+    "Season: head-to-head record and league rank in each category",
+  ].filter(Boolean).join(" · ");
+
+  const name = (text) => h("span", { class: "team-name", title: text }, text);
+  const head = [
+    h("tr", { class: "band" }, h("th", {}),
+      games.length ? h("th", { colspan: String(1 + 2 * games.length) }, "This week") : null,
+      h("th", { colspan: "2" }, "Season")),
+    h("tr", {}, h("th", {}, "Category"),
+      games.length ? h("th", {}, name(mine ? "You" : ov.team_name)) : null,
+      games.map((m) => h("th", { colspan: "2" }, name(m.team_name))),
+      h("th", {}, "W-L-T"), h("th", { title: "League rank by season totals" }, "Rank")),
+  ];
+  const body = [];
+  for (const [group, label] of [["SKATER", "Skaters"], ["GOALIE", "Goalies"]]) {
+    const cats = ov.categories.filter((c) => c.group === group);
+    if (!cats.length) continue;
+    body.push(h("tr", { class: "group-row" }, h("td", { colspan: String(3 + 2 * games.length) }, label)));
+    for (const c of cats) {
+      const mineWon = games.length === 1 && (games[0].categories[c.category] || {}).outcome === "WIN";
+      body.push(h("tr", {},
+        h("td", {}, h("span", { class: "cat-name" }, c.category), h("span", { class: "cat-full" }, c.name)),
+        games.length ? h("td", { class: "num" + (mineWon ? " won" : "") },
+          fmtScore(c.category, (games.map((m) => m.categories[c.category]).find(Boolean) || {}).value)) : null,
+        games.map((m) => {
+          const s = m.categories[c.category];
+          const [letter, cls, verb] = RESULT[s && s.outcome] || ["", "", ""];
+          return [
+            h("td", { class: "num" + (s && s.outcome === "LOSS" ? " won" : "") }, fmtScore(c.category, s && s.opponent_value)),
+            h("td", { class: "result-cell" }, letter
+              ? h("span", { class: "result " + cls, title: `${verb} ${c.name} vs ${m.team_name}` }, letter) : null),
+          ];
+        }),
+        h("td", { class: "num" }, c.record),
+        h("td", { class: "num" }, c.rank ? ordinal(c.rank) : "–"),
+      ));
+    }
+  }
+  if (games.some((m) => m.record)) {
+    body.push(h("tr", { class: "total-row" }, h("td", {}, "Score"), h("td", {}),
+      games.map((m) => { const s = weekScore(m); return h("td", { class: "num", colspan: "2" }, s ? s.text : "–"); }),
+      h("td", {}), h("td", {})));
+  }
+  byId("week-table").replaceChildren(h("table", { class: "cat-table week-table" }, h("thead", {}, head), h("tbody", {}, body)));
+}
+
+// Fantrax standings. Click a team to see its dashboard.
+function renderStandings(ov) {
+  const opponents = new Set(((ov.week && ov.week.matchups) || []).map((m) => m.team_id));
+  const show = (id) => {
+    const sel = byId("team-select");
+    sel.value = id;
+    sel.dispatchEvent(new Event("change"));
+  };
+  const rows = state.teams.map((t) => h("tr", { class: t.id === state.team ? "me" : "" },
+    h("td", { class: "num" }, t.rank != null ? t.rank : "–"),
+    h("td", { class: "left" },
+      t.id === state.team ? h("span", { class: "player-name" }, t.name)
+        : h("button", { type: "button", class: "player-link", onclick: () => show(t.id) }, t.name),
+      t.id === state.health.my_team_id ? h("span", { class: "badge" }, "you") : null,
+      opponents.has(t.id) ? h("span", { class: "badge" }, "this week") : null),
+    h("td", { class: "num" }, t.record || "–"),
+    h("td", { class: "num" }, t.games_back ? fmtNum(t.games_back, 1) : "–")));
+  byId("standings-table").replaceChildren(h("table", { class: "data-table standings" },
+    h("thead", {}, h("tr", {}, h("th", {}, "#"), h("th", { class: "left" }, "Team"), h("th", {}, "W-L-T"),
+      h("th", { title: "Games back" }, "GB"))),
+    h("tbody", {}, rows)));
+}
+
+/* ================================================================ salary cap (Players & cap) */
+
+function capTile(cap) {
+  const over = cap.committed - cap.cap;
+  return tile("Cap space", fmtMoney(cap.space), `of ${fmtMoney(cap.cap)}`, [
+    over > 0 ? [overBy(`${fmtMoney(over)} over the cap`), " · "] : null,
+    `${fmtMoney(cap.committed)} committed`,
+    cap.unknown_salary.length ? ` · no salary for ${cap.unknown_salary.join(", ")}` : null,
+  ], { error: over > 0 });
 }
 
 function yearsTile(cap) {
   const over = cap.contract_years - cap.contract_year_bank;
-  return h("div", { class: "tile" },
-    h("div", { class: "tile-label" }, "Contract years"),
-    h("div", { class: "tile-value" }, String(cap.contract_years), h("small", {}, `of ${cap.contract_year_bank}`)),
-    h("div", { class: "tile-sub" + (over > 0 ? " warn" : "") },
-      over > 0 ? [h("span", { class: "down", "aria-hidden": "true" }, "▲ "), `${over} over the bank`]
-        : `${-over} left in the bank`));
+  return tile("Contract years", String(cap.contract_years), `of ${cap.contract_year_bank}`,
+    over > 0 ? overBy(`${over} over the bank`) : `${-over} left in the bank`, { error: over > 0 });
 }
 
 // `holds`: RFA placeholders drawn as an unfilled, dotted segment after the committed fill.
@@ -521,13 +624,14 @@ function capRow(label, committed, cap, note, holds = 0) {
   return row;
 }
 
+let capTeam = null;   // the team whose cap is on screen
 // Google Sheet publishing status for the team on screen (only teams whose contracts live in the app).
 async function renderPublish() {
   const box = byId("publish-status");
   if (!isAdmin()) { box.replaceChildren(); return; }
   let st;
   try { st = await api.get("/publish"); } catch (_) { box.replaceChildren(); return; }
-  const t = st.teams[state.team];
+  const t = st.teams[capTeam];
   if (!t) { box.replaceChildren(); return; }
   if (!st.configured) {
     box.replaceChildren(h("span", { class: "sub" }, st.missing === "url"
@@ -552,9 +656,13 @@ async function renderPublish() {
     button);
 }
 
-function renderCap(cap) {
-  byId("cap-card").hidden = !cap;
+// Cap space and contract-year tiles, then this season and the next four. `cap` is null for "All
+// teams", or a team with no salary sheet.
+function renderCap(cap, teamId) {
+  capTeam = teamId;
+  byId("players-kpis").hidden = byId("cap-card").hidden = !cap;
   if (!cap) return;
+  byId("players-kpis").replaceChildren(capTile(cap), yearsTile(cap));
   renderPublish();
   const parts = [`Cap ${fmtMoney(cap.cap)}. Active and bench salaries count, plus buyouts; minors and IR don't`];
   if (cap.ir_relief) parts.push(`${fmtMoney(cap.ir_relief)} IR relief right now`);
@@ -582,91 +690,37 @@ function renderCap(cap) {
   );
 }
 
-function renderCategoryProfile(profile) {
-  const cats = profile.categories;
-  const maxAbs = Math.max(1, ...cats.map((c) => Math.abs(c.projected_z || 0)));
-  const n = state.teams.length;
-  const body = [];
-  for (const [group, label] of [["SKATER", "Skaters"], ["GOALIE", "Goalies"]]) {
-    body.push(h("tr", { class: "group-row" }, h("td", { colspan: "6" }, label)));
-    for (const c of cats.filter((x) => x.group === group)) {
-      const bar = divBar(c.projected_z, maxAbs, {
-        label: `${c.name}: ${fmtSigned(c.projected_z)} standard deviations vs league average, ${ordinal(c.projected_rank)} of ${n}`,
-      });
-      bindTip(bar, () => tipContent(`${ordinal(c.projected_rank)} of ${n}`, c.name, [
-        ["Projected / week", fmtCat(c.category, c.projected_per_week)],
-        ["vs league avg", `${fmtSigned(c.projected_z)} sd`],
-        ["Beats", `${Math.round((c.projected_beats_pct || 0) * 100)}% of teams`],
-        ["Actual W-L-T", c.actual_record],
-      ]));
-      body.push(h("tr", {},
-        h("td", {}, h("span", { class: "cat-name" }, c.category), h("span", { class: "cat-full" }, c.name)),
-        h("td", { class: "bar-cell" }, bar),
-        h("td", { class: "num" }, fmtCat(c.category, c.projected_per_week)),
-        h("td", { class: "num" }, ordinal(c.projected_rank)),
-        h("td", { class: "num" }, c.actual_record),
-        h("td", {}, h("span", { class: "need-pill num" + (c.need_weight >= 1.15 ? " high" : "") }, fmtNum(c.need_weight, 2))),
-      ));
-    }
-  }
-  byId("category-profile").replaceChildren(
-    h("p", { class: "card-sub", style: { marginBottom: "8px" } },
-      `Strongest: ${profile.strengths.join(", ")} · Weakest: ${profile.weaknesses.join(", ")}`),
-    h("div", { class: "scroll-x" }, h("table", { class: "cat-table" },
-      h("thead", {}, h("tr", {},
-        h("th", {}, "Category"), h("th", { style: { textAlign: "center" } }, "vs league average"),
-        h("th", {}, "Proj / wk"), h("th", {}, "Rank"), h("th", {}, "Actual"), h("th", {}, "Need"))),
-      h("tbody", {}, body))),
-  );
+// Player, age, this NHL season's games and totals in each league category, then the contract.
+// Skaters and goalies have different categories, so each position group labels its own stat
+// columns; short lists are padded so the contract columns line up.
+function rosterColumns(ov, groupKey) {
+  const of = (grp) => ov.categories.filter((c) => c.group === grp);
+  const slots = Math.max(of("SKATER").length, of("GOALIE").length);
+  const stats = of(groupKey === "G" ? "GOALIE" : "SKATER").map((c) => ({
+    key: `stat:${c.category}`, label: c.category, title: c.name, asc: c.lower_is_better,
+    value: (p) => (p.season ? p.season[c.category] : null),
+    render: (p) => (p.season ? fmtScore(c.category, p.season[c.category]) : "–") }));
+  while (stats.length < slots) stats.push({ key: `pad${stats.length}`, label: "", sortable: false, value: () => null, render: () => "" });
+  return [
+    { key: "name", label: "Player", left: true, value: (p) => p.name },
+    { key: "age", label: "Age", value: (p) => p.age, render: (p) => (p.age != null ? p.age : "–") },
+    { key: "gp", label: "GP", title: "Games played this NHL season", value: (p) => p.gp_this_season },
+    ...stats,
+    { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
+    { key: "contract_years", label: "Yrs", value: (p) => p.contract_years, render: (p) => (p.contract_years || "–") },
+    { key: "contract_end", label: "At expiry", asc: true, value: endSortKey, render: endPill },
+  ];
 }
 
-function renderHeatmap(overview) {
-  const cats = (state.league && state.league.categories || []).map((c) => c.short_name);
-  const names = Object.fromEntries((state.league && state.league.categories || []).map((c) => [c.short_name, c.name]));
-  const head = h("tr", {}, h("th", { class: "team" }, "Team"),
-    cats.map((c) => h("th", { title: names[c] || c }, c)), h("th", { title: "Expected category wins per week" }, "Exp. W"));
-  const rows = overview.teams.map((t) => h("tr", { class: t.team_id === state.team ? "me" : "" },
-    h("td", { class: "team", title: t.team_name }, t.team_name),
-    cats.map((c) => {
-      const cell = t.projected[c] || {};
-      const td = h("td", { class: "cell num", tabindex: "0", style: heatStyle(cell.z),
-        "aria-label": `${t.team_name}, ${names[c] || c}: ${ordinal(cell.rank)}` }, cell.rank != null ? cell.rank : "–");
-      bindTip(td, () => tipContent(`${ordinal(cell.rank)} in ${names[c] || c}`, t.team_name, [
-        ["Projected / week", fmtCat(c, cell.value)],
-        ["vs league avg", `${fmtSigned(cell.z)} sd`],
-        ["Actual W-L-T", (t.actual_records || {})[c] || "–"],
-      ]));
-      return td;
-    }),
-    h("td", { class: "ecw num" }, fmtNum(t.expected_category_wins, 2)),
-  ));
-  byId("league-heatmap").replaceChildren(h("table", { class: "heatmap" }, h("thead", {}, head), h("tbody", {}, rows)));
-}
-
-const ROSTER_COLUMNS = [
-  { key: "name", label: "Player", left: true, value: (p) => p.name },
-  { key: "lineup_games_per_week", label: "Games / wk", value: (p) => p.lineup_games_per_week,
-    render: (p) => p.expected_starts_per_week != null
-      ? `${fmtNum(p.expected_starts_per_week, 2)} starts` : fmtNum(p.lineup_games_per_week, 1) },
-  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
-  { key: "need_value", label: "Need value", value: (p) => p.need_value, render: (p) => fmtNum(p.need_value, 2) },
-  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
-    render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
-  { key: "market_value", label: "Market", value: (p) => p.market_value, render: (p) => fmtNum(p.market_value, 1) },
-  { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
-  { key: "contract_years", label: "Yrs", value: (p) => p.contract_years, render: (p) => (p.contract_years || "–") },
-  { key: "contract_end", label: "At expiry", asc: true, value: endSortKey, render: endPill },
-  { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
-    render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
-  { key: "best", label: "Best categories", left: true, cls: "cats-inline", sortable: false, render: (p) => bestCats(p.z) },
-];
-
-function renderRoster(profile) {
+function renderRoster(ov) {
+  const y = state.league ? state.league.season_year : null;
+  byId("roster-sub").textContent = `${y ? `${y}-${String(y + 1).slice(2)} ` : ""}NHL stats. ` +
+    "Click a column to sort, or a player for his contract.";
   segmented(byId("roster-view"), [["roster", "Roster"], ["prospects", "Prospects"], ["all", "All"]],
-    state.rosterView, (v) => { state.rosterView = v; renderRoster(profile); });
+    state.rosterView, (v) => { state.rosterView = v; renderRoster(ov); });
   byId("roster-table").replaceChildren(sectionedTable({
-    players: profile.roster, columns: ROSTER_COLUMNS, view: state.rosterView,
-    sort: state.rosterSort, onSort: (next) => { state.rosterSort = next; renderRoster(profile); },
+    players: ov.roster, groupColumns: (key) => rosterColumns(ov, key), view: state.rosterView,
+    sort: state.rosterSort, onSort: (next) => { state.rosterSort = next; renderRoster(ov); },
     empty: state.rosterView === "prospects" ? "No prospects in the minors." : "No players.",
   }));
 }
@@ -717,23 +771,29 @@ function playerCell(p) {
 
 // One table, with a section per roster segment (or the given `segments`) and position group so
 // columns line up across sections. Sorting applies within each section. `salary` is the amount
-// each section totals.
+// each section totals. With `groupColumns(groupKey)`, each position group has its own columns
+// (all the same length), labelled under its group heading instead of once at the top; a group
+// without the sorted column keeps the order it was given.
 function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true, segments = SEGMENTS,
-  salary = (p) => p.salary }) {
-  const col = columns.find((c) => c.key === sort.key) || columns[0];
-  const cmp = (a, b) => {
-    const va = col.value(a), vb = col.value(b);
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * sort.dir;
+  salary = (p) => p.salary, groupColumns = null }) {
+  const colsFor = (group) => (groupColumns ? groupColumns(group.key) : columns);
+  const width = colsFor(POSITION_GROUPS[0]).length;
+  const comparator = (cols) => {
+    const col = cols.find((c) => c.key === sort.key) || (groupColumns ? null : cols[0]);
+    return col && ((a, b) => {
+      const va = col.value(a), vb = col.value(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * sort.dir;
+    });
   };
-  const head = h("tr", {}, columns.map((c) => {
+  const labels = (cols) => h("tr", { class: "labels" }, cols.map((c) => {
     const sortable = c.sortable !== false;
     const th = h("th", {
       class: (c.left ? "left " : "") + (sortable ? "sortable" : ""),
       "aria-sort": c.key === sort.key ? (sort.dir === 1 ? "ascending" : "descending") : null,
-      tabindex: sortable ? "0" : null,
+      tabindex: sortable ? "0" : null, title: c.title,
     }, c.label);
     if (sortable) {
       const go = () => onSort(c.key === sort.key ? { key: sort.key, dir: -sort.dir }
@@ -748,26 +808,30 @@ function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam =
   for (const seg of segments.filter((x) => view === "all" || x.key === view)) {
     const inSeg = players.filter(seg.test);
     if (!inSeg.length) continue;
-    bodies.push(h("tbody", { class: "seg" }, h("tr", { class: "seg-row" }, h("th", { colspan: String(columns.length) },
+    bodies.push(h("tbody", { class: "seg" }, h("tr", { class: "seg-row" }, h("th", { colspan: String(width) },
       seg.label, seg.sub ? h("span", { class: "seg-sub" }, ` · ${seg.sub}`) : null,
       h("span", { class: "seg-meta" }, `${inSeg.length} player${inSeg.length === 1 ? "" : "s"}` +
         (money(inSeg) ? ` · ${fmtMoney(money(inSeg))} salary` : ""))))));
     for (const group of POSITION_GROUPS) {
-      const list = inSeg.filter((p) => posGroup(p) === group.key).sort(cmp);
+      const cols = colsFor(group);
+      const cmp = comparator(cols);
+      const list = inSeg.filter((p) => posGroup(p) === group.key);
       if (!list.length) continue;
+      if (cmp) list.sort(cmp);
       const meta = [`${list.length}`];
       if (oneTeam && seg.key === "roster" && lineupSlots(group)) meta.push(`${lineupSlots(group)} lineup slots`);
       if (money(list)) meta.push(`${fmtMoney(money(list))}`);
       bodies.push(h("tbody", { class: "group" },
-        h("tr", { class: "group-row" }, h("th", { colspan: String(columns.length) },
+        h("tr", { class: "group-row" }, h("th", { colspan: String(width) },
           group.label, group.sub ? h("span", { class: "seg-sub" }, ` ${group.sub}`) : null,
           h("span", { class: "seg-meta" }, meta.join(" · ")))),
-        list.map((p) => h("tr", {}, columns.map((c) => (c.key === "name" ? playerCell(p)
+        groupColumns ? labels(cols) : null,
+        list.map((p) => h("tr", {}, cols.map((c) => (c.key === "name" ? playerCell(p)
           : h("td", { class: c.left ? "left" + (c.cls ? " " + c.cls : "") : "num" }, c.render ? c.render(p) : c.value(p))))))));
     }
   }
   if (!bodies.length) return h("div", { class: "empty" }, empty || "No players.");
-  return h("table", { class: "data-table sectioned" }, h("thead", {}, head), ...bodies);
+  return h("table", { class: "data-table sectioned" }, groupColumns ? null : h("thead", {}, labels(columns)), ...bodies);
 }
 
 /* ================================================================ trade builder */
@@ -1230,6 +1294,7 @@ async function loadPlayers() {
   if (team && state.playersView === "fa") state.playersView = "all";
   segmented(byId("players-view"), views, state.playersView, (v) => { state.playersView = v; loadPlayers(); });
   loadPicks();
+  if (!team) renderCap(null, null);
   if (!team && q.length < 2) {
     byId("players-title").textContent = "Players";
     out.replaceChildren(h("div", { class: "empty" }, "Type at least two letters of a name, or pick a team."));
@@ -1243,6 +1308,7 @@ async function loadPlayers() {
     let players = res.players;
     if (missingOnly) players = players.filter((p) => p.salary == null && p.roster_status !== "MINORS");
     byId("players-title").textContent = team ? teamName(team) : `${players.length} matches`;
+    if (team) renderCap(res.cap, team);
     out.replaceChildren(sectionedTable({
       players, columns: [...PLAYER_COLUMNS.filter((c) => !(team && c.leagueOnly)), ...seasonColumns(CONTRACT_SEASONS + 1)],
       view: state.playersView, oneTeam: Boolean(team),

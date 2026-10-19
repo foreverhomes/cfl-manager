@@ -24,16 +24,23 @@ cp .env.example .env            # then set FANTRAX_MY_TEAM_ID (your team, for th
 `python -m cfl serve` (add `--reload` while developing) serves the app at http://127.0.0.1:8000.
 There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
 
-- **Dashboard.** Shows expected category wins per week, projected strength, standings, and
-  skater-game and goalie-start volume. A category profile charts your projected strength against
-  the league average, with actual weekly W-L-T and need weights. A league heatmap shows every
-  team's projected rank in every category. A sortable roster table rounds it out. The team picker
-  in the header lets you view any team.
+- **Dashboard.** A GM's overview of a team, from real results only (no projections):
+  - **At a glance:** this week's category score and opponent, standings, and roster spots.
+  - **Categories:** this week's head-to-head in each category (your total, the opponent's, won or
+    lost), next to the season's record and league rank in that category. Some weeks bring two
+    opponents, or a bye.
+  - **Standings** from Fantrax. Click a team to see its dashboard.
+  - **Roster** by position: age, this NHL season's games and totals in each league category,
+    salary, years left, and RFA or UFA at expiry. Click a column to sort.
+
+  The team picker in the header lets you view any team. Projections and market values are in the
+  trade builder.
 - **Players & cap.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
   Each contract shows its salary for every season it runs, then RFA or UFA in the season after it ends.
-  A team's page also shows its [draft picks](#draft-picks), where its GM records pick trades and RFA
-  compensation.
+  A team's page opens with its cap space, contract years used and the salary cap for this season and
+  the next four, which follow every contract edit. It also shows the team's [draft picks](#draft-picks),
+  where its GM records pick trades and RFA compensation.
 - **Changes.** Roster moves and contract changes, newest first: players added, dropped or
   traded (from Fantrax syncs), salary changes, other contract changes (years, later
   seasons, type), and draft picks changing hands. Filter by team or kind. The **By** column says where each came from:
@@ -80,8 +87,9 @@ sync step reports anything it couldn't link.
 
 ## Sync
 
-In the app, **Refresh rosters & stats** pulls today's Fantrax rosters and NHL.com stats
-(`rosters`, `stats`, `match`, plus `bios` for any new player's birth date). **Full sync…** re-reads every source after a confirmation, and
+In the app, **Refresh rosters & stats** pulls today's Fantrax rosters, standings and matchup scores,
+and NHL.com stats (`rosters`, `standings`, `matchups`, `stats`, `match`, plus `bios` for any new
+player's birth date). **Full sync…** re-reads every source after a confirmation, and
 replaces each team's salary-sheet contracts with what the sheets say now. Neither touches contract
 edits made in the app, and neither writes to Fantrax or Google.
 
@@ -160,10 +168,10 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   follow the same rules as other future seasons: IR counts, minors don't. Players with no birth
   date on file aren't included, because their status is unknown. Holds stay out of `committed` and
   `space`. Each future season reports them as `rfa_holds` (the total) and `rfa_players` (the
-  players). The dashboard cap card draws them as a dotted, unfilled segment after the committed
+  players). The cap card on the Players & cap tab draws them as a dotted, unfilled segment after the committed
   salary, and its tooltip lists the players. The published sheet doesn't add them.
 - **Contract-year bank (50):** seasons left on every contract, this one included, for active and
-  bench players. Minors and IR don't count, and in-season UFA deals are exempt. The dashboard
+  bench players. Minors and IR don't count, and in-season UFA deals are exempt. The Players & cap tab
   flags a team over the bank, and trades show contract years before → after.
 
 ### Checking against the league-wide contract sheet
@@ -322,12 +330,13 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 
 | Endpoint | |
 |---|---|
-| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`; those run at most once every 10 minutes league-wide, 429 otherwise) |
+| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `standings`, `matchups`, `stats`, `match`, `bios`; those run at most once every 10 minutes league-wide, 429 otherwise) |
 | `GET /league`, `/categories`, `/teams`, `/standings` | league data |
+| `GET /teams/{id}/overview` | the dashboard: this week's matchup by category, season category records and ranks, the roster with this NHL season's stats, and roster spots |
 | `GET /teams/{id}/roster` | roster with per-game projections and z-scores |
 | `GET /teams/{id}/contracts` | salary-sheet contracts, how each matched, and the cap summary |
 | `GET /matchups?period=N` | schedule + category scores for a week |
-| `GET /players?status=fa&position=D&sort=value` | search the player pool |
+| `GET /players?status=fa&position=D&sort=value` | search the player pool (with `team_id`, also that team's `cap` summary) |
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
 | `GET /changes?team_id=me&kind=salary` | player and contract changes, newest first (`kind`: added, dropped, traded, salary, contract, pick; repeat for several) |
 | `GET /teams/{id}/picks` | the team's picks in the upcoming drafts, its own picks now elsewhere, and its pick deals |
