@@ -155,13 +155,6 @@ function divBar(z, maxAbs, { mini = false, label = "" } = {}) {
   }
   return el;
 }
-function heatStyle(z) {
-  if (z == null) return { background: "var(--wash)" };
-  const t = Math.max(-1, Math.min(1, z / 2));
-  const pct = Math.round(Math.abs(t) * 100);
-  const pole = t >= 0 ? "var(--div-pos)" : "var(--div-neg)";
-  return { background: `color-mix(in oklab, ${pole} ${pct}%, var(--div-mid))`, color: pct > 55 ? "#ffffff" : "var(--ink)" };
-}
 
 /* ================================================================ state */
 
@@ -171,15 +164,23 @@ const state = {
   league: null,
   teams: [],
   team: null,
-  strategy: prefs.get("strategy", "marginal"),
-  overview: null,
-  profiles: new Map(),
-  rosterSort: { key: "need_value", dir: -1 },
+  strategy: prefs.get("strategy", "marginal"),   // the Analysis tab's need weighting
+  overviews: new Map(),   // the Dashboard's /teams/{id}/overview, by team
+  profiles: new Map(),    // /analysis/teams/{id}/profile (Analysis tab, Trade builder), by team and weighting
+  leagueAnalysis: new Map(),   // /analysis/overview, the Analysis tab's heatmap
+  rosterSort: { key: "salary", dir: -1 },
   rosterView: "roster",
+  analysisSort: { key: "need_value", dir: -1 },
+  analysisView: "roster",
   playersSort: { key: "season0", dir: -1 },
   playersView: "all",
   changesTeam: "",
   changesKind: "all",
+  offseason: null,      // the last /offseason response, so team and status filters redraw without a request
+  offseasonYear: null,  // null: the next offseason, whatever season the league is in
+  offseasonTeam: "",
+  offseasonView: "all",
+  offseasonSort: { key: "final_salary", dir: -1 },
   trade: {
     give: new Set(), get: new Set(), partner: "", tolerance: prefs.get("tolerance", "0.25"),
     giveMinors: false, getMinors: false, giveQuery: "", getQuery: "",
@@ -190,7 +191,7 @@ const state = {
 const WAIVERS = "__waivers__";
 const onWaivers = () => state.trade.partner === WAIVERS;
 // Latest-request counters: a slower, older response never overwrites a newer one.
-const seqs = { dashboard: 0, tradeLoad: 0, suggest: 0, evaluate: 0, pool: 0 };
+const seqs = { dashboard: 0, analysis: 0, tradeLoad: 0, suggest: 0, evaluate: 0, pool: 0 };
 
 function showError(err) {
   const box = byId("error");
@@ -199,23 +200,20 @@ function showError(err) {
 }
 function clearError() { byId("error").hidden = true; }
 
-function getProfile(teamId) {
-  const key = `${teamId}|${state.strategy}`;
-  if (!state.profiles.has(key)) {
-    const p = api.get(`/analysis/teams/${encodeURIComponent(teamId)}/profile`, { strategy: state.strategy });
-    p.catch(() => state.profiles.delete(key));
-    state.profiles.set(key, p);
+// One request per key until something changes (a sync or an edit clears them).
+function cached(map, key, path) {
+  if (!map.has(key)) {
+    const p = api.get(path);
+    p.catch(() => map.delete(key));
+    map.set(key, p);
   }
-  return state.profiles.get(key);
+  return map.get(key);
 }
-function getOverview() {
-  if (!state.overview) {
-    state.overview = api.get("/analysis/overview");
-    state.overview.catch(() => { state.overview = null; });
-  }
-  return state.overview;
-}
-function resetCaches() { state.profiles.clear(); state.overview = null; }
+const getOverview = (id) => cached(state.overviews, id, `/teams/${encodeURIComponent(id)}/overview`);
+const getProfile = (id) => cached(state.profiles, `${id}|${state.strategy}`,
+  `/analysis/teams/${encodeURIComponent(id)}/profile?strategy=${state.strategy}`);
+const getLeagueAnalysis = () => cached(state.leagueAnalysis, "league", "/analysis/overview");
+function resetCaches() { state.profiles.clear(); state.overviews.clear(); state.leagueAnalysis.clear(); }
 
 /* ================================================================ header / boot */
 
@@ -285,6 +283,8 @@ function wireControls() {
   byId("players-team").addEventListener("change", (e) => { state.playersTeam = e.target.value; loadPlayers(); });
   byId("players-missing").addEventListener("change", loadPlayers);
   byId("changes-team").addEventListener("change", (e) => { state.changesTeam = e.target.value; loadChanges(); });
+  byId("offseason-year").addEventListener("change", (e) => { state.offseasonYear = Number(e.target.value); loadOffseason(); });
+  byId("offseason-team").addEventListener("change", (e) => { state.offseasonTeam = e.target.value; renderOffseason(); });
   byId("team-select").addEventListener("change", (e) => {
     state.team = e.target.value;
     state.trade.give.clear();
@@ -296,7 +296,7 @@ function wireControls() {
   byId("strategy-select").addEventListener("change", (e) => {
     state.strategy = e.target.value;
     prefs.set("strategy", state.strategy);
-    loadDashboard();
+    loadAnalysis();
   });
   byId("refresh-btn").addEventListener("click", () => runSync("quick"));
   byId("sync-btn").addEventListener("click", confirmFullSync);
@@ -327,8 +327,9 @@ function wireControls() {
 
 // "quick" only refreshes what changes day to day; "full" re-reads every source.
 const SYNC_MODES = {
-  quick: { resources: ["rosters", "stats", "match", "bios"], busy: "Refreshing…",
-    status: "Pulling today's Fantrax rosters and NHL.com stats…", done: "Rosters and stats refreshed" },
+  quick: { resources: ["rosters", "standings", "matchups", "stats", "match", "bios"], busy: "Refreshing…",
+    status: "Pulling today's Fantrax rosters, standings and matchup scores, and NHL.com stats…",
+    done: "Rosters and stats refreshed" },
   full: { resources: null, busy: "Syncing…",
     status: "Full sync: Fantrax league, rosters and matchups, NHL.com stats and schedule, salary sheets…",
     done: "Full sync finished" },
@@ -400,8 +401,8 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "trade", "players", "changes", "admin"];
-const ADMIN_VIEWS = new Set(["trade", "admin"]);
+const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "offseason", "admin"];
+const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
 function currentView() {
@@ -413,14 +414,16 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = ["players", "changes", "admin"].includes(view);   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "offseason", "admin"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
   }
   if (view === "admin") { loadAdmin(); return; }
+  if (view === "offseason") { loadOffseason(); return; }
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
+  else if (view === "analysis") loadAnalysis();
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
   else loadPlayers();
@@ -428,24 +431,17 @@ function route() {
 
 /* ================================================================ dashboard */
 
-const STRATEGY_HINT = {
-  marginal: "Weights categories where several teams are close to you: that's where one more goal or hit flips a weekly matchup.",
-  weakness: "Weights your lowest-ranked categories most.",
-  even: "Every category counts the same.",
-};
-
 async function loadDashboard() {
   const view = byId("view-dashboard");
   const token = ++seqs.dashboard;
-  byId("strategy-hint").textContent = STRATEGY_HINT[state.strategy];
   view.classList.add("is-loading");
   try {
-    const [profile, overview] = await Promise.all([getProfile(state.team), getOverview()]);
+    const ov = await getOverview(state.team);
     if (token !== seqs.dashboard) return;
-    renderKpis(profile);
-    renderCategoryProfile(profile);
-    renderHeatmap(overview);
-    renderRoster(profile);
+    renderKpis(ov);
+    renderWeek(ov);
+    renderStandings(ov);
+    renderRoster(ov);
     clearError();
   } catch (err) {
     if (token === seqs.dashboard) showError(err);
@@ -454,44 +450,176 @@ async function loadDashboard() {
   }
 }
 
-function tile(label, value, unit, sub, { hero = false } = {}) {
-  return h("div", { class: "tile" + (hero ? " hero-tile" : "") },
-    h("div", { class: "tile-label" }, label),
+// `error`: over a league limit (cap, contract-year bank, roster). The sub says by how much, with overBy().
+// `hero`: the one number a row of tiles leads with, twice as wide.
+// `help`: a GLOSSARY key, shown as a hint on the label.
+function tile(label, value, unit, sub, { error = false, hero = false, help = null } = {}) {
+  const labelEl = h("div", { class: "tile-label" }, label);
+  if (help) withHelp(labelEl, help);
+  return h("div", { class: "tile" + (error ? " error" : "") + (hero ? " hero-tile" : "") },
+    labelEl,
     h("div", { class: "tile-value" + (hero ? " hero" : "") }, value, unit ? h("small", {}, unit) : null),
     sub ? h("div", { class: "tile-sub" }, sub) : null);
 }
+const overBy = (text) => [h("span", { class: "down", "aria-hidden": "true" }, "▲ "), text];
 
-function renderKpis(profile) {
-  const nCats = profile.categories.length;
+// "Oct 4" from a Fantrax period date such as 2026-10-04T13:00:00.0-0400.
+const periodDay = (iso) => new Date(`${iso.slice(0, 10)}T12:00`).toLocaleDateString([], { month: "short", day: "numeric" });
+const weekDates = (week) => `${periodDay(week.start_date)} – ${periodDay(week.end_date)}`;
+// A category total as Fantrax shows it: ratios to 2 or 3 decimals, counts whole.
+function fmtScore(cat, v) {
+  if (v == null) return "–";
+  if (RATIO.has(cat)) return fmtCat(cat, v);
+  return cat === "+/-" ? fmtSigned(v, 0) : String(Math.round(v));
+}
+// This week's category score against one opponent, from the team's side. Null before it starts.
+function weekScore(m) {
+  if (!m.record) return null;
+  const [w, l, t] = m.record;
+  const dir = w > l ? "up" : w < l ? "down" : "flat";
+  return { text: `${w}–${l}–${t}`, dir, says: { up: "Winning vs", down: "Losing to", flat: "Tied with" }[dir] };
+}
+const RESULT = { WIN: ["W", "up", "won"], LOSS: ["L", "down", "lost"], TIE: ["T", "flat", "tied"] };
+
+function renderKpis(ov) {
   const standing = state.teams.find((t) => t.id === state.team) || {};
-  const skaterGames = profile.roster.filter((p) => p.position !== "G")
-    .reduce((s, p) => s + (p.lineup_games_per_week || 0), 0);
-  const goalieStarts = profile.roster.reduce((s, p) => s + (p.expected_starts_per_week || 0), 0);
   byId("kpis").replaceChildren(...[
-    tile("Expected category wins per week", fmtNum(profile.expected_category_wins, 2), `of ${nCats}`,
-      "Against an average opponent, from projected rest-of-season lineups", { hero: true }),
-    tile("Projected strength", ordinal(profile.projected_overall_rank), `of ${state.teams.length}`,
-      "Total category strength across the league"),
-    tile("Standings", standing.rank ? ordinal(standing.rank) : "–", standing.record || "",
-      "Fantrax head-to-head standings"),
-    tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins"),
-    tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all your goalies"),
-    profile.cap ? tile("Cap space", fmtMoney(profile.cap.space), `of ${fmtMoney(profile.cap.cap)}`,
-      `${fmtMoney(profile.cap.committed)} committed` +
-      (profile.cap.unknown_salary.length ? ` · no salary for ${profile.cap.unknown_salary.join(", ")}` : "")) : null,
-    profile.cap ? yearsTile(profile.cap) : null,
+    weekTile(ov.week),
+    tile("Standings", standing.rank ? ordinal(standing.rank) : "–", `of ${state.teams.length}`,
+      [standing.record, standing.games_back ? `${fmtNum(standing.games_back, 1)} games back` : null]
+        .filter(Boolean).join(" · ") || "Fantrax standings"),
+    spotsTile(ov),
   ].filter(Boolean));
-  renderCap(profile.cap);
+}
+
+// The week's score, one line per opponent (some weeks have two), or the bye.
+function weekTile(week) {
+  if (!week) return null;
+  if (!week.matchups.length) {
+    return tile(`Week ${week.period}`, week.bye ? "Bye" : "–", null, week.bye ? "No matchup this week" : "No matchup found");
+  }
+  return h("div", { class: "tile" },
+    h("div", { class: "tile-label" }, `Week ${week.period} · ${weekDates(week)}`),
+    week.matchups.map((m) => {
+      const s = weekScore(m);
+      return [
+        h("div", { class: "tile-value" }, s ? s.text : "0–0–0"),
+        h("div", { class: "tile-sub" }, s ? [h("span", { class: s.dir, "aria-hidden": "true" }, ICON[s.dir]), ` ${s.says} `] : "vs ",
+          m.team_name),
+      ];
+    }));
+}
+
+// Active and bench players count against the roster limit; IR and prospects don't.
+function spotsTile(ov) {
+  const { used, limit } = ov.roster_spots;
+  const count = (status) => ov.roster.filter((p) => p.roster_status === status).length;
+  const ir = count("INJURED_RESERVE"), minors = count("MINORS");
+  const others = [ir ? `${ir} on IR` : null, minors ? `${minors} prospect${minors === 1 ? "" : "s"}` : null];
+  if (!limit) return tile("Roster", String(used), "active and bench", others.filter(Boolean).join(" · "));
+  const over = used - limit;
+  return tile("Roster spots", String(used), `of ${limit}`,
+    [over > 0 ? overBy(`${over} over the limit`) : over === 0 ? "Full" : `${-over} open`,
+      others.filter(Boolean).map((x) => ` · ${x}`)], { error: over > 0 });
+}
+
+// This week's head-to-head in each category, next to the season's record and league rank.
+function renderWeek(ov) {
+  const week = ov.week;
+  const games = week ? week.matchups : [];
+  const mine = state.team === state.health.my_team_id;
+  byId("week-title").textContent = !week ? "Categories"
+    : games.length ? `Week ${week.period} vs ${games.map((m) => m.team_name).join(" and ")}`
+      : `Week ${week.period}${week.bye ? ": bye" : ""}`;
+  const asOf = week && week.scores_as_of ? new Date(week.scores_as_of).toLocaleString([],
+    { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : null;
+  byId("week-sub").textContent = [
+    week ? weekDates(week) : null,
+    games.length ? (asOf ? `scores as of ${asOf}` : "no scores yet") : null,
+    "Season: head-to-head record and league rank in each category",
+  ].filter(Boolean).join(" · ");
+
+  const name = (text) => h("span", { class: "team-name", title: text }, text);
+  const head = [
+    h("tr", { class: "band" }, h("th", {}),
+      games.length ? h("th", { colspan: String(1 + 2 * games.length) }, "This week") : null,
+      h("th", { colspan: "2" }, "Season")),
+    h("tr", {}, h("th", {}, "Category"),
+      games.length ? h("th", {}, name(mine ? "You" : ov.team_name)) : null,
+      games.map((m) => h("th", { colspan: "2" }, name(m.team_name))),
+      h("th", {}, "W-L-T"), h("th", { title: "League rank by season totals" }, "Rank")),
+  ];
+  const body = [];
+  for (const [group, label] of [["SKATER", "Skaters"], ["GOALIE", "Goalies"]]) {
+    const cats = ov.categories.filter((c) => c.group === group);
+    if (!cats.length) continue;
+    body.push(h("tr", { class: "group-row" }, h("td", { colspan: String(3 + 2 * games.length) }, label)));
+    for (const c of cats) {
+      const mineWon = games.length === 1 && (games[0].categories[c.category] || {}).outcome === "WIN";
+      body.push(h("tr", {},
+        h("td", {}, h("span", { class: "cat-name" }, c.category), h("span", { class: "cat-full" }, c.name)),
+        games.length ? h("td", { class: "num" + (mineWon ? " won" : "") },
+          fmtScore(c.category, (games.map((m) => m.categories[c.category]).find(Boolean) || {}).value)) : null,
+        games.map((m) => {
+          const s = m.categories[c.category];
+          const [letter, cls, verb] = RESULT[s && s.outcome] || ["", "", ""];
+          return [
+            h("td", { class: "num" + (s && s.outcome === "LOSS" ? " won" : "") }, fmtScore(c.category, s && s.opponent_value)),
+            h("td", { class: "result-cell" }, letter
+              ? h("span", { class: "result " + cls, title: `${verb} ${c.name} vs ${m.team_name}` }, letter) : null),
+          ];
+        }),
+        h("td", { class: "num" }, c.record),
+        h("td", { class: "num" }, c.rank ? ordinal(c.rank) : "–"),
+      ));
+    }
+  }
+  if (games.some((m) => m.record)) {
+    body.push(h("tr", { class: "total-row" }, h("td", {}, "Score"), h("td", {}),
+      games.map((m) => { const s = weekScore(m); return h("td", { class: "num", colspan: "2" }, s ? s.text : "–"); }),
+      h("td", {}), h("td", {})));
+  }
+  byId("week-table").replaceChildren(h("table", { class: "cat-table week-table" }, h("thead", {}, head), h("tbody", {}, body)));
+}
+
+// Fantrax standings. Click a team to see its dashboard.
+function renderStandings(ov) {
+  const opponents = new Set(((ov.week && ov.week.matchups) || []).map((m) => m.team_id));
+  const show = (id) => {
+    const sel = byId("team-select");
+    sel.value = id;
+    sel.dispatchEvent(new Event("change"));
+  };
+  const rows = state.teams.map((t) => h("tr", { class: t.id === state.team ? "me" : "" },
+    h("td", { class: "num" }, t.rank != null ? t.rank : "–"),
+    h("td", { class: "left" },
+      t.id === state.team ? h("span", { class: "player-name" }, t.name)
+        : h("button", { type: "button", class: "player-link", onclick: () => show(t.id) }, t.name),
+      t.id === state.health.my_team_id ? h("span", { class: "badge" }, "you") : null,
+      opponents.has(t.id) ? h("span", { class: "badge" }, "this week") : null),
+    h("td", { class: "num" }, t.record || "–"),
+    h("td", { class: "num" }, t.games_back ? fmtNum(t.games_back, 1) : "–")));
+  byId("standings-table").replaceChildren(h("table", { class: "data-table standings" },
+    h("thead", {}, h("tr", {}, h("th", {}, "#"), h("th", { class: "left" }, "Team"), h("th", {}, "W-L-T"),
+      h("th", { title: "Games back" }, "GB"))),
+    h("tbody", {}, rows)));
+}
+
+/* ================================================================ salary cap (Players & cap) */
+
+function capTile(cap) {
+  const over = cap.committed - cap.cap;
+  return tile("Cap space", fmtMoney(cap.space), `of ${fmtMoney(cap.cap)}`, [
+    over > 0 ? [overBy(`${fmtMoney(over)} over the cap`), " · "] : null,
+    `${fmtMoney(cap.committed)} committed`,
+    cap.unknown_salary.length ? ` · no salary for ${cap.unknown_salary.join(", ")}` : null,
+  ], { error: over > 0 });
 }
 
 function yearsTile(cap) {
   const over = cap.contract_years - cap.contract_year_bank;
-  return h("div", { class: "tile" },
-    h("div", { class: "tile-label" }, "Contract years"),
-    h("div", { class: "tile-value" }, String(cap.contract_years), h("small", {}, `of ${cap.contract_year_bank}`)),
-    h("div", { class: "tile-sub" + (over > 0 ? " warn" : "") },
-      over > 0 ? [h("span", { class: "down", "aria-hidden": "true" }, "▲ "), `${over} over the bank`]
-        : `${-over} left in the bank`));
+  return tile("Contract years", String(cap.contract_years), `of ${cap.contract_year_bank}`,
+    over > 0 ? overBy(`${over} over the bank`) : `${-over} left in the bank`, { error: over > 0 });
 }
 
 // `holds`: RFA placeholders drawn as an unfilled, dotted segment after the committed fill.
@@ -513,13 +641,14 @@ function capRow(label, committed, cap, note, holds = 0) {
   return row;
 }
 
+let capTeam = null;   // the team whose cap is on screen
 // Google Sheet publishing status for the team on screen (only teams whose contracts live in the app).
 async function renderPublish() {
   const box = byId("publish-status");
   if (!isAdmin()) { box.replaceChildren(); return; }
   let st;
   try { st = await api.get("/publish"); } catch (_) { box.replaceChildren(); return; }
-  const t = st.teams[state.team];
+  const t = st.teams[capTeam];
   if (!t) { box.replaceChildren(); return; }
   if (!st.configured) {
     box.replaceChildren(h("span", { class: "sub" }, st.missing === "url"
@@ -544,9 +673,13 @@ async function renderPublish() {
     button);
 }
 
-function renderCap(cap) {
-  byId("cap-card").hidden = !cap;
+// Cap space and contract-year tiles, then this season and the next four. `cap` is null for "All
+// teams", or a team with no salary sheet.
+function renderCap(cap, teamId) {
+  capTeam = teamId;
+  byId("players-kpis").hidden = byId("cap-card").hidden = !cap;
   if (!cap) return;
+  byId("players-kpis").replaceChildren(capTile(cap), yearsTile(cap));
   renderPublish();
   const parts = [`Cap ${fmtMoney(cap.cap)}. Active and bench salaries count, plus buyouts; minors and IR don't`];
   if (cap.ir_relief) parts.push(`${fmtMoney(cap.ir_relief)} IR relief right now`);
@@ -572,6 +705,146 @@ function renderCap(cap) {
       `${cap.contract_years} of ${cap.contract_year_bank} contract years used (seasons left on each contract; minors and IR excluded).` +
       (cap.unknown_salary.length ? ` Unknown salaries aren't included: ${cap.unknown_salary.join(", ")}.` : "")),
   );
+}
+
+// Player, age, this NHL season's games and totals in each league category, then the contract.
+// Skaters and goalies have different categories, so each position group labels its own stat
+// columns; short lists are padded so the contract columns line up.
+function rosterColumns(ov, groupKey) {
+  const of = (grp) => ov.categories.filter((c) => c.group === grp);
+  const slots = Math.max(of("SKATER").length, of("GOALIE").length);
+  const stats = of(groupKey === "G" ? "GOALIE" : "SKATER").map((c) => ({
+    key: `stat:${c.category}`, label: c.category, title: c.name, asc: c.lower_is_better,
+    value: (p) => (p.season ? p.season[c.category] : null),
+    render: (p) => (p.season ? fmtScore(c.category, p.season[c.category]) : "–") }));
+  while (stats.length < slots) stats.push({ key: `pad${stats.length}`, label: "", sortable: false, value: () => null, render: () => "" });
+  return [
+    { key: "name", label: "Player", left: true, value: (p) => p.name },
+    { key: "age", label: "Age", value: (p) => p.age, render: (p) => (p.age != null ? p.age : "–") },
+    { key: "gp", label: "GP", title: "Games played this NHL season", value: (p) => p.gp_this_season },
+    ...stats,
+    { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
+    { key: "contract_years", label: "Yrs", value: (p) => p.contract_years, render: (p) => (p.contract_years || "–") },
+    { key: "contract_end", label: "At expiry", asc: true, value: endSortKey, render: endPill },
+  ];
+}
+
+function renderRoster(ov) {
+  const y = state.league ? state.league.season_year : null;
+  byId("roster-sub").textContent = `${y ? `${y}-${String(y + 1).slice(2)} ` : ""}NHL stats. ` +
+    "Click a column to sort, or a player for his contract.";
+  segmented(byId("roster-view"), [["roster", "Roster"], ["prospects", "Prospects"], ["all", "All"]],
+    state.rosterView, (v) => { state.rosterView = v; renderRoster(ov); });
+  byId("roster-table").replaceChildren(sectionedTable({
+    players: ov.roster, groupColumns: (key) => rosterColumns(ov, key), view: state.rosterView,
+    sort: state.rosterSort, onSort: (next) => { state.rosterSort = next; renderRoster(ov); },
+    empty: state.rosterView === "prospects" ? "No prospects in the minors." : "No players.",
+  }));
+}
+
+/* ================================================================ analysis */
+
+// Projections, need weights and market values: the numbers behind the trade builder.
+
+// What each number means, in plain words: the glossary at the top of the tab, and the hint on
+// each tile label and column header (hover or focus; marked with a dotted underline).
+const GLOSSARY = {
+  ecw: ["Expected category wins per week", "How many categories the team would win in a typical week, " +
+    "averaged over every opponent, from its projected lineups. Half of them (6 of 12) is an average team."],
+  strength: ["Projected strength", "The team's rank when its projected strength in every category is added up (1 = strongest)."],
+  skater_games: ["Skater games per week", "Skater games the team is projected to fill each week by setting its best " +
+    "available players every day. Bench players count on nights the regulars sit. More games, more counting stats."],
+  goalie_starts: ["Goalie starts per week", "Starts the team's goalies are projected to make each week, from how " +
+    "often each one starts for his NHL team."],
+  sd: ["vs league average", "How far the team's projected weekly total is above (blue) or below (red) the league " +
+    "average, in standard deviations (sd). About 1 sd is a clear strength or weakness; 2 is extreme."],
+  proj: ["Proj / wk", "The team's projected total in the category per week. GAA and SV% are averages."],
+  rank: ["Rank", "Projected rank in the category among all teams (1 = best). In League at a glance, the color " +
+    "shows the same distance from average as the bars."],
+  actual: ["Actual", "The team's real head-to-head record in the category this season: wins, losses and ties, one per matchup."],
+  need: ["Need", "How much one more unit of the category is worth to the team, from the Need weighting setting. " +
+    "1.00 is average; dark pills (1.15 and up) are the categories worth targeting."],
+  games: ["Games / wk", "Games per week the player is projected to spend in the team's lineup, with the best " +
+    "lineup set every day. For goalies, projected starts."],
+  value: ["Value", "The player's projected per-game production in every category, counted equally and compared " +
+    "with the players good enough to start in this league. 0 is an average starter; higher is better."],
+  need_value: ["Need value", "Value with each category weighted by the team's Need. Higher than Value means the " +
+    "player is strong where the team needs help."],
+  trade_rank: ["Trade rank", "The player's rank league-wide by Value (#1 = most valuable). Fewer goalies start, so " +
+    "goalies are spaced out on the same scale: the best goalie ranks about #9."],
+  market: ["Market", "Trade value: how far the player is above the last starter in the league. Bench-level " +
+    "players are worth about 0, so a package's values add up without two depth players matching a star."],
+  gp: ["GP (this/last)", "NHL games played this season and last. With few games, the projection leans on last " +
+    "season and the league average."],
+  best: ["Best categories", "The player's three strongest categories, in standard deviations above an average starter."],
+  marginal: ["Swing categories", "Weighs the categories where several teams are close to this one: one more goal " +
+    "or hit there flips a weekly matchup. Categories it dominates, or trails badly in, count less."],
+  weakness: ["Weakest categories", "Weighs the team's lowest-ranked categories most."],
+  even: ["Even", "Every category counts the same."],
+};
+const GLOSSARY_GROUPS = [
+  ["Team projections", ["ecw", "strength", "skater_games", "goalie_starts", "sd", "proj", "rank", "actual", "need"]],
+  ["Player values", ["games", "value", "need_value", "trade_rank", "market", "gp", "best"]],
+  ["Need weighting", ["marginal", "weakness", "even"]],
+];
+
+function withHelp(el, key) {
+  const [term, text] = GLOSSARY[key];
+  el.classList.add("has-help");
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "0");
+  bindTip(el, () => tipContent(term, text));
+  return el;
+}
+
+function renderGlossary() {
+  const box = byId("glossary");
+  if (box.dataset.ready) return;
+  box.dataset.ready = "1";
+  box.open = prefs.get("glossary", "") === "open";
+  box.addEventListener("toggle", () => prefs.set("glossary", box.open ? "open" : "closed"));
+  byId("glossary-body").replaceChildren(
+    h("p", { class: "glossary-intro" }, "Projections blend each player's per-game stats from this season and last " +
+      "(this season counts for more as games pile up), then set the team's best lineup every day for the rest of " +
+      "the NHL schedule. Hover over any label with a dotted underline to see its meaning there."),
+    h("div", { class: "glossary-groups" }, GLOSSARY_GROUPS.map(([title, keys]) => h("section", {},
+      h("h3", {}, title),
+      h("dl", {}, keys.map((k) => [h("dt", {}, GLOSSARY[k][0]), h("dd", {}, GLOSSARY[k][1])]))))));
+}
+
+async function loadAnalysis() {
+  const view = byId("view-analysis");
+  const token = ++seqs.analysis;
+  renderGlossary();
+  byId("strategy-hint").textContent = GLOSSARY[state.strategy][1];
+  view.classList.add("is-loading");
+  try {
+    const [profile, league] = await Promise.all([getProfile(state.team), getLeagueAnalysis()]);
+    if (token !== seqs.analysis) return;
+    renderAnalysisKpis(profile);
+    renderCategoryProfile(profile);
+    renderHeatmap(league);
+    renderPlayerValues(profile);
+    clearError();
+  } catch (err) {
+    if (token === seqs.analysis) showError(err);
+  } finally {
+    if (token === seqs.analysis) view.classList.remove("is-loading");
+  }
+}
+
+function renderAnalysisKpis(profile) {
+  const skaterGames = profile.roster.filter((p) => p.position !== "G")
+    .reduce((s, p) => s + (p.lineup_games_per_week || 0), 0);
+  const goalieStarts = profile.roster.reduce((s, p) => s + (p.expected_starts_per_week || 0), 0);
+  byId("analysis-kpis").replaceChildren(
+    tile("Expected category wins per week", fmtNum(profile.expected_category_wins, 2), `of ${profile.categories.length}`,
+      "Against an average opponent, from projected rest-of-season lineups", { hero: true, help: "ecw" }),
+    tile("Projected strength", ordinal(profile.projected_overall_rank), `of ${state.teams.length}`,
+      "Total category strength across the league", { help: "strength" }),
+    tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins",
+      { help: "skater_games" }),
+    tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all the team's goalies",
+      { help: "goalie_starts" }));
 }
 
 function renderCategoryProfile(profile) {
@@ -606,17 +879,26 @@ function renderCategoryProfile(profile) {
       `Strongest: ${profile.strengths.join(", ")} · Weakest: ${profile.weaknesses.join(", ")}`),
     h("div", { class: "scroll-x" }, h("table", { class: "cat-table" },
       h("thead", {}, h("tr", {},
-        h("th", {}, "Category"), h("th", { style: { textAlign: "center" } }, "vs league average"),
-        h("th", {}, "Proj / wk"), h("th", {}, "Rank"), h("th", {}, "Actual"), h("th", {}, "Need"))),
+        h("th", {}, "Category"), withHelp(h("th", { style: { textAlign: "center" } }, "vs league average"), "sd"),
+        withHelp(h("th", {}, "Proj / wk"), "proj"), withHelp(h("th", {}, "Rank"), "rank"),
+        withHelp(h("th", {}, "Actual"), "actual"), withHelp(h("th", {}, "Need"), "need"))),
       h("tbody", {}, body))),
   );
+}
+
+function heatStyle(z) {
+  if (z == null) return { background: "var(--wash)" };
+  const t = Math.max(-1, Math.min(1, z / 2));
+  const pct = Math.round(Math.abs(t) * 100);
+  const pole = t >= 0 ? "var(--div-pos)" : "var(--div-neg)";
+  return { background: `color-mix(in oklab, ${pole} ${pct}%, var(--div-mid))`, color: pct > 55 ? "#ffffff" : "var(--ink)" };
 }
 
 function renderHeatmap(overview) {
   const cats = (state.league && state.league.categories || []).map((c) => c.short_name);
   const names = Object.fromEntries((state.league && state.league.categories || []).map((c) => [c.short_name, c.name]));
   const head = h("tr", {}, h("th", { class: "team" }, "Team"),
-    cats.map((c) => h("th", { title: names[c] || c }, c)), h("th", { title: "Expected category wins per week" }, "Exp. W"));
+    cats.map((c) => h("th", { title: names[c] || c }, c)), withHelp(h("th", {}, "Exp. W"), "ecw"));
   const rows = overview.teams.map((t) => h("tr", { class: t.team_id === state.team ? "me" : "" },
     h("td", { class: "team", title: t.team_name }, t.team_name),
     cats.map((c) => {
@@ -635,31 +917,32 @@ function renderHeatmap(overview) {
   byId("league-heatmap").replaceChildren(h("table", { class: "heatmap" }, h("thead", {}, head), h("tbody", {}, rows)));
 }
 
-const ROSTER_COLUMNS = [
+const VALUE_COLUMNS = [
   { key: "name", label: "Player", left: true, value: (p) => p.name },
-  { key: "lineup_games_per_week", label: "Games / wk", value: (p) => p.lineup_games_per_week,
+  { key: "lineup_games_per_week", label: "Games / wk", help: "games", value: (p) => p.lineup_games_per_week,
     render: (p) => p.expected_starts_per_week != null
       ? `${fmtNum(p.expected_starts_per_week, 2)} starts` : fmtNum(p.lineup_games_per_week, 1) },
-  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
-  { key: "need_value", label: "Need value", value: (p) => p.need_value, render: (p) => fmtNum(p.need_value, 2) },
-  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
+  { key: "value", label: "Value", help: "value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
+  { key: "need_value", label: "Need value", help: "need_value", value: (p) => p.need_value,
+    render: (p) => fmtNum(p.need_value, 2) },
+  { key: "trade_rank", label: "Trade rank", help: "trade_rank", asc: true, value: (p) => p.trade_rank,
     render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
-  { key: "market_value", label: "Market", value: (p) => p.market_value, render: (p) => fmtNum(p.market_value, 1) },
+  { key: "market_value", label: "Market", help: "market", value: (p) => p.market_value,
+    render: (p) => fmtNum(p.market_value, 1) },
   { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
-  { key: "contract_years", label: "Yrs", value: (p) => p.contract_years, render: (p) => (p.contract_years || "–") },
-  { key: "contract_end", label: "At expiry", asc: true, value: endSortKey, render: endPill },
-  { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
+  { key: "gp_this_season", label: "GP (this/last)", help: "gp", value: (p) => p.gp_this_season,
     render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
-  { key: "best", label: "Best categories", left: true, cls: "cats-inline", sortable: false, render: (p) => bestCats(p.z) },
+  { key: "best", label: "Best categories", help: "best", left: true, cls: "cats-inline", sortable: false,
+    render: (p) => bestCats(p.z) },
 ];
 
-function renderRoster(profile) {
-  segmented(byId("roster-view"), [["roster", "Roster"], ["prospects", "Prospects"], ["all", "All"]],
-    state.rosterView, (v) => { state.rosterView = v; renderRoster(profile); });
-  byId("roster-table").replaceChildren(sectionedTable({
-    players: profile.roster, columns: ROSTER_COLUMNS, view: state.rosterView,
-    sort: state.rosterSort, onSort: (next) => { state.rosterSort = next; renderRoster(profile); },
-    empty: state.rosterView === "prospects" ? "No prospects in the minors." : "No players.",
+function renderPlayerValues(profile) {
+  segmented(byId("analysis-view"), [["roster", "Roster"], ["prospects", "Prospects"], ["all", "All"]],
+    state.analysisView, (v) => { state.analysisView = v; renderPlayerValues(profile); });
+  byId("analysis-table").replaceChildren(sectionedTable({
+    players: profile.roster, columns: VALUE_COLUMNS, view: state.analysisView,
+    sort: state.analysisSort, onSort: (next) => { state.analysisSort = next; renderPlayerValues(profile); },
+    empty: state.analysisView === "prospects" ? "No prospects in the minors." : "No players.",
   }));
 }
 
@@ -707,24 +990,33 @@ function playerCell(p) {
     h("div", { class: "sub" }, [positions(p), p.nhl_team].filter(Boolean).join(" · ")));
 }
 
-// One table, with a section per roster segment and position group so columns line up across
-// sections. Sorting applies within each section.
-function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true }) {
-  const col = columns.find((c) => c.key === sort.key) || columns[0];
-  const cmp = (a, b) => {
-    const va = col.value(a), vb = col.value(b);
-    if (va == null && vb == null) return 0;
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * sort.dir;
+// One table, with a section per roster segment (or the given `segments`) and position group so
+// columns line up across sections. Sorting applies within each section. `salary` is the amount
+// each section totals. With `groupColumns(groupKey)`, each position group has its own columns
+// (all the same length), labelled under its group heading instead of once at the top; a group
+// without the sorted column keeps the order it was given.
+function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true, segments = SEGMENTS,
+  salary = (p) => p.salary, groupColumns = null }) {
+  const colsFor = (group) => (groupColumns ? groupColumns(group.key) : columns);
+  const width = colsFor(POSITION_GROUPS[0]).length;
+  const comparator = (cols) => {
+    const col = cols.find((c) => c.key === sort.key) || (groupColumns ? null : cols[0]);
+    return col && ((a, b) => {
+      const va = col.value(a), vb = col.value(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * sort.dir;
+    });
   };
-  const head = h("tr", {}, columns.map((c) => {
+  const labels = (cols) => h("tr", { class: "labels" }, cols.map((c) => {
     const sortable = c.sortable !== false;
     const th = h("th", {
       class: (c.left ? "left " : "") + (sortable ? "sortable" : ""),
       "aria-sort": c.key === sort.key ? (sort.dir === 1 ? "ascending" : "descending") : null,
-      tabindex: sortable ? "0" : null,
+      tabindex: sortable ? "0" : null, title: c.title,
     }, c.label);
+    if (c.help) withHelp(th, c.help);
     if (sortable) {
       const go = () => onSort(c.key === sort.key ? { key: sort.key, dir: -sort.dir }
         : { key: c.key, dir: c.asc || c.key === "name" ? 1 : -1 });
@@ -733,31 +1025,35 @@ function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam =
     }
     return th;
   }));
-  const money = (list) => list.reduce((sum, p) => sum + (p.salary || 0), 0);
+  const money = (list) => list.reduce((sum, p) => sum + (salary(p) || 0), 0);
   const bodies = [];
-  for (const seg of SEGMENTS.filter((x) => view === "all" || x.key === view)) {
+  for (const seg of segments.filter((x) => view === "all" || x.key === view)) {
     const inSeg = players.filter(seg.test);
     if (!inSeg.length) continue;
-    bodies.push(h("tbody", { class: "seg" }, h("tr", { class: "seg-row" }, h("th", { colspan: String(columns.length) },
+    bodies.push(h("tbody", { class: "seg" }, h("tr", { class: "seg-row" }, h("th", { colspan: String(width) },
       seg.label, seg.sub ? h("span", { class: "seg-sub" }, ` · ${seg.sub}`) : null,
       h("span", { class: "seg-meta" }, `${inSeg.length} player${inSeg.length === 1 ? "" : "s"}` +
         (money(inSeg) ? ` · ${fmtMoney(money(inSeg))} salary` : ""))))));
     for (const group of POSITION_GROUPS) {
-      const list = inSeg.filter((p) => posGroup(p) === group.key).sort(cmp);
+      const cols = colsFor(group);
+      const cmp = comparator(cols);
+      const list = inSeg.filter((p) => posGroup(p) === group.key);
       if (!list.length) continue;
+      if (cmp) list.sort(cmp);
       const meta = [`${list.length}`];
       if (oneTeam && seg.key === "roster" && lineupSlots(group)) meta.push(`${lineupSlots(group)} lineup slots`);
       if (money(list)) meta.push(`${fmtMoney(money(list))}`);
       bodies.push(h("tbody", { class: "group" },
-        h("tr", { class: "group-row" }, h("th", { colspan: String(columns.length) },
+        h("tr", { class: "group-row" }, h("th", { colspan: String(width) },
           group.label, group.sub ? h("span", { class: "seg-sub" }, ` ${group.sub}`) : null,
           h("span", { class: "seg-meta" }, meta.join(" · ")))),
-        list.map((p) => h("tr", {}, columns.map((c) => (c.key === "name" ? playerCell(p)
+        groupColumns ? labels(cols) : null,
+        list.map((p) => h("tr", {}, cols.map((c) => (c.key === "name" ? playerCell(p)
           : h("td", { class: c.left ? "left" + (c.cls ? " " + c.cls : "") : "num" }, c.render ? c.render(p) : c.value(p))))))));
     }
   }
   if (!bodies.length) return h("div", { class: "empty" }, empty || "No players.");
-  return h("table", { class: "data-table sectioned" }, h("thead", {}, head), ...bodies);
+  return h("table", { class: "data-table sectioned" }, groupColumns ? null : h("thead", {}, labels(columns)), ...bodies);
 }
 
 /* ================================================================ trade builder */
@@ -1220,6 +1516,7 @@ async function loadPlayers() {
   if (team && state.playersView === "fa") state.playersView = "all";
   segmented(byId("players-view"), views, state.playersView, (v) => { state.playersView = v; loadPlayers(); });
   loadPicks();
+  if (!team) renderCap(null, null);
   if (!team && q.length < 2) {
     byId("players-title").textContent = "Players";
     out.replaceChildren(h("div", { class: "empty" }, "Type at least two letters of a name, or pick a team."));
@@ -1233,6 +1530,7 @@ async function loadPlayers() {
     let players = res.players;
     if (missingOnly) players = players.filter((p) => p.salary == null && p.roster_status !== "MINORS");
     byId("players-title").textContent = team ? teamName(team) : `${players.length} matches`;
+    if (team) renderCap(res.cap, team);
     out.replaceChildren(sectionedTable({
       players, columns: [...PLAYER_COLUMNS.filter((c) => !(team && c.leagueOnly)), ...seasonColumns(CONTRACT_SEASONS + 1)],
       view: state.playersView, oneTeam: Boolean(team),
@@ -1418,6 +1716,8 @@ function afterContractChange(message) {
   if (view === "players") loadPlayers();
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
+  else if (view === "offseason") loadOffseason();   // a birth date or contract length can move a player
+  else if (view === "analysis") loadAnalysis();
   else loadDashboard();
 }
 
@@ -1684,6 +1984,93 @@ async function loadChanges() {
   }
 }
 
+/* ================================================================ offseason */
+
+// What each player becomes when his contract ends. Every listed player has a contract_end.
+const EXPIRY_SEGMENTS = [
+  { key: "rfa", label: "RFAs", sub: "restricted free agents", test: (p) => p.contract_end.status === "RFA" },
+  { key: "ufa", label: "UFAs", sub: "unrestricted free agents", test: (p) => p.contract_end.status === "UFA" },
+  { key: "unknown", label: "Status unknown", sub: "no birth date on file", test: (p) => !p.contract_end.status },
+];
+
+// `res`: the /offseason response, for the season the final salary is from. `team`: the team filter.
+const offseasonColumns = (res, team) => [
+  { key: "name", label: "Player", left: true, value: (p) => p.name },
+  team ? null : { key: "fantasy_team", label: "Team", left: true, value: (p) => p.fantasy_team || "",
+    render: (p) => p.fantasy_team || "–" },
+  { key: "age_at_expiry", label: "Age July 1", value: (p) => p.contract_end.age_at_expiry,
+    render: (p) => (p.contract_end.age_at_expiry != null ? p.contract_end.age_at_expiry : "–") },
+  { key: "contract_type", label: "Type", left: true, value: (p) => TYPE_SHORT[p.contract_type] || "",
+    render: (p) => TYPE_SHORT[p.contract_type] || "" },
+  { key: "final_salary", label: `${res.after_season} salary`, value: (p) => p.final_salary, render: (p) => fmtMoney(p.final_salary) },
+  // Every contract ending in the next offseason has one season left, so the column only helps later ones.
+  res.year !== res.offseasons[0].year ? { key: "contract_years", label: "Yrs left", value: (p) => p.contract_years } : null,
+  { key: "value", label: "Value", help: "value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
+  { key: "trade_rank", label: "Trade rank", help: "trade_rank", asc: true, value: (p) => p.trade_rank,
+    render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
+  { key: "gp_this_season", label: "GP (this/last)", help: "gp", value: (p) => p.gp_this_season,
+    render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
+].filter(Boolean);
+
+let offseasonSeq = 0;
+async function loadOffseason() {
+  const out = byId("offseason-table");
+  const token = ++offseasonSeq;
+  out.classList.add("is-loading");
+  try {
+    const res = await api.get("/offseason", { year: state.offseasonYear });
+    if (token !== offseasonSeq) return;
+    state.offseason = res;
+    renderOffseason();
+  } catch (err) {
+    if (token !== offseasonSeq) return;
+    // A remembered year can fall out of range once the league moves on a season: go back to the next one.
+    if (err.status === 400 && state.offseasonYear != null) { state.offseasonYear = null; loadOffseason(); return; }
+    out.replaceChildren(h("div", { class: "empty" }, err.message));
+  } finally {
+    if (token === offseasonSeq) out.classList.remove("is-loading");
+  }
+}
+
+function renderOffseason() {
+  const res = state.offseason;
+  const team = state.offseasonTeam;
+  const players = res.players.filter((p) => !team || p.fantasy_team_id === team);
+  const missing = res.no_contract.filter((p) => !team || p.fantasy_team_id === team);
+
+  byId("offseason-year").replaceChildren(...res.offseasons.map((o) =>
+    h("option", { value: o.year, selected: o.year === res.year }, `${o.year} (after ${o.after_season})`)));
+  byId("offseason-team").replaceChildren(
+    h("option", { value: "" }, "All teams"),
+    ...state.teams.map((t) => h("option", { value: t.id, selected: t.id === team }, t.name)));
+  const views = [["all", "All"], ["rfa", "RFAs"], ["ufa", "UFAs"]];
+  if (res.players.some((p) => !p.contract_end.status)) views.push(["unknown", "Unknown"]);
+  if (!views.some(([v]) => v === state.offseasonView)) state.offseasonView = "all";
+  segmented(byId("offseason-status"), views, state.offseasonView, (v) => { state.offseasonView = v; renderOffseason(); });
+
+  const total = (list) => list.reduce((sum, p) => sum + (p.final_salary || 0), 0);
+  byId("offseason-kpis").replaceChildren(...EXPIRY_SEGMENTS.map((seg) => {
+    const list = players.filter(seg.test);
+    if (seg.key === "unknown" && !list.length) return null;
+    return tile(seg.label, String(list.length), list.length === 1 ? "player" : "players",
+      seg.key === "unknown" ? "Add birth dates to place them" : `${fmtMoney(total(list))} in ${res.after_season} salaries`);
+  }).filter(Boolean));
+
+  byId("offseason-title").textContent = `${team ? possessive(teamName(team)) : "All"} contracts ending after ${res.after_season}`;
+  byId("offseason-sub").textContent = `Free agency is decided on July 1, ${res.year}: players ${res.ufa_age} or older ` +
+    `become UFAs, younger players RFAs, and in-season pickups are always UFAs. Click a player to open his contract.`;
+  byId("offseason-table").replaceChildren(sectionedTable({
+    players, columns: offseasonColumns(res, team), view: state.offseasonView, oneTeam: Boolean(team),
+    segments: EXPIRY_SEGMENTS, salary: (p) => p.final_salary,
+    sort: state.offseasonSort, onSort: (next) => { state.offseasonSort = next; renderOffseason(); },
+    empty: `No contracts on file end after ${res.after_season}.`,
+  }));
+  byId("offseason-missing").replaceChildren(missing.length ? h("details", { class: "offseason-missing" },
+    h("summary", {}, `${missing.length} rostered player${missing.length === 1 ? " has" : "s have"} no contract on file, ` +
+      "so they can't be placed in any offseason"),
+    h("p", { class: "player-links" }, missing.map((p) => playerLink(p)))) : "");
+}
+
 /* ================================================================ sign-in */
 
 // What the signed-in person sees: GMs get the dashboard and players; the admin gets everything.
@@ -1692,6 +2079,7 @@ function applyRole() {
   byId("tabs").hidden = false;
   byId("topbar-actions").hidden = false;
   byId("tab-trade").hidden = !me.is_admin;
+  byId("tab-offseason").hidden = !me.is_admin;
   byId("tab-admin").hidden = !me.is_admin;
   byId("sync-btn").hidden = !me.is_admin;
   byId("players-sub").textContent = me.is_admin
@@ -1739,22 +2127,21 @@ async function showSignIn() {
   showGate("Sign in", "Use the Google account you play under. If you're new, sign in and the admin will approve you and link your team.");
   const button = byId("google-button");
   button.hidden = false;
+  if (new URLSearchParams(window.location.search).has("signin")) {   // /auth/google sent us back
+    byId("gate-msg").textContent = "Google sign-in didn't work. Try again.";
+    history.replaceState(null, "", window.location.pathname + window.location.hash);
+  }
   try {
     const cfg = await api.get("/auth/config");
     await loadGoogle();
-    google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: onGoogleCredential });
+    // Redirect, not the default popup: some browsers (Firefox with strict tracking protection or
+    // container extensions) never open it. Google posts the token to /auth/google, which signs in
+    // and comes back to the page.
+    google.accounts.id.initialize({ client_id: cfg.google_client_id, ux_mode: "redirect",
+      login_uri: `${window.location.origin}/auth/google` });
     const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     google.accounts.id.renderButton(button, { theme: dark ? "filled_black" : "outline", size: "large", shape: "pill",
       text: "signin_with" });
-  } catch (err) {
-    byId("gate-msg").textContent = err.message;
-  }
-}
-
-async function onGoogleCredential({ credential }) {
-  try {
-    await api.post("/auth/google", { credential });
-    window.location.reload();   // start over as the signed-in user
   } catch (err) {
     byId("gate-msg").textContent = err.message;
   }
@@ -1873,7 +2260,7 @@ function renderAdmin(res) {
   byId("admin-body").replaceChildren(
     adminCard("Requests", "People who signed in with Google and are waiting for you. Pick their team to approve them.", requests),
     adminCard("People with access",
-      "GMs see every team and edit their own team's contracts. Admins also get the trade builder, full syncs, publishing and this page.",
+      "GMs see every team and edit their own team's contracts. Admins also get the trade builder, the offseason list, full syncs, publishing and this page.",
       people),
     adminCard("Add someone", "They get straight in the first time they sign in with this Google account.",
       h("div", { class: "filters" },

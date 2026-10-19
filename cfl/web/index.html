@@ -16,12 +16,14 @@
           <div class="brand-league" id="league-name">Loading league…</div>
         </div>
       </div>
-      <!-- Shown once the app knows who's signed in. Trade builder and Admin are the admin's. -->
+      <!-- Shown once the app knows who's signed in. Trade builder, Offseason and Admin are the admin's. -->
       <nav class="tabs" role="tablist" aria-label="Views" id="tabs" hidden>
         <a class="tab" role="tab" href="#dashboard" id="tab-dashboard">Dashboard</a>
+        <a class="tab" role="tab" href="#analysis" id="tab-analysis">Analysis</a>
         <a class="tab" role="tab" href="#trade" id="tab-trade" hidden>Trade builder</a>
         <a class="tab" role="tab" href="#players" id="tab-players">Players &amp; cap</a>
         <a class="tab" role="tab" href="#changes" id="tab-changes">Changes</a>
+        <a class="tab" role="tab" href="#offseason" id="tab-offseason" hidden>Offseason</a>
         <a class="tab" role="tab" href="#admin" id="tab-admin" hidden>Admin</a>
       </nav>
       <div class="topbar-actions" id="topbar-actions" hidden>
@@ -30,7 +32,7 @@
           <span class="field-label">Team</span>
           <select id="team-select" aria-label="Team to analyze"></select>
         </label>
-        <button class="btn" id="refresh-btn" type="button" title="Today's Fantrax rosters and NHL.com stats">Refresh rosters &amp; stats</button>
+        <button class="btn" id="refresh-btn" type="button" title="Today's Fantrax rosters, standings and matchup scores, and NHL.com stats">Refresh rosters &amp; stats</button>
         <button class="btn danger-ghost" id="sync-btn" type="button" title="Re-read every source, including salary sheets" hidden>Full sync…</button>
         <div class="account" id="account" hidden></div>
       </div>
@@ -54,7 +56,46 @@
     </section>
 
     <!-- Dashboard -------------------------------------------------------- -->
+    <!-- A GM's overview of a team: real results and contracts, no projections. -->
     <section id="view-dashboard" class="view" hidden>
+      <div class="kpis" id="kpis"></div>
+
+      <div class="grid-2 wide-left">
+        <article class="card">
+          <header class="card-head">
+            <div>
+              <h2 id="week-title">Categories</h2>
+              <p class="card-sub" id="week-sub"></p>
+            </div>
+          </header>
+          <div id="week-table" class="scroll-x"></div>
+        </article>
+
+        <article class="card">
+          <header class="card-head">
+            <div>
+              <h2>Standings</h2>
+              <p class="card-sub">Fantrax head-to-head standings</p>
+            </div>
+          </header>
+          <div id="standings-table" class="scroll-x"></div>
+        </article>
+      </div>
+
+      <article class="card">
+        <header class="card-head">
+          <div>
+            <h2>Roster</h2>
+            <p class="card-sub" id="roster-sub"></p>
+          </div>
+          <div class="segmented" id="roster-view" role="group" aria-label="Which players to show"></div>
+        </header>
+        <div id="roster-table" class="scroll-x"></div>
+      </article>
+    </section>
+
+    <!-- Analysis: projections, need weights and market values ---------- -->
+    <section id="view-analysis" class="view" hidden>
       <div class="filters">
         <label class="field">
           <span class="field-label">Need weighting</span>
@@ -67,7 +108,13 @@
         <p class="filters-hint" id="strategy-hint"></p>
       </div>
 
-      <div class="kpis" id="kpis"></div>
+      <!-- Plain-language definitions; the same text is the hint on each label. Remembers open or closed. -->
+      <details class="card glossary" id="glossary">
+        <summary>What these numbers mean</summary>
+        <div class="glossary-body" id="glossary-body"></div>
+      </details>
+
+      <div class="kpis" id="analysis-kpis"></div>
 
       <div class="grid-2">
         <article class="card">
@@ -98,26 +145,15 @@
         </article>
       </div>
 
-      <article class="card" id="cap-card" hidden>
-        <header class="card-head">
-          <div>
-            <h2>Salary cap</h2>
-            <p class="card-sub" id="cap-sub"></p>
-          </div>
-          <div class="publish-status" id="publish-status"></div>
-        </header>
-        <div id="cap-outlook"></div>
-      </article>
-
       <article class="card">
         <header class="card-head">
           <div>
-            <h2>Roster</h2>
-            <p class="card-sub">Click a column to sort. Need value = value to this team given its category needs</p>
+            <h2>Player values</h2>
+            <p class="card-sub">Click a column to sort. Hover over a column name to see what it means.</p>
           </div>
-          <div class="segmented" id="roster-view" role="group" aria-label="Which players to show"></div>
+          <div class="segmented" id="analysis-view" role="group" aria-label="Which players to show"></div>
         </header>
-        <div id="roster-table" class="scroll-x"></div>
+        <div id="analysis-table" class="scroll-x"></div>
       </article>
     </section>
 
@@ -138,6 +174,18 @@
         </div>
         <label class="check"><input type="checkbox" id="players-missing"> Missing salary only</label>
       </div>
+      <!-- The chosen team's cap: space, contract years and the outlook. Hidden for "All teams". -->
+      <div class="kpis" id="players-kpis" hidden></div>
+      <article class="card" id="cap-card" hidden>
+        <header class="card-head">
+          <div>
+            <h2>Salary cap</h2>
+            <p class="card-sub" id="cap-sub"></p>
+          </div>
+          <div class="publish-status" id="publish-status"></div>
+        </header>
+        <div id="cap-outlook"></div>
+      </article>
       <article class="card">
         <header class="card-head">
           <div>
@@ -180,6 +228,35 @@
           </div>
         </header>
         <div id="changes-table" class="scroll-x"></div>
+      </article>
+    </section>
+
+    <!-- Offseason: contracts that end after a season, as RFAs or UFAs --- -->
+    <section id="view-offseason" class="view" hidden>
+      <div class="filters">
+        <label class="field">
+          <span class="field-label">Offseason</span>
+          <select id="offseason-year"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Team</span>
+          <select id="offseason-team"></select>
+        </label>
+        <div class="field">
+          <span class="field-label">Show</span>
+          <div class="segmented" id="offseason-status" role="group" aria-label="Which players to show"></div>
+        </div>
+      </div>
+      <div class="kpis" id="offseason-kpis"></div>
+      <article class="card">
+        <header class="card-head">
+          <div>
+            <h2 id="offseason-title">Expiring contracts</h2>
+            <p class="card-sub" id="offseason-sub"></p>
+          </div>
+        </header>
+        <div id="offseason-table" class="scroll-x"></div>
+        <div id="offseason-missing"></div>
       </article>
     </section>
 

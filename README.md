@@ -24,16 +24,34 @@ cp .env.example .env            # then set FANTRAX_MY_TEAM_ID (your team, for th
 `python -m cfl serve` (add `--reload` while developing) serves the app at http://127.0.0.1:8000.
 There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
 
-- **Dashboard.** Shows expected category wins per week, projected strength, standings, and
-  skater-game and goalie-start volume. A category profile charts your projected strength against
-  the league average, with actual weekly W-L-T and need weights. A league heatmap shows every
-  team's projected rank in every category. A sortable roster table rounds it out. The team picker
-  in the header lets you view any team.
+- **Dashboard.** A GM's overview of a team, from real results only (no projections):
+  - **At a glance:** this week's category score and opponent, standings, and roster spots.
+  - **Categories:** this week's head-to-head in each category (your total, the opponent's, won or
+    lost), next to the season's record and league rank in that category. Some weeks bring two
+    opponents, or a bye.
+  - **Standings** from Fantrax. Click a team to see its dashboard.
+  - **Roster** by position: age, this NHL season's games and totals in each league category,
+    salary, years left, and RFA or UFA at expiry. Click a column to sort.
+
+  The team picker in the header lets you view any team. Projections and market values are on the
+  Analysis tab.
+- **Analysis.** The projections behind the trade builder, for the team in the header's picker:
+  - **Tiles:** expected category wins per week against an average opponent, projected strength
+    across the league, and skater games and goalie starts per week from projected daily lineups.
+  - **Category profile:** projected strength in each category against the league average, with
+    projected per-week totals, rank, actual W-L-T and need weight.
+  - **League at a glance:** a heatmap of every team's projected rank in every category.
+  - **Player values:** each player's value, need value, trade rank and market value, games per week
+    and best categories.
+
+  **Need weighting** sets how the team's needs are weighed for the need weights and need values (see
+  [How the analysis works](#how-the-analysis-works)).
 - **Players & cap.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
   Each contract shows its salary for every season it runs, then RFA or UFA in the season after it ends.
-  A team's page also shows its [draft picks](#draft-picks), where its GM records pick trades and RFA
-  compensation.
+  A team's page opens with its cap space, contract years used and the salary cap for this season and
+  the next four, which follow every contract edit. It also shows the team's [draft picks](#draft-picks),
+  where its GM records pick trades and RFA compensation.
 - **Changes.** Roster moves and contract changes, newest first: players added, dropped or
   traded (from Fantrax syncs), salary changes, other contract changes (years, later
   seasons, type), and draft picks changing hands. Filter by team or kind. The **By** column says where each came from:
@@ -53,6 +71,13 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
     selection becomes the players you'd drop. Suggestions rank free agents by simulated gain,
     with the best drop for each when you haven't chosen one. Search the free agents to add any of
     them, and the evaluation prices the pickup like a trade, including buyouts for the drop.
+- **Offseason** (admin only). Every rostered player whose contract ends after a season, grouped
+  into RFAs, UFAs, and players with no birth date (status unknown; click one to add it). Shows each
+  player's age on July 1, contract type, final-season salary and value. Filter by team or status.
+  It defaults to the next offseason, the summer after the current season. The picker also
+  looks ahead to each later season a contract can run. Everything follows the league's current
+  season, so the list moves on by itself once Fantrax starts a new season. A note under the table
+  lists rostered players with no contract on file; the list can't place them.
 - **Admin** (admin only). Approve GMs who signed in, link each to their team, change roles, and
   remove access.
 
@@ -75,8 +100,9 @@ sync step reports anything it couldn't link.
 
 ## Sync
 
-In the app, **Refresh rosters & stats** pulls today's Fantrax rosters and NHL.com stats
-(`rosters`, `stats`, `match`, plus `bios` for any new player's birth date). **Full sync…** re-reads every source after a confirmation, and
+In the app, **Refresh rosters & stats** pulls today's Fantrax rosters, standings and matchup scores,
+and NHL.com stats (`rosters`, `standings`, `matchups`, `stats`, `match`, plus `bios` for any new
+player's birth date). **Full sync…** re-reads every source after a confirmation, and
 replaces each team's salary-sheet contracts with what the sheets say now. Neither touches contract
 edits made in the app, and neither writes to Fantrax or Google.
 
@@ -159,10 +185,10 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   follow the same rules as other future seasons: IR counts, minors don't. Players with no birth
   date on file aren't included, because their status is unknown. Holds stay out of `committed` and
   `space`. Each future season reports them as `rfa_holds` (the total) and `rfa_players` (the
-  players). The dashboard cap card draws them as a dotted, unfilled segment after the committed
+  players). The cap card on the Players & cap tab draws them as a dotted, unfilled segment after the committed
   salary, and its tooltip lists the players. The published sheet doesn't add them.
 - **Contract-year bank (50):** seasons left on every contract, this one included, for active and
-  bench players. Minors and IR don't count, and in-season UFA deals are exempt. The dashboard
+  bench players. Minors and IR don't count, and in-season UFA deals are exempt. The Players & cap tab
   flags a team over the bank, and trades show contract years before → after.
 
 ### Checking against the league-wide contract sheet
@@ -279,9 +305,9 @@ run for 5 minutes (a full sync takes about 10 seconds). Neon's free plan sleeps 
 
 GMs sign in with Google. Anyone can ask to join; you approve them and link their team.
 
-- **Who sees what.** A GM sees every team's dashboard and players, and edits contracts and birth
+- **Who sees what.** A GM sees every team's dashboard, analysis and players, and edits contracts and birth
   dates for players on their own team. They can run **Refresh rosters & stats**. Admins also get
-  full syncs, sheet publishing, the trade builder and the **Admin** tab. The API enforces all of
+  full syncs, sheet publishing, the trade builder, the **Offseason** list and the **Admin** tab. The API enforces all of
   this, not just the page.
 - **Joining.** Send GMs the site's link. When someone signs in for the first time they wait for
   approval and show up under **Requests** in the Admin tab, where you pick their team. You can
@@ -304,8 +330,11 @@ Set it up once:
    Then on **Audience**, click **Publish app**: while it's in **Testing**, only the test users you
    list can sign in. The app asks only for email and profile, which need no review.
 2. Under **Clients**, choose **Create client** with type **Web application**. Add the site to
-   **Authorized JavaScript origins**: `https://clfl.vercel.app` (or your domain). To use logins
-   locally, also add `http://localhost` and `http://localhost:8000`. No redirect URI is needed.
+   **Authorized JavaScript origins**: `https://clfl.vercel.app` (or your domain), and to
+   **Authorized redirect URIs**: `https://clfl.vercel.app/auth/google`. Google sends people back
+   there after they pick an account (a full-page redirect, not a popup, which some browsers block).
+   To use logins locally, also add the origins `http://localhost` and `http://localhost:8000` and
+   the redirect URI `http://localhost:8000/auth/google`.
 3. In Vercel, set `GOOGLE_CLIENT_ID` to the client ID, `CFL_SESSION_SECRET` to a long random
    string (for example `openssl rand -base64 32`; keep it a Secret), and `CFL_ADMIN_EMAILS` to your
    Google email. Redeploy.
@@ -321,17 +350,19 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 
 | Endpoint | |
 |---|---|
-| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `stats`, `match`, `bios`; those run at most once every 10 minutes league-wide, 429 otherwise) |
+| `POST /sync?resources=rosters&resources=matchups` | refresh from Fantrax / NHL.com (a GM: only `rosters`, `standings`, `matchups`, `stats`, `match`, `bios`; those run at most once every 10 minutes league-wide, 429 otherwise) |
 | `GET /league`, `/categories`, `/teams`, `/standings` | league data |
+| `GET /teams/{id}/overview` | the dashboard: this week's matchup by category, season category records and ranks, the roster with this NHL season's stats, and roster spots |
 | `GET /teams/{id}/roster` | roster with per-game projections and z-scores |
 | `GET /teams/{id}/contracts` | salary-sheet contracts, how each matched, and the cap summary |
 | `GET /matchups?period=N` | schedule + category scores for a week |
-| `GET /players?status=fa&position=D&sort=value` | search the player pool |
+| `GET /players?status=fa&position=D&sort=value` | search the player pool (with `team_id`, also that team's `cap` summary) |
 | `GET /players/{fantrax_id}` | one player, including raw NHL season stats |
 | `GET /changes?team_id=me&kind=salary` | player and contract changes, newest first (`kind`: added, dropped, traded, salary, contract, pick; repeat for several) |
 | `GET /teams/{id}/picks` | the team's picks in the upcoming drafts, its own picks now elsewhere, and its pick deals |
 | `POST /picks/deals` | move picks: `{"kind": "trade", "team_id": "me", "other_team_id": "...", "send": [{"draft_year": 2027, "round": 1, "original_team_id": "..."}], "receive": [...], "note": "..."}` (`kind`: trade or rfa; `receive` is for trades) |
 | `DELETE /picks/deals/{deal_id}` | undo a pick deal |
+| `GET /offseason?year=2027` | *admin*: rostered players whose contracts end in that offseason (July 1 of `year`), RFAs then UFAs then unknown, plus rostered players with no contract on file. `year` defaults to the next offseason |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |
@@ -390,6 +421,7 @@ cfl/
   reconcile.py  compare a league-wide contract sheet with the app; import missing contracts
   changes.py    change log: compares every player's team and contract after each sync and edit
   picks.py      draft picks: who owns each one, and the trades and RFA compensation that moved them
+  offseason.py  contracts ending in each offseason, and whether each player becomes an RFA or a UFA
   __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)

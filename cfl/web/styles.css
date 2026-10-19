@@ -137,6 +137,7 @@ input[type="search"] { width: 100%; }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; }
 .grid-2 > .card { margin-bottom: 0; }
 .grid-2 { margin-bottom: 16px; }
+.grid-2.wide-left { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
 .scroll-x { overflow-x: auto; }
 .is-loading { opacity: 0.5; transition: opacity 0.15s; pointer-events: none; }
 
@@ -148,8 +149,15 @@ input[type="search"] { width: 100%; }
 .tile-value.hero { font-size: 48px; }
 .tile-value small { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 4px; }
 .tile-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.tile-sub.warn { color: var(--ink-2); }
 .tile-sub .down { color: var(--bad); }
+/* Over a league limit: the status color, always with the ▲ icon and the overage in words. */
+.tile.error { border-color: color-mix(in oklab, var(--bad) 65%, transparent);
+  background: color-mix(in oklab, var(--bad) 7%, var(--surface)); }
+.tile.error .tile-value { color: var(--bad); }
+.tile.error .tile-sub { color: var(--ink-2); }
+.tile-sub .up { color: var(--good); }
+.tile-sub .flat { color: var(--muted); }
+.tile-sub + .tile-value { margin-top: 8px; }   /* a second matchup in the same week */
 .tile.hero-tile { grid-column: span 2; }
 
 /* ---------------------------------------------------------------- legend */
@@ -162,7 +170,7 @@ input[type="search"] { width: 100%; }
 .scale-bar { flex: 0 0 160px; height: 10px; border-radius: 3px;
   background: linear-gradient(90deg, var(--div-neg), var(--div-mid) 50%, var(--div-pos)); }
 
-/* ---------------------------------------------------------------- category profile */
+/* ---------------------------------------------------------------- categories */
 .cat-table { width: 100%; border-collapse: collapse; }
 .cat-table th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: right; padding: 0 6px 6px; white-space: nowrap; }
 .cat-table th:first-child, .cat-table td:first-child { text-align: left; padding-left: 0; }
@@ -173,6 +181,19 @@ input[type="search"] { width: 100%; }
 .cat-full { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .need-pill { display: inline-block; min-width: 38px; text-align: center; padding: 1px 6px; border-radius: 999px; background: var(--wash); color: var(--ink-2); font-size: 12px; }
 .need-pill.high { background: var(--ink); color: var(--surface); }
+/* This week vs the season: a band over each column group. */
+.week-table tr.band th { text-align: center; color: var(--ink-2); padding-bottom: 2px; }
+.week-table tr.band th:not(:empty) { border-bottom: 1px solid var(--axis); }
+.week-table tr.band th + th { border-left: 8px solid var(--surface); }
+.week-table .team-name { display: inline-block; max-width: 140px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.week-table td.won { font-weight: 600; }
+.week-table td.result-cell { width: 26px; padding-left: 2px; text-align: left; }
+.week-table tr.total-row td { border-top: 1px solid var(--axis); padding-top: 6px; font-weight: 600; }
+/* Head-to-head result from the team's side: the letter says it, the color backs it up. */
+.result { display: inline-block; width: 18px; line-height: 18px; border-radius: 4px; text-align: center; font-size: 11px; font-weight: 600; }
+.result.up { background: color-mix(in oklab, var(--good) 16%, transparent); color: var(--good-text); }
+.result.down { background: color-mix(in oklab, var(--bad) 16%, transparent); color: var(--bad); }
+.result.flat { background: var(--wash); color: var(--ink-2); }
 
 /* Diverging bar: hairline baseline at league average, 12px marks, 4px rounded data end. */
 .divbar { position: relative; height: 24px; }
@@ -196,6 +217,22 @@ input[type="search"] { width: 100%; }
 .heatmap td.ecw { text-align: right; padding-left: 8px; color: var(--ink-2); }
 .heatmap tr.me td.cell { box-shadow: inset 0 0 0 1px var(--ink); }
 
+/* ---------------------------------------------------------------- glossary */
+/* A label with a definition: dotted underline, the definition on hover or focus. */
+.has-help { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+.data-table th.sortable.has-help { cursor: pointer; }
+.glossary { padding: 0; }
+.glossary > summary { padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 15px; }
+.glossary[open] > summary { border-bottom: 1px solid var(--border); }
+.glossary-body { padding: 12px 16px 16px; }
+.glossary-intro { color: var(--ink-2); max-width: 760px; }
+.glossary-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px 32px; }
+.glossary h3 { font-size: 12px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em;
+  margin-top: 14px; }
+.glossary dl { margin: 0; }
+.glossary dt { font-weight: 600; font-size: 13px; margin-top: 10px; }
+.glossary dd { margin: 2px 0 0; color: var(--ink-2); font-size: 13px; }
+
 /* ---------------------------------------------------------------- tables */
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: right; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid var(--axis); user-select: none; }
@@ -211,6 +248,9 @@ input[type="search"] { width: 100%; }
 .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); margin-left: 6px; vertical-align: 1px; }
 .badge.solid { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 .cats-inline { color: var(--ink-2); font-size: 12px; }
+.standings tr.me td { background: var(--wash); font-weight: 600; }
+.standings .badge { vertical-align: 1px; }
+.standings td.left { white-space: normal; }
 
 /* ---------------------------------------------------------------- trade builder */
 .trade-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
@@ -301,6 +341,9 @@ input[type="search"] { width: 100%; }
 .data-table .seg-sub { font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }
 .data-table .seg-meta { float: right; font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .data-table tbody.group tr:hover th { background: var(--surface); }
+/* Column labels under a group heading (tables whose groups have their own columns). */
+.data-table .group-row:has(+ .labels) th { border-bottom: 0; }
+.data-table tr.labels th { padding-top: 2px; }
 .pill { --pill: var(--muted); display: inline-block; font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 999px; margin-left: 8px;
   vertical-align: 1px; border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; }
 .pill { border-color: color-mix(in oklab, var(--pill) 55%, transparent);
@@ -326,6 +369,12 @@ input[type="search"] { width: 100%; }
 .player-link { background: none; border: 0; padding: 0; font: inherit; font-weight: 500; color: var(--ink);
   cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--axis); text-underline-offset: 3px; }
 .player-link:hover { text-decoration-color: var(--ink); }
+
+/* ---------------------------------------------------------------- offseason */
+.offseason-missing { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.offseason-missing summary { cursor: pointer; }
+.player-links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 13px; }
+
 .dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--ink);
   padding: 18px; width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; }
 .dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
@@ -377,12 +426,16 @@ input[type="search"] { width: 100%; }
 @media (max-width: 980px) {
   .grid-2, .trade-grid { grid-template-columns: minmax(0, 1fr); }
   .grid-2 > .card { margin-bottom: 0; }
+  .grid-2.wide-left { grid-template-columns: minmax(0, 1fr); }
   .tile.hero-tile { grid-column: auto; }
   .sides { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
   .topbar { position: static; }
   .topbar-inner { gap: 8px 12px; }
+  /* The admin's seven tabs don't fit a phone: they scroll sideways instead of widening the page. */
+  .tabs { width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tab { flex: none; white-space: nowrap; }
   .topbar-actions { margin-left: 0; width: 100%; }
   .topbar-actions .field { flex: 1; min-width: 0; }
   .topbar-actions select { flex: 1; min-width: 0; width: 100%; }
@@ -398,11 +451,11 @@ input[type="search"] { width: 100%; }
   .tile { padding: 12px; }
   .tile.hero-tile { grid-column: 1 / -1; }
   .tile-value { font-size: 22px; }
-  .cat-table td.bar-cell { min-width: 84px; width: 30%; padding-left: 4px; padding-right: 4px; }
   .cat-table td, .cat-table th { padding-left: 4px; padding-right: 4px; }
+  .cat-table td.bar-cell { min-width: 84px; width: 30%; padding-left: 4px; padding-right: 4px; }
+  .tile-value.hero { font-size: 40px; }
   .data-table.compact th, .data-table.compact td { padding: 5px 4px; }
   .divbar.mini { min-width: 56px; }
-  .tile-value.hero { font-size: 40px; }
   .cat-full { display: none; }
   .market-row { grid-template-columns: 70px minmax(0, 1fr) 96px; }
   .cap-row { grid-template-columns: 78px minmax(0, 1fr) 128px; gap: 8px; }

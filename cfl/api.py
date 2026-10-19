@@ -5,10 +5,10 @@ from datetime import datetime, timedelta, timezone
 from math import ceil
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -16,6 +16,7 @@ from . import analysis as A
 from . import auth
 from . import changes
 from . import contracts as C
+from . import offseason as O
 from . import picks as PK
 from . import publish as P
 from .auth import User
@@ -280,8 +281,7 @@ def league(conn: Connection = Depends(get_conn)):
         raise A.NotSynced("League not synced yet: POST /sync")
     for k in ("roster_info", "playoffs", "draft_settings"):
         lg[k] = json.loads(lg[k]) if lg[k] else None
-    lg["categories"] = rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better "
-                                  "FROM scoring_categories WHERE league_id=? ORDER BY sort_order", (s.league_id,))
+    lg["categories"] = categories(conn)
     lg["current_scoring_period"] = current_period(conn, s.league_id, "scoring")
     lg["current_roster_period"] = current_period(conn, s.league_id, "roster")
     lg["scoring_periods"] = rows(conn, "SELECT number, start_date, end_date FROM periods "
@@ -291,8 +291,9 @@ def league(conn: Connection = Depends(get_conn)):
 
 @data.get("/categories")
 def categories(conn: Connection = Depends(get_conn)):
-    return rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better FROM scoring_categories "
-                      "WHERE league_id=? ORDER BY sort_order", (get_settings().league_id,))
+    return sorted(rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better FROM scoring_categories "
+                             "WHERE league_id=?", (get_settings().league_id,)),
+                  key=lambda c: A.stat_line_key(c["short_name"], c["grp"]))
 
 
 @data.get("/teams")
@@ -318,6 +319,15 @@ def team_roster(team_id: str, conn: Connection = Depends(get_conn), user: User =
     players = sorted(ctx.roster(team_id), key=lambda p: (p.roster_status or "", p.group, p.name))
     return {"team_id": team_id, "team_name": ctx.teams[team_id], "roster_period": ctx.roster_period,
             "players": [A.player_summary(p, ctx) for p in players]}
+
+
+@data.get("/teams/{team_id}/overview")
+def team_overview(team_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """The dashboard: this week's matchup, season results by category, the roster with this NHL
+    season's stats, and roster spots."""
+    s = get_settings()
+    ctx = _ctx(conn, s)
+    return A.team_overview(conn, ctx, _team(ctx, team_id, user))
 
 
 @data.get("/teams/{team_id}/contracts")
@@ -408,7 +418,8 @@ def players(status: str = Query("all", description="all, fa, or rostered"),
         pool.sort(key=lambda p: (p.adp is None, p.adp or 0))
     else:
         pool.sort(key=lambda p: -(A.player_value(p, generic) if p.z else -1e9))
-    return {"total": len(pool), "players": [A.player_summary(p, ctx) for p in pool[offset:offset + limit]]}
+    return {"total": len(pool), "players": [A.player_summary(p, ctx) for p in pool[offset:offset + limit]],
+            "cap": A.cap_summary(ctx, team_id) if team_id else None}
 
 
 @data.get("/players/{fantrax_id}")
@@ -678,6 +689,17 @@ def change_log(team_id: Optional[str] = None,
     return out[:limit]
 
 
+@data.get("/offseason", dependencies=ADMIN_ONLY)
+def offseason(year: Optional[int] = Query(None, description="The offseason's year: RFA or UFA is decided on July 1 "
+                                                            "of it. Defaults to the next one, after this season"),
+              conn: Connection = Depends(get_conn)):
+    """Rostered players whose contracts end in an offseason, each an RFA or a UFA by league rules."""
+    try:
+        return O.expiring(_ctx(conn, get_settings()), year)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+
+
 # --------------------------------------------------------------------------- analysis
 
 
@@ -798,8 +820,22 @@ def trade(req: TradeRequest, conn: Connection = Depends(get_conn), user: User = 
 # --------------------------------------------------------------------------- logins
 
 
-class GoogleSignIn(BaseModel):
-    credential: str                     # the ID token Google's sign-in button hands the page
+GOOGLE_ORIGIN = "https://accounts.google.com"
+
+
+async def _form(request: Request) -> Dict[str, str]:
+    """A urlencoded form post's fields (read here, so python-multipart isn't needed)."""
+    return {k: v[0] for k, v in parse_qs((await request.body()).decode()).items()}
+
+
+def _from_google(request: Request, form: Dict[str, str]) -> bool:
+    """Google's sign-in page posts here, so the usual same-site check can't apply. A form forged on
+    another site carries neither the g_csrf_token cookie Google's script set on this site (Google's
+    documented check) nor Google's Origin. The Origin covers browsers that hold the cookie back."""
+    token = form.get("g_csrf_token")
+    if token and token == request.cookies.get("g_csrf_token"):
+        return True
+    return request.headers.get("origin") == GOOGLE_ORIGIN
 
 
 def _secure_cookie(request: Request) -> bool:
@@ -820,22 +856,27 @@ def auth_me(user: User = Depends(signed_in_user)):
 
 
 @app.post("/auth/google")
-def auth_google(sign_in: GoogleSignIn, request: Request, response: Response, conn: Connection = Depends(get_conn)):
-    """Sign in with a Google ID token. Someone new is recorded as waiting for the admin's approval."""
+def auth_google(request: Request, form: Dict[str, str] = Depends(_form), conn: Connection = Depends(get_conn)):
+    """Where Google's sign-in page posts the ID token (the button's redirect mode: its popup doesn't
+    open in some browsers, such as Firefox with strict tracking protection). Someone new is recorded
+    as waiting for the admin's approval. Either way it's back to the page, with ?signin=failed if
+    the token didn't check out."""
     s = get_settings()
     if not (s.google_client_id and s.session_secret):
         raise HTTPException(503, detail=NO_LOGINS)
-    if not _same_site(request):
-        raise HTTPException(403, detail="Refused a request from another site")
+    failed = RedirectResponse("/?signin=failed", status_code=303)
+    if not _from_google(request, form):
+        return failed
     try:
-        claims = auth.verify_google_credential(sign_in.credential, s.google_client_id)
+        claims = auth.verify_google_credential(form.get("credential", ""), s.google_client_id)
     except Exception:  # noqa: BLE001 - a bad, expired or foreign token all get the same answer
-        raise HTTPException(401, detail="Google sign-in didn't work. Try again.")
+        return failed
     user = auth.record_login(conn, s, claims)
+    response = RedirectResponse("/", status_code=303)
     response.set_cookie(auth.COOKIE, auth.make_session(user.email, s.session_secret),
                         max_age=auth.SESSION_DAYS * 86400, httponly=True, samesite="lax",
                         secure=_secure_cookie(request))
-    return user.public()
+    return response
 
 
 @app.post("/auth/logout")

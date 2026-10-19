@@ -660,6 +660,72 @@ def test_players_list_has_the_salary_for_each_contract_season(conn, tmp_path, mo
 
     assert {p["fantrax_id"]: p["contract_salaries"] for p in res.json()["players"]} == {
         "f1": [8, 9, 10], "f2": []}
+    cap = res.json()["cap"]                                     # the Players & cap tab's cap card
+    assert (cap["committed"], cap["unknown_salary"]) == (8, ["Jimmy Snuggerud"])
+    assert TestClient(app).get("/players", params={"q": "Dacc"}).json()["cap"] is None
+
+
+def test_dashboard_overview_has_this_weeks_matchup_season_records_and_nhl_stats(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    for i, (short, name, grp, lower) in enumerate((("A", "Assists", "SKATER", 0), ("GAA", "GAA", "GOALIE", 1),
+                                                   ("G", "Goals", "SKATER", 0), ("W", "Wins", "GOALIE", 0))):
+        conn.execute("INSERT INTO scoring_categories (league_id, short_name, name, grp, lower_is_better, sort_order) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", (LEAGUE, short, name, grp, lower, i))
+    for tid, name in (("t1", "One"), ("t2", "Two"), ("t3", "Three")):
+        conn.execute("INSERT INTO teams (id, league_id, name) VALUES (?, ?, ?)", (tid, LEAGUE, name))
+    # Week 1 is over; week 2 is on now. t1 plays t2 both weeks; t3 has a bye in week 2.
+    conn.execute("INSERT INTO periods VALUES (?, 'scoring', 1, '2020-01-01T13:00:00.0-0500', '2020-01-07T18:59:59.0-0500')",
+                 (LEAGUE,))
+    conn.execute("INSERT INTO periods VALUES (?, 'scoring', 2, '2020-01-08T13:00:00.0-0500', '2099-01-07T18:59:59.0-0500')",
+                 (LEAGUE,))
+    conn.execute("INSERT INTO matchups VALUES (?, 2, 0, 't1', 't2'), (?, 2, 1, 't3', NULL)", (LEAGUE, LEAGUE))
+    scores = {1: {"t1": {"G": 5, "A": 1, "W": 2, "GAA": 2.0}, "t2": {"G": 2, "A": 3, "W": 1, "GAA": 3.0}},
+              2: {"t1": {"G": 3, "A": 2, "W": 1, "GAA": 2.5}, "t2": {"G": 1, "A": 4, "W": 1, "GAA": 2.1}}}
+    for period, teams in scores.items():
+        for me, opp in (("t1", "t2"), ("t2", "t1")):
+            outcomes = []
+            for cat, v in teams[me].items():
+                theirs = teams[opp][cat]
+                better = v < theirs if cat == "GAA" else v > theirs
+                outcomes.append("TIE" if v == theirs else "WIN" if better else "LOSS")
+                conn.execute("INSERT INTO matchup_category_scores VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             (LEAGUE, period, me, opp, cat, v, outcomes[-1]))
+            conn.execute("INSERT INTO matchup_results VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL)",
+                         (LEAGUE, period, me, opp, *(outcomes.count(o) for o in ("WIN", "LOSS", "TIE"))))
+    conn.execute("INSERT INTO sync_log (resource, started_at, finished_at, status) "
+                 "VALUES ('matchups', '2026-10-19T14:00:00+00:00', '2026-10-19T14:00:05+00:00', 'ok')")
+    for fid, name, pos, status, nhl_id in (("f1", "Connor, Kyle", "LW", "ACTIVE", 1), ("f2", "Daccord, Joey", "G", "RESERVE", 2),
+                                           ("f3", "Kid, Some", "C", "MINORS", None)):
+        _player(conn, fid, name, "WPG", pos)
+        conn.execute("UPDATE players SET nhl_id=? WHERE fantrax_id=?", (nhl_id, fid))
+        conn.execute("INSERT INTO league_players VALUES (?, ?, ?, 'T')", (LEAGUE, fid, pos))
+        conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', ?, ?, ?)", (LEAGUE, fid, pos, status))
+    _skater(conn, 1, "Kyle Connor", "WPG", "L", gp=7, goals=4, assists=6)
+    _skater(conn, 1, "Kyle Connor", "WPG", "L", season=20252026, gp=82, goals=41, assists=56)   # last season: not shown
+    upsert(conn, "goalie_stats", [{"nhl_id": 2, "season_id": 20262027, "gp": 3, "wins": 2, "goals_against": 6,
+                                   "toi_seconds": 3 * 3600, "saves": 90, "shots_against": 96, "shutouts": 0}],
+           ["nhl_id", "season_id"])
+    conn.commit()
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+    client = TestClient(app)
+
+    res = client.get("/teams/t1/overview").json()
+
+    week = res["week"]
+    assert (week["period"], week["bye"], week["scores_as_of"]) == (2, False, "2026-10-19T14:00:05+00:00")
+    assert [(m["team_id"], m["record"]) for m in week["matchups"]] == [("t2", [1, 2, 1])]
+    assert week["matchups"][0]["categories"]["G"] == {"value": 3, "opponent_value": 1, "outcome": "WIN"}
+    # Categories read like a stat line, each with its season record (both weeks) and league rank.
+    assert [(c["category"], c["record"], c["rank"]) for c in res["categories"]] == [
+        ("G", "2-0-0", 1), ("A", "0-2-0", 2), ("W", "1-0-1", 1), ("GAA", "1-1-0", 1)]
+    assert {p["fantrax_id"]: p["season"] for p in res["roster"]} == {
+        "f1": {"G": 4, "A": 6}, "f2": {"W": 2, "GAA": 2.0}, "f3": None}
+    assert res["roster_spots"] == {"used": 2, "limit": None}   # the prospect doesn't take a spot
+
+    bye = client.get("/teams/t3/overview").json()["week"]
+    assert (bye["bye"], bye["matchups"]) == (True, [])
 
 
 def _owned_league(conn, tmp_path):
@@ -786,6 +852,48 @@ def test_contract_end_status_follows_the_july_1_age_rule():
     p.contract_type, p.birth_date = "IN_SEASON_UFA", "2005-01-01"
     assert A.contract_end(ctx, p)["status"] == "UFA"                 # pickups go back to the auction
     assert A.contract_end(ctx, _p("y", ["C", "F"], "F", 1)) is None   # no contract, nothing to expire
+
+
+def test_offseason_lists_expiring_contracts_by_status_and_moves_on_with_the_season():
+    from cfl import offseason as O
+
+    def signed(fid, salaries, born, team="t1", status="ACTIVE", contract_type="STANDARD"):
+        p = _with_contract(_p(fid, ["C", "F"], "F", 1, team=team, status=status), salaries)
+        p.birth_date, p.contract_type = born, contract_type
+        return p
+
+    ctx = _ctx_with([
+        signed("young", [4], "2004-03-01"),                                   # 23 on July 1, 2027: RFA
+        signed("vet", [10], "1990-01-01", team="t2"),                         # 37: UFA
+        signed("pickup", [2], "2005-01-01", contract_type="IN_SEASON_UFA"),   # always a UFA
+        signed("cheap", [1], "1992-01-01"),                                   # UFA, smaller salary
+        signed("nodob", [3], None),                                           # status unknown
+        signed("kid", [1], "2007-01-01", status="MINORS"),                    # prospects are listed too
+        signed("later", [5, 9], "2003-01-01"),                                # ends after 2027/28
+        signed("dropped", [6], "2000-01-01", team=None),                      # on no roster: nobody's to keep
+        _p("unsigned", ["C", "F"], "F", 1),                                   # rostered, no contract on file
+        _p("prospect", ["C", "F"], "F", 1, status="MINORS"),                  # unsigned prospect: not missing
+    ])
+    ctx.league = {"season_year": 2026}
+
+    res = O.expiring(ctx)
+    assert (res["year"], res["after_season"], res["ufa_age"]) == (2027, "2026/27", 27)
+    assert [o["year"] for o in res["offseasons"]] == [2027, 2028, 2029, 2030, 2031]
+    # RFAs, then UFAs, then unknown; the biggest final-season salary first within each.
+    assert [(p["fantrax_id"], p["contract_end"]["status"]) for p in res["players"]] == [
+        ("young", "RFA"), ("kid", "RFA"), ("vet", "UFA"), ("pickup", "UFA"), ("cheap", "UFA"), ("nodob", None)]
+    assert res["players"][0]["fantasy_team_id"] == "t1" and res["players"][0]["contract_end"]["age_at_expiry"] == 23
+    assert [p["fantrax_id"] for p in res["no_contract"]] == ["unsigned"]
+
+    later = O.expiring(ctx, 2028)
+    assert [(p["fantrax_id"], p["final_salary"]) for p in later["players"]] == [("later", 9)]   # last season's salary
+    assert later["after_season"] == "2027/28"
+    with pytest.raises(ValueError):
+        O.expiring(ctx, 2026)
+
+    # A season on, the next offseason is the one after it, with no code or setting to change.
+    ctx.league = {"season_year": 2027}
+    assert (O.expiring(ctx)["year"], O.expiring(ctx)["after_season"]) == (2028, "2027/28")
 
 
 def test_bios_sync_fills_birth_dates_and_keeps_manual_ones(conn):
@@ -1040,11 +1148,20 @@ def _two_teams(conn):
     conn.commit()
 
 
+def _google_post(client, credential, csrf="csrf-1", **kwargs):
+    """What Google's sign-in page sends back: a form post whose g_csrf_token matches the cookie."""
+    return client.post("/auth/google", data={"credential": credential, "g_csrf_token": csrf},
+                       follow_redirects=False, **kwargs)
+
+
 def _signed_in(credential):
+    """A client signed in as credential@example.com, and its /auth/me."""
     from fastapi.testclient import TestClient
     from cfl.api import app
     client = TestClient(app)
-    return client, client.post("/auth/google", json={"credential": credential})
+    client.cookies.set("g_csrf_token", "csrf-1")
+    _google_post(client, credential)
+    return client, client.get("/auth/me")
 
 
 def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_their_own(conn, tmp_path, monkeypatch):
@@ -1077,9 +1194,15 @@ def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_th
     assert gm.put("/players/f2/contract", json={"years": 2}).status_code == 403       # someone else's player
     assert gm.delete("/players/f2/contract").status_code == 403
     assert gm.put("/players/f2/birth-date", json={"birth_date": "2000-01-01"}).status_code == 403
-    for path in ("/analysis/teams/me/targets", "/analysis/teams/me/trade-partners", "/admin/users", "/publish"):
+    for path in ("/analysis/teams/me/targets", "/analysis/teams/me/trade-partners", "/admin/users", "/publish",
+                 "/offseason"):
         assert gm.get(path).status_code == 403, path                                  # the trade builder is the admin's
     assert gm.post("/analysis/trade", json={"give": ["f1"]}).status_code == 403
+    assert boss.get("/offseason").json()["year"] == 2027                              # the offseason list is too
+    # f1's edit left 2 seasons: it ends after 2027/28. f2's 3-year sheet contract ends after 2028/29.
+    assert [p["fantrax_id"] for p in boss.get("/offseason", params={"year": 2028}).json()["players"]] == ["f1"]
+    assert [p["fantrax_id"] for p in boss.get("/offseason", params={"year": 2029}).json()["players"]] == ["f2"]
+    assert boss.get("/offseason", params={"year": 2026}).status_code == 400
     assert boss.put("/players/f2/contract", json={"years": 1}).status_code == 200     # the admin edits anyone
 
     assert boss.delete("/admin/users/boss@example.com").status_code == 400            # can't remove yourself
@@ -1098,7 +1221,7 @@ def test_gms_refresh_rosters_and_stats_but_only_the_admin_runs_a_full_sync(conn,
     gm, res = _signed_in("gm")
     assert (res.json()["status"], res.json()["team_id"]) == ("active", "t2")          # straight in
 
-    quick = {"resources": ["rosters", "stats", "match", "bios"]}
+    quick = {"resources": ["rosters", "standings", "matchups", "stats", "match", "bios"]}
     assert gm.post("/sync", params=quick).status_code == 200
     assert gm.post("/sync").status_code == 403
     assert gm.post("/sync", params={"resources": ["salaries"]}).status_code == 403
@@ -1124,7 +1247,7 @@ def test_a_refresh_waits_ten_minutes_after_the_last_one_league_wide(conn, tmp_pa
     boss, _ = _signed_in("boss")
     boss.post("/admin/users", json={"email": "gm@example.com", "team_id": "t2"})
     gm, _ = _signed_in("gm")
-    quick = {"resources": ["rosters", "stats", "match", "bios"]}
+    quick = {"resources": ["rosters", "standings", "matchups", "stats", "match", "bios"]}
 
     _rosters_synced(conn, minutes_ago=11)
     assert gm.post("/sync", params=quick).status_code == 200
@@ -1152,6 +1275,21 @@ def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(c
     _two_teams(conn)
     _, res = _signed_in("forged")
     assert res.status_code == 401
+    google = TestClient(app)
+    google.cookies.set("g_csrf_token", "csrf-1")
+    res = _google_post(google, "forged")
+    assert (res.status_code, res.headers["location"]) == (303, "/?signin=failed")
+    res = _google_post(google, "gm")
+    assert (res.status_code, res.headers["location"]) == (303, "/") and auth.COOKIE in res.cookies
+
+    # A form forged elsewhere has neither the matching cookie nor Google's Origin.
+    forger = TestClient(app)
+    for csrf, headers in (("csrf-1", {}), ("csrf-1", {"Origin": "https://evil.example"}), ("", {"Origin": "null"})):
+        assert _google_post(forger, "boss", csrf, headers=headers).headers["location"] == "/?signin=failed"
+    assert forger.get("/auth/me").status_code == 401
+    res = _google_post(forger, "boss", "", headers={"Origin": "https://accounts.google.com"})   # cookie held back
+    assert res.headers["location"] == "/" and forger.get("/auth/me").json()["email"] == "boss@example.com"
+
     stranger = TestClient(app)
     for cookie in ("not-a-session", auth.make_session("boss@example.com", "someone-elses-secret")):
         stranger.cookies.set(auth.COOKIE, cookie)
@@ -1160,7 +1298,6 @@ def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(c
     boss, _ = _signed_in("boss")
     elsewhere = {"Origin": "https://evil.example"}
     assert boss.put("/players/f1/contract", json={"years": 1}, headers=elsewhere).status_code == 403
-    assert boss.post("/auth/google", json={"credential": "boss"}, headers=elsewhere).status_code == 403
     assert boss.put("/players/f1/contract", json={"years": 1}, headers={"Origin": "http://testserver"}).status_code == 200
 
 
