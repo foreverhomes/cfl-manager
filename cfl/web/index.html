@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CFL Manager</title>
+  <!-- The theme picked on the Account page, applied before the page draws so it never flashes the other one. -->
+  <script>try { var t = localStorage.getItem("cfl.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) {}</script>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -34,7 +36,8 @@
         </label>
         <button class="btn" id="refresh-btn" type="button" title="Today's Fantrax rosters, standings and matchup scores, and NHL.com stats">Refresh rosters &amp; stats</button>
         <button class="btn danger-ghost" id="sync-btn" type="button" title="Re-read every source, including salary sheets" hidden>Full sync…</button>
-        <div class="account" id="account" hidden></div>
+        <!-- Who's signed in; opens the Account page (theme, sign out). -->
+        <a class="account" href="#account" id="account-link"></a>
       </div>
     </div>
     <div class="sync-status" id="sync-status" role="status" aria-live="polite"></div>
@@ -312,6 +315,28 @@
       </div>
 
       <div id="trade-result"></div>
+    </section>
+
+    <!-- Account: who you're signed in as, the theme, signing out --------- -->
+    <section id="view-account" class="view account-page" hidden>
+      <article class="card">
+        <header class="card-head">
+          <div>
+            <h2>Your account</h2>
+            <p class="card-sub" id="account-sub"></p>
+          </div>
+        </header>
+        <div id="account-body"></div>
+      </article>
+      <article class="card">
+        <header class="card-head">
+          <div>
+            <h2 id="theme-title">Theme</h2>
+            <p class="card-sub">Saved in this browser, so each device keeps its own.</p>
+          </div>
+        </header>
+        <div class="segmented" id="theme-choice" role="group" aria-labelledby="theme-title"></div>
+      </article>
     </section>
 
     <!-- Admin: who can sign in, and their teams ------------------------- -->

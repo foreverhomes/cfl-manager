@@ -80,6 +80,8 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   lists rostered players with no contract on file; the list can't place them.
 - **Admin** (admin only). Approve GMs who signed in, link each to their team, change roles, and
   remove access.
+- **Account.** Your name in the top right opens it: your team and role, **Sign out**, and the theme
+  (match the device, light or dark). The theme is saved in the browser, so each device keeps its own.
 
 macOS has no bare `python` command, and the dependencies live in `.venv`. Either prefix commands
 with `.venv/bin/python` as above, or activate the venv once per terminal session
