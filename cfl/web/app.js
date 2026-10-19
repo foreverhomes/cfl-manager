@@ -401,7 +401,7 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "offseason", "admin"];
+const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "offseason", "admin", "account"];
 const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
@@ -414,11 +414,13 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = ["players", "changes", "offseason", "admin"].includes(view);   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "offseason", "admin", "account"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
-    byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
+    if (v !== "account") byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
   }
+  byId("account-link").setAttribute("aria-current", view === "account" ? "page" : "false");   // in the header, not a tab
+  if (view === "account") { renderAccount(); return; }
   if (view === "admin") { loadAdmin(); return; }
   if (view === "offseason") { loadOffseason(); return; }
   if (!state.team) return;
@@ -2085,14 +2087,14 @@ function applyRole() {
   byId("players-sub").textContent = me.is_admin
     ? "Click a player to edit his contract. Edits override the salary sheet until you revert them."
     : "Click a player to see his contract. You can edit the players on your own team.";
-  const account = byId("account");
-  account.hidden = !me.auth;   // no logins when running locally without GOOGLE_CLIENT_ID
-  if (me.auth) {
-    account.replaceChildren(
-      h("span", { class: "account-name", title: me.email }, me.name || me.email),
-      h("button", { class: "btn ghost small", type: "button", onclick: signOut }, "Sign out"));
-  }
+  // No logins when running locally without GOOGLE_CLIENT_ID: the page is still there, for the theme.
+  byId("account-link").title = me.auth ? `${me.email}: account, theme and sign out` : "Account and theme";
+  byId("account-link").replaceChildren(h("span", { class: "account-name" }, me.auth ? me.name || me.email : "Account"));
+  if (me.auth) byId("account-link").prepend(avatar(me));
 }
+
+const avatar = (me, cls = "") => h("span", { class: `avatar ${cls}`, "aria-hidden": "true" },
+  (me.name || me.email).trim().charAt(0).toUpperCase());
 
 function showGate(title, text, extra = []) {
   for (const v of VIEWS) byId(`view-${v}`).hidden = true;
@@ -2139,7 +2141,8 @@ async function showSignIn() {
     // and comes back to the page.
     google.accounts.id.initialize({ client_id: cfg.google_client_id, ux_mode: "redirect",
       login_uri: `${window.location.origin}/auth/google` });
-    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const theme = document.documentElement.dataset.theme;
+    const dark = theme ? theme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
     google.accounts.id.renderButton(button, { theme: dark ? "filled_black" : "outline", size: "large", shape: "pill",
       text: "signin_with" });
   } catch (err) {
@@ -2161,6 +2164,35 @@ async function signOut() {
   if (window.google && google.accounts) google.accounts.id.disableAutoSelect();
   window.location.hash = "";
   window.location.reload();
+}
+
+/* ================================================================ account */
+
+// "system" follows the device's light or dark setting; the others override it in this browser.
+// index.html applies the saved choice before the page draws.
+const THEMES = [["system", "Match device"], ["light", "Light"], ["dark", "Dark"]];
+
+function setTheme(theme) {
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  prefs.set("theme", theme);
+  renderAccount();
+}
+
+function renderAccount() {
+  const me = state.me;
+  const row = (label, value) => [h("dt", {}, label), h("dd", {}, value)];
+  byId("account-sub").textContent = me.auth ? "Signed in with Google" : "Logins aren't set up on this computer";
+  byId("account-body").replaceChildren(h("div", {},
+    me.auth ? h("div", { class: "account-who" }, avatar(me, "large"),
+      h("div", {}, h("div", { class: "account-who-name" }, me.name || me.email), me.name ? h("div", { class: "sub" }, me.email) : null)) : null,
+    h("dl", { class: "account-facts" },
+      row("Team", me.team_id ? teamName(me.team_id) : "Not linked yet"),
+      row("Role", me.is_admin ? "Admin" : "GM")),
+    me.auth
+      ? h("button", { class: "btn ghost", type: "button", onclick: signOut }, "Sign out")
+      : h("p", { class: "card-sub" }, "Without GOOGLE_CLIENT_ID, everyone who opens the app is the admin, so there's nothing to sign out of.")));
+  segmented(byId("theme-choice"), THEMES, prefs.get("theme", "system"), setTheme);
 }
 
 /* ================================================================ admin */
