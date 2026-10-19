@@ -132,3 +132,55 @@ Second Week
 - P6: Winner P3 vs. Winner P4
 - P7: Loser P1 vs. Loser P2
 - P8: Loser P3 vs. Loser P4
+
+## Clarifications
+
+These aren't part of the written rules above. They settle how the RFA process and the entry draft
+work, as agreed on October 19, 2026 for running the offseason in the app.
+
+### RFAs
+
+- A GM decides on every one of their RFAs before offer sheets open: qualify him, or let him go to
+  the auction as a UFA.
+- A qualifying offer keeps the old salary, for 1 to 5 years, as the GM chooses. A qualified RFA who
+  gets no successful offer sheet plays on it.
+- An offer sheet names only a salary, which must be more than the qualifying salary. Whichever team
+  ends up with the player picks his years (1–5) afterwards, by a deadline the commissioner sets.
+  If a team misses it, the contract is 1 year.
+- A new offer sheet for the same player must have a higher salary. It replaces the pending one and
+  restarts the owner's clock. Offer sheets can't be withdrawn.
+- The team making an offer needs next season's cap space for the salary and room in its
+  contract-year bank. It must also own the compensation picks.
+- The owning GM has 24 hours to match. If they don't answer, the player goes to the team that made
+  the offer.
+- Compensation comes from the upcoming entry draft, by offer salary:
+
+  | Offer salary | The signing team sends |
+  |---|---|
+  | under $10 | nothing |
+  | $10 | a 4th |
+  | $11–$18 | a 3rd |
+  | $19–$25 | a 2nd |
+  | $26–$33 | a 1st and a 3rd |
+  | $34 and up | a 1st and a 2nd |
+
+- In the offseason, next season's cap counts the same players as during the season. The
+  commissioner can leave out a player who isn't playing in the NHL, for example one who has gone
+  back to Europe or is holding out.
+
+### Entry draft
+
+- Any player who isn't held by a CFL team and has never been signed in the CFL can be drafted.
+- When a pick's 24 hours run out and the GM hasn't sent a list, the pick is the player taken
+  earliest in that year's NHL draft who is still available.
+
+### Prospects
+
+- The 120-game threshold (60 for goalies) doesn't force a decision in the offseason. A GM can
+  leave an eligible prospect unsigned. The protection is the claim rule: once he plays the game
+  that crosses the threshold during the regular season, a rival GM can claim him and sign him to
+  an ELC.
+
+### Ideas, not rules
+
+- An automatic raise for qualified RFAs, based on how they rank.
