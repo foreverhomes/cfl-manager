@@ -108,6 +108,12 @@
         <p class="filters-hint" id="strategy-hint"></p>
       </div>
 
+      <!-- Plain-language definitions; the same text is the hint on each label. Remembers open or closed. -->
+      <details class="card glossary" id="glossary">
+        <summary>What these numbers mean</summary>
+        <div class="glossary-body" id="glossary-body"></div>
+      </details>
+
       <div class="kpis" id="analysis-kpis"></div>
 
       <div class="grid-2">
@@ -143,8 +149,7 @@
         <header class="card-head">
           <div>
             <h2>Player values</h2>
-            <p class="card-sub">Value weighs every category equally; need value, by this team's needs. Trade rank and
-              market: trade value, league-wide.</p>
+            <p class="card-sub">Click a column to sort. Hover over a column name to see what it means.</p>
           </div>
           <div class="segmented" id="analysis-view" role="group" aria-label="Which players to show"></div>
         </header>
