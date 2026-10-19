@@ -452,9 +452,12 @@ async function loadDashboard() {
 
 // `error`: over a league limit (cap, contract-year bank, roster). The sub says by how much, with overBy().
 // `hero`: the one number a row of tiles leads with, twice as wide.
-function tile(label, value, unit, sub, { error = false, hero = false } = {}) {
+// `help`: a GLOSSARY key, shown as a hint on the label.
+function tile(label, value, unit, sub, { error = false, hero = false, help = null } = {}) {
+  const labelEl = h("div", { class: "tile-label" }, label);
+  if (help) withHelp(labelEl, help);
   return h("div", { class: "tile" + (error ? " error" : "") + (hero ? " hero-tile" : "") },
-    h("div", { class: "tile-label" }, label),
+    labelEl,
     h("div", { class: "tile-value" + (hero ? " hero" : "") }, value, unit ? h("small", {}, unit) : null),
     sub ? h("div", { class: "tile-sub" }, sub) : null);
 }
@@ -742,16 +745,77 @@ function renderRoster(ov) {
 /* ================================================================ analysis */
 
 // Projections, need weights and market values: the numbers behind the trade builder.
-const STRATEGY_HINT = {
-  marginal: "Weights categories where several teams are close to you: that's where one more goal or hit flips a weekly matchup.",
-  weakness: "Weights your lowest-ranked categories most.",
-  even: "Every category counts the same.",
+
+// What each number means, in plain words: the glossary at the top of the tab, and the hint on
+// each tile label and column header (hover or focus; marked with a dotted underline).
+const GLOSSARY = {
+  ecw: ["Expected category wins per week", "How many categories the team would win in a typical week, " +
+    "averaged over every opponent, from its projected lineups. Half of them (6 of 12) is an average team."],
+  strength: ["Projected strength", "The team's rank when its projected strength in every category is added up (1 = strongest)."],
+  skater_games: ["Skater games per week", "Skater games the team is projected to fill each week by setting its best " +
+    "available players every day. Bench players count on nights the regulars sit. More games, more counting stats."],
+  goalie_starts: ["Goalie starts per week", "Starts the team's goalies are projected to make each week, from how " +
+    "often each one starts for his NHL team."],
+  sd: ["vs league average", "How far the team's projected weekly total is above (blue) or below (red) the league " +
+    "average, in standard deviations (sd). About 1 sd is a clear strength or weakness; 2 is extreme."],
+  proj: ["Proj / wk", "The team's projected total in the category per week. GAA and SV% are averages."],
+  rank: ["Rank", "Projected rank in the category among all teams (1 = best). In League at a glance, the color " +
+    "shows the same distance from average as the bars."],
+  actual: ["Actual", "The team's real head-to-head record in the category this season: wins, losses and ties, one per matchup."],
+  need: ["Need", "How much one more unit of the category is worth to the team, from the Need weighting setting. " +
+    "1.00 is average; dark pills (1.15 and up) are the categories worth targeting."],
+  games: ["Games / wk", "Games per week the player is projected to spend in the team's lineup, with the best " +
+    "lineup set every day. For goalies, projected starts."],
+  value: ["Value", "The player's projected per-game production in every category, counted equally and compared " +
+    "with the players good enough to start in this league. 0 is an average starter; higher is better."],
+  need_value: ["Need value", "Value with each category weighted by the team's Need. Higher than Value means the " +
+    "player is strong where the team needs help."],
+  trade_rank: ["Trade rank", "The player's rank league-wide by Value (#1 = most valuable). Fewer goalies start, so " +
+    "goalies are spaced out on the same scale: the best goalie ranks about #9."],
+  market: ["Market", "Trade value: how far the player is above the last starter in the league. Bench-level " +
+    "players are worth about 0, so a package's values add up without two depth players matching a star."],
+  gp: ["GP (this/last)", "NHL games played this season and last. With few games, the projection leans on last " +
+    "season and the league average."],
+  best: ["Best categories", "The player's three strongest categories, in standard deviations above an average starter."],
+  marginal: ["Swing categories", "Weighs the categories where several teams are close to this one: one more goal " +
+    "or hit there flips a weekly matchup. Categories it dominates, or trails badly in, count less."],
+  weakness: ["Weakest categories", "Weighs the team's lowest-ranked categories most."],
+  even: ["Even", "Every category counts the same."],
 };
+const GLOSSARY_GROUPS = [
+  ["Team projections", ["ecw", "strength", "skater_games", "goalie_starts", "sd", "proj", "rank", "actual", "need"]],
+  ["Player values", ["games", "value", "need_value", "trade_rank", "market", "gp", "best"]],
+  ["Need weighting", ["marginal", "weakness", "even"]],
+];
+
+function withHelp(el, key) {
+  const [term, text] = GLOSSARY[key];
+  el.classList.add("has-help");
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "0");
+  bindTip(el, () => tipContent(term, text));
+  return el;
+}
+
+function renderGlossary() {
+  const box = byId("glossary");
+  if (box.dataset.ready) return;
+  box.dataset.ready = "1";
+  box.open = prefs.get("glossary", "") === "open";
+  box.addEventListener("toggle", () => prefs.set("glossary", box.open ? "open" : "closed"));
+  byId("glossary-body").replaceChildren(
+    h("p", { class: "glossary-intro" }, "Projections blend each player's per-game stats from this season and last " +
+      "(this season counts for more as games pile up), then set the team's best lineup every day for the rest of " +
+      "the NHL schedule. Hover over any label with a dotted underline to see its meaning there."),
+    h("div", { class: "glossary-groups" }, GLOSSARY_GROUPS.map(([title, keys]) => h("section", {},
+      h("h3", {}, title),
+      h("dl", {}, keys.map((k) => [h("dt", {}, GLOSSARY[k][0]), h("dd", {}, GLOSSARY[k][1])]))))));
+}
 
 async function loadAnalysis() {
   const view = byId("view-analysis");
   const token = ++seqs.analysis;
-  byId("strategy-hint").textContent = STRATEGY_HINT[state.strategy];
+  renderGlossary();
+  byId("strategy-hint").textContent = GLOSSARY[state.strategy][1];
   view.classList.add("is-loading");
   try {
     const [profile, league] = await Promise.all([getProfile(state.team), getLeagueAnalysis()]);
@@ -774,11 +838,13 @@ function renderAnalysisKpis(profile) {
   const goalieStarts = profile.roster.reduce((s, p) => s + (p.expected_starts_per_week || 0), 0);
   byId("analysis-kpis").replaceChildren(
     tile("Expected category wins per week", fmtNum(profile.expected_category_wins, 2), `of ${profile.categories.length}`,
-      "Against an average opponent, from projected rest-of-season lineups", { hero: true }),
+      "Against an average opponent, from projected rest-of-season lineups", { hero: true, help: "ecw" }),
     tile("Projected strength", ordinal(profile.projected_overall_rank), `of ${state.teams.length}`,
-      "Total category strength across the league"),
-    tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins"),
-    tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all the team's goalies"));
+      "Total category strength across the league", { help: "strength" }),
+    tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins",
+      { help: "skater_games" }),
+    tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all the team's goalies",
+      { help: "goalie_starts" }));
 }
 
 function renderCategoryProfile(profile) {
@@ -813,8 +879,9 @@ function renderCategoryProfile(profile) {
       `Strongest: ${profile.strengths.join(", ")} · Weakest: ${profile.weaknesses.join(", ")}`),
     h("div", { class: "scroll-x" }, h("table", { class: "cat-table" },
       h("thead", {}, h("tr", {},
-        h("th", {}, "Category"), h("th", { style: { textAlign: "center" } }, "vs league average"),
-        h("th", {}, "Proj / wk"), h("th", {}, "Rank"), h("th", {}, "Actual"), h("th", { title: "Need weight" }, "Need"))),
+        h("th", {}, "Category"), withHelp(h("th", { style: { textAlign: "center" } }, "vs league average"), "sd"),
+        withHelp(h("th", {}, "Proj / wk"), "proj"), withHelp(h("th", {}, "Rank"), "rank"),
+        withHelp(h("th", {}, "Actual"), "actual"), withHelp(h("th", {}, "Need"), "need"))),
       h("tbody", {}, body))),
   );
 }
@@ -831,7 +898,7 @@ function renderHeatmap(overview) {
   const cats = (state.league && state.league.categories || []).map((c) => c.short_name);
   const names = Object.fromEntries((state.league && state.league.categories || []).map((c) => [c.short_name, c.name]));
   const head = h("tr", {}, h("th", { class: "team" }, "Team"),
-    cats.map((c) => h("th", { title: names[c] || c }, c)), h("th", { title: "Expected category wins per week" }, "Exp. W"));
+    cats.map((c) => h("th", { title: names[c] || c }, c)), withHelp(h("th", {}, "Exp. W"), "ecw"));
   const rows = overview.teams.map((t) => h("tr", { class: t.team_id === state.team ? "me" : "" },
     h("td", { class: "team", title: t.team_name }, t.team_name),
     cats.map((c) => {
@@ -852,18 +919,21 @@ function renderHeatmap(overview) {
 
 const VALUE_COLUMNS = [
   { key: "name", label: "Player", left: true, value: (p) => p.name },
-  { key: "lineup_games_per_week", label: "Games / wk", value: (p) => p.lineup_games_per_week,
+  { key: "lineup_games_per_week", label: "Games / wk", help: "games", value: (p) => p.lineup_games_per_week,
     render: (p) => p.expected_starts_per_week != null
       ? `${fmtNum(p.expected_starts_per_week, 2)} starts` : fmtNum(p.lineup_games_per_week, 1) },
-  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
-  { key: "need_value", label: "Need value", value: (p) => p.need_value, render: (p) => fmtNum(p.need_value, 2) },
-  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
+  { key: "value", label: "Value", help: "value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
+  { key: "need_value", label: "Need value", help: "need_value", value: (p) => p.need_value,
+    render: (p) => fmtNum(p.need_value, 2) },
+  { key: "trade_rank", label: "Trade rank", help: "trade_rank", asc: true, value: (p) => p.trade_rank,
     render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
-  { key: "market_value", label: "Market", value: (p) => p.market_value, render: (p) => fmtNum(p.market_value, 1) },
+  { key: "market_value", label: "Market", help: "market", value: (p) => p.market_value,
+    render: (p) => fmtNum(p.market_value, 1) },
   { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
-  { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
+  { key: "gp_this_season", label: "GP (this/last)", help: "gp", value: (p) => p.gp_this_season,
     render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
-  { key: "best", label: "Best categories", left: true, cls: "cats-inline", sortable: false, render: (p) => bestCats(p.z) },
+  { key: "best", label: "Best categories", help: "best", left: true, cls: "cats-inline", sortable: false,
+    render: (p) => bestCats(p.z) },
 ];
 
 function renderPlayerValues(profile) {
@@ -946,6 +1016,7 @@ function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam =
       "aria-sort": c.key === sort.key ? (sort.dir === 1 ? "ascending" : "descending") : null,
       tabindex: sortable ? "0" : null, title: c.title,
     }, c.label);
+    if (c.help) withHelp(th, c.help);
     if (sortable) {
       const go = () => onSort(c.key === sort.key ? { key: sort.key, dir: -sort.dir }
         : { key: c.key, dir: c.asc || c.key === "name" ? 1 : -1 });
@@ -1934,10 +2005,10 @@ const offseasonColumns = (res, team) => [
   { key: "final_salary", label: `${res.after_season} salary`, value: (p) => p.final_salary, render: (p) => fmtMoney(p.final_salary) },
   // Every contract ending in the next offseason has one season left, so the column only helps later ones.
   res.year !== res.offseasons[0].year ? { key: "contract_years", label: "Yrs left", value: (p) => p.contract_years } : null,
-  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
-  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
+  { key: "value", label: "Value", help: "value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
+  { key: "trade_rank", label: "Trade rank", help: "trade_rank", asc: true, value: (p) => p.trade_rank,
     render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
-  { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
+  { key: "gp_this_season", label: "GP (this/last)", help: "gp", value: (p) => p.gp_this_season,
     render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
 ].filter(Boolean);
 
