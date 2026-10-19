@@ -208,10 +208,11 @@ CREATE INDEX IF NOT EXISTS idx_contracts_player ON contracts(player_id);
 CREATE TABLE IF NOT EXISTS contract_overrides (
     league_id       TEXT NOT NULL,
     player_id       TEXT NOT NULL,
-    salaries        TEXT NOT NULL,      -- JSON list, current season first
+    salaries        TEXT NOT NULL,      -- JSON list, from season_year on
     contract_type   TEXT NOT NULL DEFAULT 'STANDARD',   -- STANDARD / ELC / IN_SEASON_UFA
     note            TEXT,
     updated_at      TEXT NOT NULL,
+    season_year     INTEGER,            -- the league season it was saved in (salaries[0]); see current_salaries
     PRIMARY KEY (league_id, player_id)
 );
 
@@ -288,6 +289,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
 ADDED_COLUMNS = {
     "teams": {"salary_cap": "REAL"},
     "players": {"birth_date": "TEXT", "birth_date_source": "TEXT"},
+    "contract_overrides": {"season_year": "INTEGER"},
 }
 
 TABLES = re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", SCHEMA)
@@ -394,6 +396,10 @@ def _add_missing_columns(conn: Connection) -> None:
                 if isinstance(conn, PostgresConnection):
                     sql_type = _postgres_ddl(sql_type)
                 conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, sql_type))
+                if (table, column) == ("contract_overrides", "season_year"):
+                    # Every record saved before the column existed was saved in the league's current season.
+                    conn.execute("UPDATE contract_overrides SET season_year = (SELECT league.season_year FROM league "
+                                 "WHERE league.id = contract_overrides.league_id)")
 
 
 def connect(target: Union[Path, str]) -> Connection:
@@ -416,8 +422,11 @@ def connect(target: Union[Path, str]) -> Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
-    _add_missing_columns(conn)
-    conn.commit()
+    # sqlite3 starts no transaction for ALTER TABLE: begin one, so an added column and its backfill
+    # are saved together or not at all (and the next connect tries again).
+    conn.execute("BEGIN")
+    with transaction(conn):
+        _add_missing_columns(conn)
     return conn
 
 

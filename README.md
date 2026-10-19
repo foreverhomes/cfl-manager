@@ -57,7 +57,9 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   seasons, type), and draft picks changing hands. Filter by team or kind. The **By** column says where each came from:
   `Sync`, `Contracts sheet`, or the name of the person who edited the contract. History
   starts with the first sync or edit after this view shipped. Lineup status moves (bench,
-  IR, minors) and contract notes aren't logged.
+  IR, minors) and contract notes aren't logged. Neither is the first sync of a new season, since
+  every contract is a season shorter by then. That sync only saves a new starting point, so a
+  roster move it picks up isn't logged either.
 - **Trade builder** (admin only). Select any of your players. Optionally pick a trade partner and
   their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in
@@ -162,8 +164,12 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
 - **Editing contracts:** the **Players & cap** tab (or a click on any name in the roster table) opens a
   contract editor. It sets the years left on a contract, plus its type and a note; the salary stays
   as the sheet has it. A player on no sheet also needs a salary. Edits are stored locally as
-  overrides. They win over the sheets, survive syncs, and can be reverted to the sheet. Contract
-  types follow the rules: **ELC** is $3 for at most 3 years, and an **in-season UFA** gets 1 year
+  overrides. They win over the sheets, survive syncs, and can be reverted to the sheet. Each edit is
+  tied to the season it was saved in: when Fantrax moves the league to a new season, the seasons
+  that have passed drop off, so a 2-year deal saved in 2026-27 has 1 year left in 2027-28. Once
+  every season has passed the edit has run out, and the sheet's contract (if any) applies again.
+  The same goes for imports from the Contracts sheet and for the contracts of an app-owned team.
+  Contract types follow the rules: **ELC** is $3 for at most 3 years, and an **in-season UFA** gets 1 year
   and doesn't use contract-bank years.
   API: `GET/DELETE /players/{id}/contract`, and `PUT` with
   `{"years": 2, "contract_type": "ELC", "note": "..."}` (optional `salary`).

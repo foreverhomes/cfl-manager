@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from . import analysis as A
 from .db import Connection, row, rows, transaction, upsert
-from .sync import MAX_CONTRACT_YEARS, now_iso
+from .sync import MAX_CONTRACT_YEARS, current_salaries, league_season, now_iso
 
 CONTRACT_TYPES = {
     "STANDARD": "Standard",
@@ -34,11 +34,13 @@ def validate(salaries: Sequence[Optional[float]], contract_type: str) -> List[fl
 
 def save_override(conn: Connection, league_id: str, player_id: str, salaries: Sequence[Optional[float]],
                   contract_type: str = "STANDARD", note: Optional[str] = None) -> None:
+    """Save an app contract record. Its salaries start this season (the league's current one)."""
     clean = validate(salaries, contract_type)
     with transaction(conn):
         upsert(conn, "contract_overrides", [{
             "league_id": league_id, "player_id": player_id, "salaries": json.dumps(clean),
             "contract_type": contract_type, "note": (note or "").strip() or None, "updated_at": now_iso(),
+            "season_year": league_season(conn, league_id),
         }], ["league_id", "player_id"])
 
 
@@ -57,6 +59,7 @@ def contract_detail(conn: Connection, ctx: A.Context, player_id: str) -> Dict[st
     sheet = sheet_rows[0] if sheet_rows else None
     override = row(conn, "SELECT * FROM contract_overrides WHERE league_id=? AND player_id=?",
                    (ctx.league_id, player_id))
+    override_salaries = current_salaries(override, ctx.league.get("season_year")) if override else []
     return {
         "player": A.player_summary(p, ctx),
         "effective": None if p.salary is None else {
@@ -68,8 +71,8 @@ def contract_detail(conn: Connection, ctx: A.Context, player_id: str) -> Dict[st
             "sheet_name": sheet["sheet_name"], "team_id": sheet["team_id"], "team_name": sheet["team_name"],
             "match_method": sheet["match_method"],
         },
-        "override": None if override is None else {
-            "salaries": json.loads(override["salaries"]), "contract_type": override["contract_type"],
+        "override": None if not override_salaries else {   # none, or one that has run out
+            "salaries": override_salaries, "contract_type": override["contract_type"],
             "note": override["note"], "updated_at": override["updated_at"],
         },
         "app_owned": p.team_id in ctx.app_owned,
