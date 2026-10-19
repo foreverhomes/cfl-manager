@@ -164,10 +164,14 @@ const state = {
   league: null,
   teams: [],
   team: null,
+  strategy: prefs.get("strategy", "marginal"),   // the Analysis tab's need weighting
   overviews: new Map(),   // the Dashboard's /teams/{id}/overview, by team
-  profiles: new Map(),    // the Trade builder's /analysis/teams/{id}/profile, by team
+  profiles: new Map(),    // /analysis/teams/{id}/profile (Analysis tab, Trade builder), by team and weighting
+  leagueAnalysis: new Map(),   // /analysis/overview, the Analysis tab's heatmap
   rosterSort: { key: "salary", dir: -1 },
   rosterView: "roster",
+  analysisSort: { key: "need_value", dir: -1 },
+  analysisView: "roster",
   playersSort: { key: "season0", dir: -1 },
   playersView: "all",
   changesTeam: "",
@@ -187,7 +191,7 @@ const state = {
 const WAIVERS = "__waivers__";
 const onWaivers = () => state.trade.partner === WAIVERS;
 // Latest-request counters: a slower, older response never overwrites a newer one.
-const seqs = { dashboard: 0, tradeLoad: 0, suggest: 0, evaluate: 0, pool: 0 };
+const seqs = { dashboard: 0, analysis: 0, tradeLoad: 0, suggest: 0, evaluate: 0, pool: 0 };
 
 function showError(err) {
   const box = byId("error");
@@ -196,22 +200,25 @@ function showError(err) {
 }
 function clearError() { byId("error").hidden = true; }
 
-// One request per team until something changes (a sync or an edit clears them).
-function cached(map, teamId, path) {
-  if (!map.has(teamId)) {
+// One request per key until something changes (a sync or an edit clears them).
+function cached(map, key, path) {
+  if (!map.has(key)) {
     const p = api.get(path);
-    p.catch(() => map.delete(teamId));
-    map.set(teamId, p);
+    p.catch(() => map.delete(key));
+    map.set(key, p);
   }
-  return map.get(teamId);
+  return map.get(key);
 }
 const getOverview = (id) => cached(state.overviews, id, `/teams/${encodeURIComponent(id)}/overview`);
-const getProfile = (id) => cached(state.profiles, id, `/analysis/teams/${encodeURIComponent(id)}/profile`);
-function resetCaches() { state.profiles.clear(); state.overviews.clear(); }
+const getProfile = (id) => cached(state.profiles, `${id}|${state.strategy}`,
+  `/analysis/teams/${encodeURIComponent(id)}/profile?strategy=${state.strategy}`);
+const getLeagueAnalysis = () => cached(state.leagueAnalysis, "league", "/analysis/overview");
+function resetCaches() { state.profiles.clear(); state.overviews.clear(); state.leagueAnalysis.clear(); }
 
 /* ================================================================ header / boot */
 
 async function boot() {
+  byId("strategy-select").value = state.strategy;
   byId("tolerance-select").value = state.trade.tolerance;
   wireControls();
   try {
@@ -285,6 +292,11 @@ function wireControls() {
     state.trade.pickups.clear();
     if (state.trade.partner === state.team) state.trade.partner = "";
     route();
+  });
+  byId("strategy-select").addEventListener("change", (e) => {
+    state.strategy = e.target.value;
+    prefs.set("strategy", state.strategy);
+    loadAnalysis();
   });
   byId("refresh-btn").addEventListener("click", () => runSync("quick"));
   byId("sync-btn").addEventListener("click", confirmFullSync);
@@ -389,7 +401,7 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "trade", "players", "changes", "offseason", "admin"];
+const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "offseason", "admin"];
 const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
@@ -411,6 +423,7 @@ function route() {
   if (view === "offseason") { loadOffseason(); return; }
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
+  else if (view === "analysis") loadAnalysis();
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
   else loadPlayers();
@@ -438,10 +451,11 @@ async function loadDashboard() {
 }
 
 // `error`: over a league limit (cap, contract-year bank, roster). The sub says by how much, with overBy().
-function tile(label, value, unit, sub, { error = false } = {}) {
-  return h("div", { class: "tile" + (error ? " error" : "") },
+// `hero`: the one number a row of tiles leads with, twice as wide.
+function tile(label, value, unit, sub, { error = false, hero = false } = {}) {
+  return h("div", { class: "tile" + (error ? " error" : "") + (hero ? " hero-tile" : "") },
     h("div", { class: "tile-label" }, label),
-    h("div", { class: "tile-value" }, value, unit ? h("small", {}, unit) : null),
+    h("div", { class: "tile-value" + (hero ? " hero" : "") }, value, unit ? h("small", {}, unit) : null),
     sub ? h("div", { class: "tile-sub" }, sub) : null);
 }
 const overBy = (text) => [h("span", { class: "down", "aria-hidden": "true" }, "▲ "), text];
@@ -722,6 +736,143 @@ function renderRoster(ov) {
     players: ov.roster, groupColumns: (key) => rosterColumns(ov, key), view: state.rosterView,
     sort: state.rosterSort, onSort: (next) => { state.rosterSort = next; renderRoster(ov); },
     empty: state.rosterView === "prospects" ? "No prospects in the minors." : "No players.",
+  }));
+}
+
+/* ================================================================ analysis */
+
+// Projections, need weights and market values: the numbers behind the trade builder.
+const STRATEGY_HINT = {
+  marginal: "Weights categories where several teams are close to you: that's where one more goal or hit flips a weekly matchup.",
+  weakness: "Weights your lowest-ranked categories most.",
+  even: "Every category counts the same.",
+};
+
+async function loadAnalysis() {
+  const view = byId("view-analysis");
+  const token = ++seqs.analysis;
+  byId("strategy-hint").textContent = STRATEGY_HINT[state.strategy];
+  view.classList.add("is-loading");
+  try {
+    const [profile, league] = await Promise.all([getProfile(state.team), getLeagueAnalysis()]);
+    if (token !== seqs.analysis) return;
+    renderAnalysisKpis(profile);
+    renderCategoryProfile(profile);
+    renderHeatmap(league);
+    renderPlayerValues(profile);
+    clearError();
+  } catch (err) {
+    if (token === seqs.analysis) showError(err);
+  } finally {
+    if (token === seqs.analysis) view.classList.remove("is-loading");
+  }
+}
+
+function renderAnalysisKpis(profile) {
+  const skaterGames = profile.roster.filter((p) => p.position !== "G")
+    .reduce((s, p) => s + (p.lineup_games_per_week || 0), 0);
+  const goalieStarts = profile.roster.reduce((s, p) => s + (p.expected_starts_per_week || 0), 0);
+  byId("analysis-kpis").replaceChildren(
+    tile("Expected category wins per week", fmtNum(profile.expected_category_wins, 2), `of ${profile.categories.length}`,
+      "Against an average opponent, from projected rest-of-season lineups", { hero: true }),
+    tile("Projected strength", ordinal(profile.projected_overall_rank), `of ${state.teams.length}`,
+      "Total category strength across the league"),
+    tile("Skater games per week", fmtNum(skaterGames, 1), null, "Lineup games, including bench fill-ins"),
+    tile("Goalie starts per week", fmtNum(goalieStarts, 2), null, "Expected starts across all the team's goalies"));
+}
+
+function renderCategoryProfile(profile) {
+  const cats = profile.categories;
+  const maxAbs = Math.max(1, ...cats.map((c) => Math.abs(c.projected_z || 0)));
+  const n = state.teams.length;
+  const body = [];
+  for (const [group, label] of [["SKATER", "Skaters"], ["GOALIE", "Goalies"]]) {
+    body.push(h("tr", { class: "group-row" }, h("td", { colspan: "6" }, label)));
+    for (const c of cats.filter((x) => x.group === group)) {
+      const bar = divBar(c.projected_z, maxAbs, {
+        label: `${c.name}: ${fmtSigned(c.projected_z)} standard deviations vs league average, ${ordinal(c.projected_rank)} of ${n}`,
+      });
+      bindTip(bar, () => tipContent(`${ordinal(c.projected_rank)} of ${n}`, c.name, [
+        ["Projected / week", fmtCat(c.category, c.projected_per_week)],
+        ["vs league avg", `${fmtSigned(c.projected_z)} sd`],
+        ["Beats", `${Math.round((c.projected_beats_pct || 0) * 100)}% of teams`],
+        ["Actual W-L-T", c.actual_record],
+      ]));
+      body.push(h("tr", {},
+        h("td", {}, h("span", { class: "cat-name" }, c.category), h("span", { class: "cat-full" }, c.name)),
+        h("td", { class: "bar-cell" }, bar),
+        h("td", { class: "num" }, fmtCat(c.category, c.projected_per_week)),
+        h("td", { class: "num" }, ordinal(c.projected_rank)),
+        h("td", { class: "num" }, c.actual_record),
+        h("td", {}, h("span", { class: "need-pill num" + (c.need_weight >= 1.15 ? " high" : "") }, fmtNum(c.need_weight, 2))),
+      ));
+    }
+  }
+  byId("category-profile").replaceChildren(
+    h("p", { class: "card-sub", style: { marginBottom: "8px" } },
+      `Strongest: ${profile.strengths.join(", ")} · Weakest: ${profile.weaknesses.join(", ")}`),
+    h("div", { class: "scroll-x" }, h("table", { class: "cat-table" },
+      h("thead", {}, h("tr", {},
+        h("th", {}, "Category"), h("th", { style: { textAlign: "center" } }, "vs league average"),
+        h("th", {}, "Proj / wk"), h("th", {}, "Rank"), h("th", {}, "Actual"), h("th", { title: "Need weight" }, "Need"))),
+      h("tbody", {}, body))),
+  );
+}
+
+function heatStyle(z) {
+  if (z == null) return { background: "var(--wash)" };
+  const t = Math.max(-1, Math.min(1, z / 2));
+  const pct = Math.round(Math.abs(t) * 100);
+  const pole = t >= 0 ? "var(--div-pos)" : "var(--div-neg)";
+  return { background: `color-mix(in oklab, ${pole} ${pct}%, var(--div-mid))`, color: pct > 55 ? "#ffffff" : "var(--ink)" };
+}
+
+function renderHeatmap(overview) {
+  const cats = (state.league && state.league.categories || []).map((c) => c.short_name);
+  const names = Object.fromEntries((state.league && state.league.categories || []).map((c) => [c.short_name, c.name]));
+  const head = h("tr", {}, h("th", { class: "team" }, "Team"),
+    cats.map((c) => h("th", { title: names[c] || c }, c)), h("th", { title: "Expected category wins per week" }, "Exp. W"));
+  const rows = overview.teams.map((t) => h("tr", { class: t.team_id === state.team ? "me" : "" },
+    h("td", { class: "team", title: t.team_name }, t.team_name),
+    cats.map((c) => {
+      const cell = t.projected[c] || {};
+      const td = h("td", { class: "cell num", tabindex: "0", style: heatStyle(cell.z),
+        "aria-label": `${t.team_name}, ${names[c] || c}: ${ordinal(cell.rank)}` }, cell.rank != null ? cell.rank : "–");
+      bindTip(td, () => tipContent(`${ordinal(cell.rank)} in ${names[c] || c}`, t.team_name, [
+        ["Projected / week", fmtCat(c, cell.value)],
+        ["vs league avg", `${fmtSigned(cell.z)} sd`],
+        ["Actual W-L-T", (t.actual_records || {})[c] || "–"],
+      ]));
+      return td;
+    }),
+    h("td", { class: "ecw num" }, fmtNum(t.expected_category_wins, 2)),
+  ));
+  byId("league-heatmap").replaceChildren(h("table", { class: "heatmap" }, h("thead", {}, head), h("tbody", {}, rows)));
+}
+
+const VALUE_COLUMNS = [
+  { key: "name", label: "Player", left: true, value: (p) => p.name },
+  { key: "lineup_games_per_week", label: "Games / wk", value: (p) => p.lineup_games_per_week,
+    render: (p) => p.expected_starts_per_week != null
+      ? `${fmtNum(p.expected_starts_per_week, 2)} starts` : fmtNum(p.lineup_games_per_week, 1) },
+  { key: "value", label: "Value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
+  { key: "need_value", label: "Need value", value: (p) => p.need_value, render: (p) => fmtNum(p.need_value, 2) },
+  { key: "trade_rank", label: "Trade rank", asc: true, value: (p) => p.trade_rank,
+    render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
+  { key: "market_value", label: "Market", value: (p) => p.market_value, render: (p) => fmtNum(p.market_value, 1) },
+  { key: "salary", label: "Salary", value: (p) => p.salary, render: (p) => fmtMoney(p.salary) },
+  { key: "gp_this_season", label: "GP (this/last)", value: (p) => p.gp_this_season,
+    render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
+  { key: "best", label: "Best categories", left: true, cls: "cats-inline", sortable: false, render: (p) => bestCats(p.z) },
+];
+
+function renderPlayerValues(profile) {
+  segmented(byId("analysis-view"), [["roster", "Roster"], ["prospects", "Prospects"], ["all", "All"]],
+    state.analysisView, (v) => { state.analysisView = v; renderPlayerValues(profile); });
+  byId("analysis-table").replaceChildren(sectionedTable({
+    players: profile.roster, columns: VALUE_COLUMNS, view: state.analysisView,
+    sort: state.analysisSort, onSort: (next) => { state.analysisSort = next; renderPlayerValues(profile); },
+    empty: state.analysisView === "prospects" ? "No prospects in the minors." : "No players.",
   }));
 }
 
@@ -1495,6 +1646,7 @@ function afterContractChange(message) {
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
   else if (view === "offseason") loadOffseason();   // a birth date or contract length can move a player
+  else if (view === "analysis") loadAnalysis();
   else loadDashboard();
 }
 

@@ -281,8 +281,7 @@ def league(conn: Connection = Depends(get_conn)):
         raise A.NotSynced("League not synced yet: POST /sync")
     for k in ("roster_info", "playoffs", "draft_settings"):
         lg[k] = json.loads(lg[k]) if lg[k] else None
-    lg["categories"] = rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better "
-                                  "FROM scoring_categories WHERE league_id=? ORDER BY sort_order", (s.league_id,))
+    lg["categories"] = categories(conn)
     lg["current_scoring_period"] = current_period(conn, s.league_id, "scoring")
     lg["current_roster_period"] = current_period(conn, s.league_id, "roster")
     lg["scoring_periods"] = rows(conn, "SELECT number, start_date, end_date FROM periods "
@@ -292,8 +291,9 @@ def league(conn: Connection = Depends(get_conn)):
 
 @data.get("/categories")
 def categories(conn: Connection = Depends(get_conn)):
-    return rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better FROM scoring_categories "
-                      "WHERE league_id=? ORDER BY sort_order", (get_settings().league_id,))
+    return sorted(rows(conn, "SELECT short_name, name, code, grp, weight, lower_is_better FROM scoring_categories "
+                             "WHERE league_id=?", (get_settings().league_id,)),
+                  key=lambda c: A.stat_line_key(c["short_name"], c["grp"]))
 
 
 @data.get("/teams")

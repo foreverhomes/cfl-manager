@@ -33,9 +33,15 @@ SKATER_COLUMNS = sorted(set(SKATER_STATS.values()))
 GOALIE_COUNTING = {"W": "wins", "SHO": "shutouts", "L": "losses", "GA": "goals_against", "SV": "saves"}
 GOALIE_RATIOS = {"GAA", "SV%"}
 GOALIE_COLUMNS = ["wins", "losses", "shutouts", "goals_against", "saves", "shots_against", "toi_seconds"]
-# Categories in the order a stat line reads (NHL.com's), for the dashboard.
+# Fantrax lists categories in no particular order; every view shows them the way a stat line
+# reads (NHL.com's), skaters first.
 STAT_LINE_ORDER = ("G", "A", "Pt", "+/-", "PPG", "PPP", "SHP", "GWG", "SOG", "Hit", "Blk", "PIM",
                    "W", "L", "GA", "GAA", "SV", "SV%", "SHO")
+
+
+def stat_line_key(short_name: str, grp: str) -> Tuple[bool, int]:
+    order = STAT_LINE_ORDER.index(short_name) if short_name in STAT_LINE_ORDER else len(STAT_LINE_ORDER)
+    return grp != "SKATER", order
 
 PRIOR_SEASON_GAMES = 82
 GAMES_PER_WEEK = 3.5          # fallback when no NHL schedule is synced
@@ -344,9 +350,9 @@ def load_context(conn: Connection, settings: Settings) -> Context:
     league = row(conn, "SELECT * FROM league WHERE id=?", (league_id,))
     if not league:
         raise NotSynced("League {} not synced yet: run `python -m cfl sync`".format(league_id))
-    categories = [Category(r["short_name"], r["name"], r["grp"], r["weight"], bool(r["lower_is_better"]))
-                  for r in rows(conn, "SELECT * FROM scoring_categories WHERE league_id=? ORDER BY sort_order",
-                                (league_id,))]
+    categories = sorted((Category(r["short_name"], r["name"], r["grp"], r["weight"], bool(r["lower_is_better"]))
+                         for r in rows(conn, "SELECT * FROM scoring_categories WHERE league_id=? ORDER BY sort_order",
+                                       (league_id,))), key=lambda c: stat_line_key(c.short_name, c.grp))
     unsupported = [c.short_name for c in categories
                    if not (c.short_name in SKATER_STATS if c.grp == "SKATER"
                            else c.short_name in GOALIE_COUNTING or c.short_name in GOALIE_RATIOS)]
@@ -873,16 +879,13 @@ def team_overview(conn: Connection, ctx: Context, team_id: str) -> Dict:
     actual = actual_profiles(conn, ctx)[team_id]["categories"]
     players = sorted(ctx.roster(team_id), key=lambda p: (p.group, -(p.salary or 0), p.name))
     stats = season_stats(conn, ctx, players)
-    # Fantrax lists categories in no particular order; show them the way a stat line reads.
-    cats = sorted(ctx.cats("SKATER") + ctx.cats("GOALIE"), key=lambda c: (
-        c.grp != "SKATER", STAT_LINE_ORDER.index(c.short_name) if c.short_name in STAT_LINE_ORDER else len(STAT_LINE_ORDER)))
     return {
         "team_id": team_id, "team_name": ctx.teams[team_id], "roster_period": ctx.roster_period,
         "week": week_matchups(conn, ctx, team_id),
         "categories": [{"category": c.short_name, "name": c.name, "group": c.grp,
                         "lower_is_better": c.lower_is_better,
                         "record": actual[c.short_name]["record"], "rank": actual[c.short_name]["rank"]}
-                       for c in cats],
+                       for c in ctx.cats("SKATER") + ctx.cats("GOALIE")],
         "roster": [dict(player_summary(p, ctx), season=stats.get(p.fantrax_id)) for p in players],
         "roster_spots": {"used": capped_count(ctx, team_id), "limit": ctx.roster_cap},
     }

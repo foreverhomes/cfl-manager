@@ -33,8 +33,19 @@ There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
   - **Roster** by position: age, this NHL season's games and totals in each league category,
     salary, years left, and RFA or UFA at expiry. Click a column to sort.
 
-  The team picker in the header lets you view any team. Projections and market values are in the
-  trade builder.
+  The team picker in the header lets you view any team. Projections and market values are on the
+  Analysis tab.
+- **Analysis.** The projections behind the trade builder, for the team in the header's picker:
+  - **Tiles:** expected category wins per week against an average opponent, projected strength
+    across the league, and skater games and goalie starts per week from projected daily lineups.
+  - **Category profile:** projected strength in each category against the league average, with
+    projected per-week totals, rank, actual W-L-T and need weight.
+  - **League at a glance:** a heatmap of every team's projected rank in every category.
+  - **Player values:** each player's value, need value, trade rank and market value, games per week
+    and best categories.
+
+  **Need weighting** sets how the team's needs are weighed for the need weights and need values (see
+  [How the analysis works](#how-the-analysis-works)).
 - **Players & cap.** Search the league or browse a team, filter to players missing a salary, and edit
   any player's contract. A GM can edit only their own team's players (see [Logins](#logins)).
   Each contract shows its salary for every season it runs, then RFA or UFA in the season after it ends.
@@ -288,7 +299,7 @@ run for 5 minutes (a full sync takes about 10 seconds). Neon's free plan sleeps 
 
 GMs sign in with Google. Anyone can ask to join; you approve them and link their team.
 
-- **Who sees what.** A GM sees every team's dashboard and players, and edits contracts and birth
+- **Who sees what.** A GM sees every team's dashboard, analysis and players, and edits contracts and birth
   dates for players on their own team. They can run **Refresh rosters & stats**. Admins also get
   full syncs, sheet publishing, the trade builder, the **Offseason** list and the **Admin** tab. The API enforces all of
   this, not just the page.
