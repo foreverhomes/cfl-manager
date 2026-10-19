@@ -987,11 +987,20 @@ def _two_teams(conn):
     conn.commit()
 
 
+def _google_post(client, credential, csrf="csrf-1", **kwargs):
+    """What Google's sign-in page sends back: a form post whose g_csrf_token matches the cookie."""
+    return client.post("/auth/google", data={"credential": credential, "g_csrf_token": csrf},
+                       follow_redirects=False, **kwargs)
+
+
 def _signed_in(credential):
+    """A client signed in as credential@example.com, and its /auth/me."""
     from fastapi.testclient import TestClient
     from cfl.api import app
     client = TestClient(app)
-    return client, client.post("/auth/google", json={"credential": credential})
+    client.cookies.set("g_csrf_token", "csrf-1")
+    _google_post(client, credential)
+    return client, client.get("/auth/me")
 
 
 def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_their_own(conn, tmp_path, monkeypatch):
@@ -1105,6 +1114,21 @@ def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(c
     _two_teams(conn)
     _, res = _signed_in("forged")
     assert res.status_code == 401
+    google = TestClient(app)
+    google.cookies.set("g_csrf_token", "csrf-1")
+    res = _google_post(google, "forged")
+    assert (res.status_code, res.headers["location"]) == (303, "/?signin=failed")
+    res = _google_post(google, "gm")
+    assert (res.status_code, res.headers["location"]) == (303, "/") and auth.COOKIE in res.cookies
+
+    # A form forged elsewhere has neither the matching cookie nor Google's Origin.
+    forger = TestClient(app)
+    for csrf, headers in (("csrf-1", {}), ("csrf-1", {"Origin": "https://evil.example"}), ("", {"Origin": "null"})):
+        assert _google_post(forger, "boss", csrf, headers=headers).headers["location"] == "/?signin=failed"
+    assert forger.get("/auth/me").status_code == 401
+    res = _google_post(forger, "boss", "", headers={"Origin": "https://accounts.google.com"})   # cookie held back
+    assert res.headers["location"] == "/" and forger.get("/auth/me").json()["email"] == "boss@example.com"
+
     stranger = TestClient(app)
     for cookie in ("not-a-session", auth.make_session("boss@example.com", "someone-elses-secret")):
         stranger.cookies.set(auth.COOKIE, cookie)
@@ -1113,7 +1137,6 @@ def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(c
     boss, _ = _signed_in("boss")
     elsewhere = {"Origin": "https://evil.example"}
     assert boss.put("/players/f1/contract", json={"years": 1}, headers=elsewhere).status_code == 403
-    assert boss.post("/auth/google", json={"credential": "boss"}, headers=elsewhere).status_code == 403
     assert boss.put("/players/f1/contract", json={"years": 1}, headers={"Origin": "http://testserver"}).status_code == 200
 
 

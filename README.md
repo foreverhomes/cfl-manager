@@ -305,8 +305,11 @@ Set it up once:
    Then on **Audience**, click **Publish app**: while it's in **Testing**, only the test users you
    list can sign in. The app asks only for email and profile, which need no review.
 2. Under **Clients**, choose **Create client** with type **Web application**. Add the site to
-   **Authorized JavaScript origins**: `https://clfl.vercel.app` (or your domain). To use logins
-   locally, also add `http://localhost` and `http://localhost:8000`. No redirect URI is needed.
+   **Authorized JavaScript origins**: `https://clfl.vercel.app` (or your domain), and to
+   **Authorized redirect URIs**: `https://clfl.vercel.app/auth/google`. Google sends people back
+   there after they pick an account (a full-page redirect, not a popup, which some browsers block).
+   To use logins locally, also add the origins `http://localhost` and `http://localhost:8000` and
+   the redirect URI `http://localhost:8000/auth/google`.
 3. In Vercel, set `GOOGLE_CLIENT_ID` to the client ID, `CFL_SESSION_SECRET` to a long random
    string (for example `openssl rand -base64 32`; keep it a Secret), and `CFL_ADMIN_EMAILS` to your
    Google email. Redeploy.

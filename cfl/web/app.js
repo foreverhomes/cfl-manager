@@ -1838,22 +1838,21 @@ async function showSignIn() {
   showGate("Sign in", "Use the Google account you play under. If you're new, sign in and the admin will approve you and link your team.");
   const button = byId("google-button");
   button.hidden = false;
+  if (new URLSearchParams(window.location.search).has("signin")) {   // /auth/google sent us back
+    byId("gate-msg").textContent = "Google sign-in didn't work. Try again.";
+    history.replaceState(null, "", window.location.pathname + window.location.hash);
+  }
   try {
     const cfg = await api.get("/auth/config");
     await loadGoogle();
-    google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: onGoogleCredential });
+    // Redirect, not the default popup: some browsers (Firefox with strict tracking protection or
+    // container extensions) never open it. Google posts the token to /auth/google, which signs in
+    // and comes back to the page.
+    google.accounts.id.initialize({ client_id: cfg.google_client_id, ux_mode: "redirect",
+      login_uri: `${window.location.origin}/auth/google` });
     const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     google.accounts.id.renderButton(button, { theme: dark ? "filled_black" : "outline", size: "large", shape: "pill",
       text: "signin_with" });
-  } catch (err) {
-    byId("gate-msg").textContent = err.message;
-  }
-}
-
-async function onGoogleCredential({ credential }) {
-  try {
-    await api.post("/auth/google", { credential });
-    window.location.reload();   // start over as the signed-in user
   } catch (err) {
     byId("gate-msg").textContent = err.message;
   }

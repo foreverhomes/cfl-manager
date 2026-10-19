@@ -1,8 +1,8 @@
 """Logins: Sign in with Google, a signed session cookie, and who may do what.
 
-Google's sign-in button gives the page an ID token, which it posts to /auth/google. The token is
-checked against Google's keys and this app's client id, and its email becomes the session, kept in
-a signed cookie. Every request looks that email up in `users`, so a new team, a role change or a
+Google's sign-in button sends you to Google, which posts an ID token back to /auth/google. The
+token is checked against Google's keys and this app's client id, and its email becomes the
+session, kept in a signed cookie. Every request looks that email up in `users`, so a new team, a role change or a
 removal takes effect on the next request.
 
 Anyone with a Google account can ask to join: they're recorded as `pending` until the admin
