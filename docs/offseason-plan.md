@@ -3,7 +3,7 @@
 A plan for running the CFL offseason in the app instead of on the forum. The admin (the
 commissioner) moves the league from one phase to the next explicitly. GMs qualify their RFAs, make
 and answer offer sheets, and draft prospects in the app. The free agent auction stays in Fantrax,
-and the app imports its results.
+and importing its results comes later.
 
 Status: draft. Nothing is built yet. The rule questions this plan raised were answered on
 October 19, 2026 (see [Decisions](#decisions)). The answers are also in [rules.md](rules.md) under
@@ -30,7 +30,7 @@ stateDiagram-v2
 | `qualifying` | Contracts roll over to the next season and UFAs are released. Each GM either qualifies each of their RFAs at his old salary for 1–5 years, or lets him go to the auction. | GMs |
 | `offer_sheets` | Unqualified RFAs are released. GMs bid salaries on other teams' qualified RFAs, and a higher bid replaces a lower one. The owner has 24 hours to match. This runs about two weeks in June. | GMs |
 | `entry_draft` | The non-snaking entry draft runs on a 24-hour clock. | GMs |
-| `auction` | The auction runs in Fantrax. The admin imports the results, and GMs set each purchase's years. | Admin, GMs |
+| `auction` | The auction runs in Fantrax. Later, the admin will import the results and GMs will set each purchase's years. | Admin |
 
 Every arrow is an admin action. The app never moves on by date, because the dates change every
 year and the commissioner decides when a phase is done.
@@ -236,7 +236,7 @@ in the same transaction.
 ### Start season (`auction → in_season`)
 
 - **Guard:**
-  - The auction is imported, and its years deadline has passed.
+  - Once the auction import exists: the auction is imported, and its years deadline has passed.
   - Fantrax reports the new season (warning only).
 - **Effects:** the phase returns to `in_season`, and the league year is now Fantrax's again.
 
@@ -398,11 +398,15 @@ stateDiagram-v2
 
 ## Free agent auction
 
-The auction runs in Fantrax as now. The app imports the results:
+The auction runs in Fantrax as now. **Importing its results is deferred.** Until it's built, the
+`auction` phase is a wait: purchases are entered as today, and the admin starts the season when the
+auction is done.
 
-- **Import.** The Fantrax draft results give each purchase's team, player and price. Fantrax's
-  public API has a draft-results endpoint, but we still need to confirm it returns auction prices.
-  The import is repeatable and idempotent, so the admin can run it during and after the auction.
+When it's built:
+
+- **Import.** The auction results give each purchase's team, player and price, one way or another.
+  The import should be repeatable and idempotent, so the admin can run it during and after the
+  auction.
 - **Years.** Fantrax doesn't record contract lengths; they've been posted on the forum. Each GM sets
   the years of each purchase (1–5) in the app, within the contract bank, by the commissioner's
   deadline. Purchases are saved for 1 year with origin `AUCTION` until the GM changes them.
@@ -560,7 +564,7 @@ showing what's relevant to the current phase:
   - **Every offer:** the public thread.
   - **Your signings:** players you've won or matched, each with years to set before the deadline.
 - **Draft:** the board, who's on the clock and the time left, your pick form and your list.
-- **Auction:** your purchases, each with years to set.
+- **Auction** (once the import exists): your purchases, each with years to set.
 - **Admin:**
   - The next transition's button, with its guard's unmet items listed ("3 teams haven't decided
     on 5 RFAs"), and Force with a reason where allowed.
@@ -577,7 +581,7 @@ Endpoints follow the existing style:
 - `POST /offer-sheets`, then `POST /offer-sheets/{id}/{match|let-go|void}`.
 - `PUT` / `DELETE /cap-exemptions/{player_id}`: admin.
 - `GET /draft`, `POST /draft/picks`, `PUT /draft/list`.
-- `POST /auction/import`.
+- `POST /auction/import`, once it exists.
 
 Each check runs in the API, not just in the page: 409 for a wrong state, 403 for a wrong person,
 and 400 with the guard's reasons.
@@ -614,10 +618,11 @@ build this in order and try each piece on a copy of the data:
    - Making, outbidding, matching and letting go.
    - The 24-hour clock, voiding, the years deadline, and `close offer sheets`.
 4. **Entry draft.** Order, clock, picks, lists, auto-pick and lazy timeouts.
-5. **Auction import.** Fantrax results, years, and `start season`.
+5. **Auction import** (deferred). Results, years, and the `start season` guard that waits for
+   them.
 
-Milestones 0–3 are what's needed for June 2027. The draft and auction can stay manual a year
-longer, using the skip transitions.
+Milestones 0–3 are what's needed for June 2027. The draft can stay manual a year longer, using the
+skip transition, and the auction stays as it is until milestone 5.
 
 ## Decisions
 
@@ -641,7 +646,9 @@ Answered on October 19, 2026, and written into [rules.md](rules.md):
 | Draft pool | Anyone not held by a CFL team and never signed in the CFL. |
 | Auto-pick | The player taken earliest in this year's NHL draft who is still available. |
 | Contracts | Every team's contracts move into the app before June 2027. |
-| Prospects | No offseason step. GMs may leave eligible prospects unsigned. |
+| Prospects | No offseason step. GMs may leave eligible prospects unsigned, and unsigned prospects stay with their team at any age. |
+| Auto-pick running out | Can't happen: the draft has 55 picks (5 rounds × 11 teams), far fewer than the NHL draft. |
+| Auction import | Deferred. The results, with prices, will be available one way or another when it's built. |
 
 ### Not in this plan
 
@@ -650,12 +657,6 @@ Answered on October 19, 2026, and written into [rules.md](rules.md):
   to an ELC. That happens during the regular season, so it's a separate in-season feature.
 - **An automatic raise for qualified RFAs** based on how they rank. That would be a rule change;
   it's noted in rules.md as an idea.
+- **The auction import,** for now (see [Free agent auction](#free-agent-auction)).
 
-### Still open
-
-- **Unsigned prospects at 27.** The CFL Contracts sheet releases unsigned prospects to the UFA pool
-  once they're 27 on July 1. Should `start offseason` do that too?
-- **When auto-pick runs out.** If no one from this year's NHL draft class is left, should the
-  commissioner make the pick?
-- **Auction prices.** We need to check that Fantrax's draft results include them (a technical
-  check, not a rule).
+Nothing is left open.

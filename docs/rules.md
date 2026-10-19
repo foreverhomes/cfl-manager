@@ -180,6 +180,7 @@ work, as agreed on October 19, 2026 for running the offseason in the app.
   leave an eligible prospect unsigned. The protection is the claim rule: once he plays the game
   that crosses the threshold during the regular season, a rival GM can claim him and sign him to
   an ELC.
+- An unsigned prospect stays with his team whatever his age; he isn't released at 27.
 
 ### Ideas, not rules
 
