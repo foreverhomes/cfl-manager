@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from .config import Settings
 from .db import Connection, row, rows
-from .sync import MAX_CONTRACT_YEARS, app_owned_teams, stat_seasons
+from .sync import MAX_CONTRACT_YEARS, app_owned_teams, current_period, stat_seasons
 
 # Fantrax category short name -> skater_stats column.
 SKATER_STATS = {
@@ -33,6 +33,9 @@ SKATER_COLUMNS = sorted(set(SKATER_STATS.values()))
 GOALIE_COUNTING = {"W": "wins", "SHO": "shutouts", "L": "losses", "GA": "goals_against", "SV": "saves"}
 GOALIE_RATIOS = {"GAA", "SV%"}
 GOALIE_COLUMNS = ["wins", "losses", "shutouts", "goals_against", "saves", "shots_against", "toi_seconds"]
+# Categories in the order a stat line reads (NHL.com's), for the dashboard.
+STAT_LINE_ORDER = ("G", "A", "Pt", "+/-", "PPG", "PPP", "SHP", "GWG", "SOG", "Hit", "Blk", "PIM",
+                   "W", "L", "GA", "GAA", "SV", "SV%", "SHO")
 
 PRIOR_SEASON_GAMES = 82
 GAMES_PER_WEEK = 3.5          # fallback when no NHL schedule is synced
@@ -861,6 +864,92 @@ def team_profile(conn: Connection, ctx: Context, team_id: str, **need_kwargs) ->
                    for p in roster],
         "unsupported_categories": ctx.unsupported_categories,
     }
+
+
+def team_overview(conn: Connection, ctx: Context, team_id: str) -> Dict:
+    """What a GM checks on their team: this week's matchup, season-to-date results by category,
+    the roster with this NHL season's stats, and roster spots. Results only, no projections.
+    The cap is on the Players & cap tab (GET /players?team_id=...)."""
+    actual = actual_profiles(conn, ctx)[team_id]["categories"]
+    players = sorted(ctx.roster(team_id), key=lambda p: (p.group, -(p.salary or 0), p.name))
+    stats = season_stats(conn, ctx, players)
+    # Fantrax lists categories in no particular order; show them the way a stat line reads.
+    cats = sorted(ctx.cats("SKATER") + ctx.cats("GOALIE"), key=lambda c: (
+        c.grp != "SKATER", STAT_LINE_ORDER.index(c.short_name) if c.short_name in STAT_LINE_ORDER else len(STAT_LINE_ORDER)))
+    return {
+        "team_id": team_id, "team_name": ctx.teams[team_id], "roster_period": ctx.roster_period,
+        "week": week_matchups(conn, ctx, team_id),
+        "categories": [{"category": c.short_name, "name": c.name, "group": c.grp,
+                        "lower_is_better": c.lower_is_better,
+                        "record": actual[c.short_name]["record"], "rank": actual[c.short_name]["rank"]}
+                       for c in cats],
+        "roster": [dict(player_summary(p, ctx), season=stats.get(p.fantrax_id)) for p in players],
+        "roster_spots": {"used": capped_count(ctx, team_id), "limit": ctx.roster_cap},
+    }
+
+
+def season_stats(conn: Connection, ctx: Context, players: Iterable[Player]) -> Dict[str, Dict[str, float]]:
+    """This NHL season's totals in the league's categories, by Fantrax id. Players without a game
+    this season are left out."""
+    by_nhl = {p.nhl_id: p for p in players if p.nhl_id}
+    if not by_nhl:
+        return {}
+    marks = ", ".join("?" * len(by_nhl))
+    out: Dict[str, Dict[str, float]] = {}
+    for r in rows(conn, "SELECT * FROM skater_stats WHERE season_id=? AND gp > 0 AND nhl_id IN ({})".format(marks),
+                  (ctx.cur_season, *by_nhl)):
+        p = by_nhl[r["nhl_id"]]
+        if p.group != "G":
+            out[p.fantrax_id] = {c.short_name: r[SKATER_STATS[c.short_name]] or 0 for c in ctx.cats("SKATER")}
+    for r in rows(conn, "SELECT * FROM goalie_stats WHERE season_id=? AND gp > 0 AND nhl_id IN ({})".format(marks),
+                  (ctx.cur_season, *by_nhl)):
+        p = by_nhl[r["nhl_id"]]
+        if p.group != "G":
+            continue
+        line: Dict[str, Optional[float]] = {}
+        for c in ctx.cats("GOALIE"):
+            if c.short_name == "GAA":
+                line["GAA"] = _r(r["goals_against"] / r["toi_seconds"] * 3600, 2) if r["toi_seconds"] else None
+            elif c.short_name == "SV%":
+                line["SV%"] = _r(r["saves"] / r["shots_against"], 3) if r["shots_against"] else None
+            else:
+                line[c.short_name] = r[GOALIE_COUNTING[c.short_name]] or 0
+        out[p.fantrax_id] = line
+    return out
+
+
+def week_matchups(conn: Connection, ctx: Context, team_id: str) -> Optional[Dict]:
+    """The team's head-to-head matchups in the current scoring period, with each category's score
+    as of the last matchups sync. With 11 teams a week can bring two opponents, or a bye (none)."""
+    period = current_period(conn, ctx.league_id, "scoring")
+    if period is None:
+        return None
+    dates = row(conn, "SELECT start_date, end_date FROM periods WHERE league_id=? AND kind='scoring' AND number=?",
+                (ctx.league_id, period)) or {}
+    opponents = [g["home_team_id"] if g["away_team_id"] == team_id else g["away_team_id"] for g in rows(
+        conn, "SELECT away_team_id, home_team_id FROM matchups WHERE league_id=? AND period=? "
+              "AND (away_team_id=? OR home_team_id=?) ORDER BY seq", (ctx.league_id, period, team_id, team_id))]
+    scores = rows(conn, "SELECT team_id, opponent_id, category, value, outcome FROM matchup_category_scores "
+                        "WHERE league_id=? AND period=? AND (team_id=? OR opponent_id=?)",
+                  (ctx.league_id, period, team_id, team_id))
+    results = {r["opponent_id"]: r for r in rows(
+        conn, "SELECT opponent_id, category_wins, category_losses, category_ties FROM matchup_results "
+              "WHERE league_id=? AND period=? AND team_id=?", (ctx.league_id, period, team_id))}
+    synced = row(conn, "SELECT MAX(finished_at) AS at FROM sync_log WHERE resource='matchups' AND status='ok'")
+    matchups = []
+    for opp in (o for o in opponents if o):
+        mine = {s["category"]: s for s in scores if s["team_id"] == team_id and s["opponent_id"] == opp}
+        theirs = {s["category"]: s["value"] for s in scores if s["team_id"] == opp and s["opponent_id"] == team_id}
+        res = results.get(opp)
+        matchups.append({
+            "team_id": opp, "team_name": ctx.teams.get(opp),
+            # None until Fantrax reports a score for the week.
+            "record": [int(res[k] or 0) for k in ("category_wins", "category_losses", "category_ties")] if res else None,
+            "categories": {c: {"value": s["value"], "opponent_value": theirs.get(c), "outcome": s["outcome"]}
+                           for c, s in mine.items()},
+        })
+    return {"period": period, "start_date": dates.get("start_date"), "end_date": dates.get("end_date"),
+            "bye": None in opponents, "matchups": matchups, "scores_as_of": (synced or {}).get("at")}
 
 
 def _games_fields(p: Player, lineup_games_per_week: float) -> Dict[str, float]:

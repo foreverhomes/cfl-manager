@@ -321,6 +321,15 @@ def team_roster(team_id: str, conn: Connection = Depends(get_conn), user: User =
             "players": [A.player_summary(p, ctx) for p in players]}
 
 
+@data.get("/teams/{team_id}/overview")
+def team_overview(team_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """The dashboard: this week's matchup, season results by category, the roster with this NHL
+    season's stats, and roster spots."""
+    s = get_settings()
+    ctx = _ctx(conn, s)
+    return A.team_overview(conn, ctx, _team(ctx, team_id, user))
+
+
 @data.get("/teams/{team_id}/contracts")
 def team_contracts(team_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     """Contracts from the team's salary sheet, how each line matched a Fantrax player, and the
@@ -409,7 +418,8 @@ def players(status: str = Query("all", description="all, fa, or rostered"),
         pool.sort(key=lambda p: (p.adp is None, p.adp or 0))
     else:
         pool.sort(key=lambda p: -(A.player_value(p, generic) if p.z else -1e9))
-    return {"total": len(pool), "players": [A.player_summary(p, ctx) for p in pool[offset:offset + limit]]}
+    return {"total": len(pool), "players": [A.player_summary(p, ctx) for p in pool[offset:offset + limit]],
+            "cap": A.cap_summary(ctx, team_id) if team_id else None}
 
 
 @data.get("/players/{fantrax_id}")

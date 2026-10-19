@@ -23,8 +23,9 @@ COOKIE = "cfl_session"
 SESSION_DAYS = 30
 ROLES = ("gm", "admin")
 STATUSES = ("pending", "active")
-# A GM may run the dashboard's "Refresh rosters & stats". A full sync is the admin's.
-GM_SYNC_RESOURCES = frozenset({"rosters", "stats", "match", "bios"})
+# A GM may run the dashboard's "Refresh rosters & stats", which also brings the standings and this
+# week's matchup scores up to date. A full sync is the admin's.
+GM_SYNC_RESOURCES = frozenset({"rosters", "standings", "matchups", "stats", "match", "bios"})
 
 
 @dataclass(frozen=True)
