@@ -35,6 +35,10 @@ stateDiagram-v2
 Every arrow is an admin action. The app never moves on by date, because the dates change every
 year and the commissioner decides when a phase is done.
 
+The numbers in this plan, such as 24 hours, 1–5 years and the compensation ladder, are defaults.
+Each one is a league rule setting the admin can change (see
+[Configurable rules](#configurable-rules)).
+
 ## Are state machines a good fit?
 
 Yes. The offseason is made of things that move through a small, fixed set of states, where each
@@ -172,11 +176,154 @@ The fix is a **league year** that the phase machine owns:
 
 ### Cap room in the offseason
 
-Next season's $220 cap counts the same players it does during the season: active and bench
+Next season's cap ($220, unless the cap setting says otherwise) counts the same players it does
+during the season: active and bench
 salaries plus buyouts, by each player's Fantrax status. IR and minors don't count. The commissioner
 can also leave a player out, with a reason, for example one who has gone back to Europe or is
 holding out. It's a new `cap_exemptions` record that the cap code skips until the commissioner
 removes it. Matching, offering and qualifying all use this one number.
+
+## Configurable rules
+
+Leagues vote rules in and out, and the app shouldn't need a code change when they do. So every
+number or table a vote could change is a **league rule setting**: the admin edits it in the app,
+and everyone can read it. The shape of things stays in code: the phases, the machines' states, and
+who may do what.
+
+### How settings work
+
+- **One registry in code.** `cfl/rules.py` lists every rule with:
+  - its key, type and checks;
+  - its default: today's value, from rules.md;
+  - the rules.md section it comes from;
+  - the phases it's locked during.
+
+  Code reads `ctx.rules["rfa.match_hours"]`, never a constant. The constants in the code today
+  (`UFA_AGE`, `CONTRACT_YEAR_BANK`, `MAX_CONTRACT_YEARS`, `ELC_SALARY`, `PICK_ROUNDS` and the rest)
+  become the registry's defaults.
+- **Changes take effect from a league year.** Each change names the league year it starts in: the
+  current one or a later one, never a past one. A rule's value for a year is its latest change from
+  that year or earlier, or else its default. So the league can vote in November to change the
+  ladder from 2028, and the 2027 offseason still runs on the old one.
+- **Records keep the rules they were made under.** Changes never rewrite something already done:
+  - An offer sheet stores its compensation and deadline when it's made.
+  - A draft stores its order and rounds when they're set.
+  - An offseason stores each player's UFA/RFA status and qualifying salary when it starts.
+- **Rules are locked while in use.** A rule can't change while a phase that uses it is open. For
+  example, the compensation ladder and the match window are locked during `offer_sheets`. The
+  admin can still force a change with a reason, as with guards, and it applies only from then on.
+- **The history is kept.** Every change is a new row recording who made it, when and why (for
+  example "2027 league vote"), so the Rules page can show what each value used to be. Setting a rule
+  back to its default is a change like any other.
+- **Everyone can see the rules.** A Rules page lists each rule's current value, default and
+  history, and links to its section of rules.md. Admins edit there. rules.md stays the league's
+  written text; when a vote changes a number, update both.
+
+### The settings
+
+**Contracts and the cap**
+
+| Setting | Default | In the code today | Locked during |
+|---|---|---|---|
+| Salary cap | Fantrax's ($220 if it reports none) | `DEFAULT_SALARY_CAP` | qualifying, offer sheets |
+| Contract-year bank | 50 | `CONTRACT_YEAR_BANK` | qualifying, offer sheets |
+| Longest contract | 5 years | `MAX_CONTRACT_YEARS` | qualifying, offer sheets |
+| UFA age, and the day it's measured | 27, on July 1 | `UFA_AGE` | qualifying, offer sheets |
+| ELC salary and longest ELC | $3, 3 years | `ELC_SALARY`, `ELC_MAX_YEARS` | — |
+| Free release up to | $3 | `FREE_RELEASE_MAX_SALARY` | — |
+| Buyout share | half the salary, rounded down | in `release_cost` | — |
+| Years when a GM doesn't pick by the deadline | 1 | — | — |
+
+The cap setting matters in the offseason. When the admin sets it for a league year, it wins over
+Fantrax for that year. For example, the league can vote to raise next season's cap before Fantrax
+has a next season.
+
+**RFAs and offer sheets**
+
+| Setting | Default | Locked during |
+|---|---|---|
+| Compensation ladder | the [table below](#the-rules) | offer sheets |
+| Match window | 24 hours | offer sheets |
+| Smallest amount an offer must beat the QO by | $1 | offer sheets |
+| Smallest amount an offer must beat a pending offer by | $1 | offer sheets |
+| Offering team needs cap space | yes | offer sheets |
+| Offering team needs contract-bank room | yes | offer sheets |
+| Offering team must own the compensation picks | yes | offer sheets |
+| Offers can be withdrawn | no | offer sheets |
+
+The toggles are guard conditions, not different machines. For example, `withdraw` exists in the
+offer sheet machine, and its guard refuses it while "offers can be withdrawn" is off.
+
+**Entry draft**
+
+| Setting | Default | In the code today | Locked during |
+|---|---|---|---|
+| Rounds | 5 | `PICK_ROUNDS` | season over, entry draft |
+| Drafts shown and tradeable | 3 | `PICK_YEARS` | — |
+| Pick clock | 24 hours | — | entry draft |
+| Snaking order | no | — | season over, entry draft |
+| Champion picks last in every round | yes | — | season over, entry draft |
+
+Changing a draft's rounds adds or removes its picks. Removing a round is refused while any pick in
+it has been traded.
+
+**Later:**
+
+- **Prospect thresholds** (120 games, or 60 for goalies), when claims are built.
+- **A QO raise**, if the league adopts the auto-raise idea. Every qualifying salary comes from one
+  function, `qualifying_salary()`, so a raise is a setting that function reads.
+
+### Not settings
+
+- **The shape of the year:** the phases, their order, and each machine's states and transitions.
+  Changing those changes what the app does, so it's a code change.
+- **What Fantrax owns:** scoring categories, lineup slots, roster size and the playoff bracket. The
+  app reads them. The cap is the one exception (see above).
+- **What counts toward the cap:** active and bench players, not IR or minors. Also what each
+  contract type means: in-season pickups are 1 year, don't use bank years, and go back to the
+  auction as UFAs. These are tied to Fantrax statuses and contract types the code acts on.
+- **Who may do what:** roles stay in code.
+- **Analysis tuning,** such as projection weights. It isn't a league rule, and some of it is
+  already set through environment variables.
+
+### Sketch
+
+```python
+# cfl/rules.py
+@dataclass(frozen=True)
+class Rule:
+    key: str
+    default: Any
+    kind: str                       # money / count / hours / bool / month_day / ladder
+    label: str
+    cite: str                       # the rules.md section it comes from
+    locked_in: FrozenSet[str] = frozenset()      # phases during which it can't change
+    check: Callable[[Any], None] = lambda value: None   # raises ValueError for a bad value
+
+
+RULES = {r.key: r for r in [
+    Rule("contracts.year_bank", 50, "count", "Contract-year bank", "Contracts",
+         frozenset({"qualifying", "offer_sheets"})),
+    Rule("rfa.compensation", [[34, [1, 2]], [26, [1, 3]], [19, [2]], [11, [3]], [10, [4]]], "ladder",
+         "Offer sheet compensation", "Clarifications: RFAs", frozenset({"offer_sheets"}), check=_ladder),
+    Rule("rfa.match_hours", 24, "hours", "Hours to match an offer sheet", "Clarifications: RFAs",
+         frozenset({"offer_sheets"})),
+    # ...
+]}
+
+
+def load(conn: Connection, league_id: str, year: int) -> Dict[str, Any]:
+    """Every rule's value for a league year: its latest change from that year or earlier, else its default."""
+
+
+def change(conn, league_id, key, value, from_year, note, actor, phase, force_reason=None) -> None:
+    """Save a change (None puts the default back). Refuses a past year, a value its checks reject,
+    a value that conflicts with another rule, and a rule locked in the current phase unless forced."""
+```
+
+Some checks span two rules. The ladder can't ask for a round the draft doesn't have. The longest
+ELC can't be longer than the longest contract. `change()` checks the new value against the other
+rules' values for that year.
 
 ## Phases in detail
 
@@ -262,7 +409,7 @@ NHL". The October 2026 clarifications in [rules.md](rules.md) fill in the rest:
   Whichever team ends up with the player picks his years afterwards (1–5, within its contract
   bank), by a deadline the commissioner sets. If a team misses it, the contract is 1 year.
 - **A higher salary replaces a pending offer** and restarts the owner's 24 hours. Offers can't be
-  withdrawn.
+  withdrawn (a setting, off by default).
 - **The owner has 24 hours** to match. No answer means the player goes.
 - **The offering team needs room:** next season's cap space for the salary, room in its contract
   bank, and the compensation picks in the upcoming draft.
@@ -278,13 +425,16 @@ NHL". The October 2026 clarifications in [rules.md](rules.md) fill in the rest:
   | $26–$33 | a 1st and a 3rd |
   | $34 and up | a 1st and a 2nd |
 
-  In code it's a table, like `PICK_ROUNDS`:
+  The ladder is the `rfa.compensation` setting, so a league vote can change it without a code
+  change. It's stored as steps: each step is the lowest salary it covers and the rounds of the
+  upcoming draft that salary costs. An offer below the lowest step costs nothing.
 
-  ```python
-  # Offer sheet compensation (rules.md, Clarifications): the lowest salary of each step, and the
-  # rounds of the upcoming draft the signing team sends.
-  RFA_COMPENSATION = [(34, (1, 2)), (26, (1, 3)), (19, (2,)), (11, (3,)), (10, (4,)), (0, ())]
+  ```json
+  [[34, [1, 2]], [26, [1, 3]], [19, [2]], [11, [3]], [10, [4]]]
   ```
+
+  The admin edits it as a table, and its check refuses steps that are out of order or rounds the
+  draft doesn't have.
 
 ### RFA rights
 
@@ -316,6 +466,7 @@ stateDiagram-v2
     pending --> matched: match (owner)
     pending --> let_go: let go (owner)
     pending --> expired: 24 hours pass
+    pending --> withdrawn: withdraw (offering GM, if the setting allows)
     matched --> voided: void (admin)
     let_go --> voided: void (admin)
     expired --> voided: void (admin)
@@ -384,7 +535,7 @@ stateDiagram-v2
 ```
 
 - **Order:** set at `end season` from the final standings and the champion. It's non-snaking, with
-  the champion last in each round. The 5 rounds come from `PICK_ROUNDS`, and each slot's owner
+  the champion last in each round. The rounds (5) come from the `draft.rounds` setting, and each slot's owner
   comes from pick ownership (`picks.py`), so traded and compensation picks are already in place.
 - **Eligibility:** any player who isn't held by a CFL team and has never been signed in the CFL.
   The app knows the contracts it has on file, and the CFL Contracts sheet's history fills the gaps.
@@ -493,11 +644,25 @@ CREATE TABLE offer_sheets (
     to_team_id      TEXT NOT NULL,      -- the team holding his rights
     salary          REAL NOT NULL,      -- an offer is a salary only; the years come after
     compensation    TEXT NOT NULL,      -- JSON: the picks the ladder required, fixed when made
-    state           TEXT NOT NULL,      -- pending / outbid / matched / let_go / expired / voided
+    state           TEXT NOT NULL,      -- pending / outbid / matched / let_go / expired / withdrawn / voided
     deadline        TEXT NOT NULL,      -- 24 hours after it was made
     pick_deal_id    TEXT,               -- the pick_moves deal, once picks moved
     created_by      TEXT NOT NULL,
     created_at      TEXT NOT NULL
+);
+
+-- Changes to league rule settings (every rule and its default is in cfl/rules.py). Append-only:
+-- a rule's value for a league year is its latest change with from_year at or before that year.
+CREATE TABLE league_rules (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id       TEXT NOT NULL,
+    key             TEXT NOT NULL,      -- e.g. rfa.compensation
+    from_year       INTEGER NOT NULL,   -- the league year it takes effect
+    value           TEXT,               -- JSON; NULL puts the default back
+    note            TEXT,               -- why, e.g. "2027 league vote"
+    forced_reason   TEXT,               -- set when changed while locked
+    changed_by      TEXT NOT NULL,
+    changed_at      TEXT NOT NULL
 );
 
 -- Players the commissioner leaves out of the cap (back in Europe, holding out). Until removed.
@@ -564,6 +729,9 @@ showing what's relevant to the current phase:
   - **Every offer:** the public thread.
   - **Your signings:** players you've won or matched, each with years to set before the deadline.
 - **Draft:** the board, who's on the clock and the time left, your pick form and your list.
+- **Rules** (a page of its own, all year): every league rule setting, with its current value, its
+  default, what it used to be, and its rules.md section. Admins edit here, choosing the league year
+  a change starts in.
 - **Auction** (once the import exists): your purchases, each with years to set.
 - **Admin:**
   - The next transition's button, with its guard's unmet items listed ("3 teams haven't decided
@@ -580,6 +748,9 @@ Endpoints follow the existing style:
 - `PUT /offseason/rfas/{player_id}`: qualify or let go.
 - `POST /offer-sheets`, then `POST /offer-sheets/{id}/{match|let-go|void}`.
 - `PUT` / `DELETE /cap-exemptions/{player_id}`: admin.
+- `GET /rules?year=2028`: every rule's value for a league year, with defaults and history.
+- `PUT /rules/{key}`: admin. Takes `{"value": ..., "from_year": 2028, "note": "...", "force_reason": null}`;
+  a `null` value puts the default back.
 - `GET /draft`, `POST /draft/picks`, `PUT /draft/list`.
 - `POST /auction/import`, once it exists.
 
@@ -598,6 +769,14 @@ Machines make good tests:
   offer at once: exactly one wins.
 - **Lazy deadlines.** Move the clock, read, and check the expiry, the auto-pick, or the 1-year
   default.
+- **Rules.**
+  - With no changes saved, every rule reads its default. The existing tests already cover today's
+    values, so they check that moving the constants into the registry changed nothing.
+  - A change from 2028 leaves 2027 alone.
+  - A locked rule refuses a change without a reason.
+  - Cross-rule checks hold, for example a ladder can't ask for a 6th round in a 5-round draft.
+  - A record keeps its values after a change: an offer sheet made before a ladder change keeps
+    its compensation.
 
 ## Milestones
 
@@ -606,6 +785,8 @@ build this in order and try each piece on a copy of the data:
 
 0. **Every team in the app.** Adopt each team's sheet once, as app-owned teams are today.
 1. **Foundation.**
+   - The rules registry (`rules.py`, `league_rules` and the Rules page). Today's rule constants move
+     into it first, with no change in behaviour.
    - `fsm.py`, `league_phase` and `machine_events`.
    - The league year, and draft years following the next draft.
    - Cap exemptions and the new contract origins.
@@ -635,7 +816,7 @@ Answered on October 19, 2026, and written into [rules.md](rules.md):
 | What an offer contains | A salary only. Whichever team ends up with the player picks his years afterwards. |
 | Lowest offer | More than the qualifying salary. |
 | Match window | 24 hours. No answer means the player goes. |
-| Withdrawing an offer | Not allowed. |
+| Withdrawing an offer | Not allowed (a setting). |
 | Room to make an offer | Cap space and contract-bank years, plus the compensation picks. |
 | Which picks | The upcoming entry draft's. The signing team must own them. |
 | Qualifying offer length | The GM picks 1–5 years. |
@@ -646,6 +827,7 @@ Answered on October 19, 2026, and written into [rules.md](rules.md):
 | Draft pool | Anyone not held by a CFL team and never signed in the CFL. |
 | Auto-pick | The player taken earliest in this year's NHL draft who is still available. |
 | Contracts | Every team's contracts move into the app before June 2027. |
+| Configurable rules | Every number or table a league vote could change is a setting, effective from a league year. |
 | Prospects | No offseason step. GMs may leave eligible prospects unsigned, and unsigned prospects stay with their team at any age. |
 | Auto-pick running out | Can't happen: the draft has 55 picks (5 rounds × 11 teams), far fewer than the NHL draft. |
 | Auction import | Deferred. The results, with prices, will be available one way or another when it's built. |
