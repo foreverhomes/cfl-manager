@@ -6,7 +6,7 @@ draft room are workflows, and the current file has no good place for them. The A
 FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is in progress: Vite builds
-the page, and FastAPI serves the build.
+the page, FastAPI serves the build, and `npm run dev` runs it with a proxy to FastAPI.
 
 ## Why now
 
@@ -278,7 +278,7 @@ Today's routes return plain dicts, so FastAPI's OpenAPI document has no response
   offseason plan.
 - **An existing endpoint gets one when its tab moves to React.** There's no pass over all 39 routes
   at once.
-- **`npm run api` regenerates the client.** A new CLI command, `python -m cfl openapi`, prints
+- **`npm run api` regenerates the client.** A new CLI command, `python -m cfl openapi`, writes
   `app.openapi()` to `frontend/openapi.json`. Then `openapigen` writes `src/api/generated.ts` from
   it.
 - **Commit both files,** so a change to the contract shows in review.
@@ -487,8 +487,8 @@ milestone whose screens it builds.
 
 | | What | With offseason milestone |
 |---|---|---|
-| **F0. Toolchain** | `frontend/` with Vite, TypeScript, Biome and Vitest. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
-| **F1. Shared parts** | `format.ts` (moved from `app.js`, with tests). `errors.ts`, `client.ts`, the query client, `python -m cfl openapi`, the generator and the staleness test. The components, and the bridge. | Before 1 |
+| **F0. Toolchain** | `frontend/` with Vite, TypeScript, Biome and Vitest. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. `python -m cfl openapi` and the staleness test, for the dev proxy. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
+| **F1. Shared parts** | `format.ts` (moved from `app.js`, with tests). `errors.ts`, `client.ts`, the query client, and the generator. The components, and the bridge. | Before 1 |
 | **F2. Offseason hub** | The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
 | **F3. Qualifying** | Your RFAs, with Qualify (years) or Let go, and the cap and bank impact. | 2. Qualifying |
 | **F4. Offer sheets** | The RFA market and the offer form (`offerSheet`). Your RFAs with Match or Let go (`matchDecision`). Every offer, and your signings' years. | 3. Offer sheets |

@@ -24,8 +24,17 @@ cp .env.example .env            # then set FANTRAX_MY_TEAM_ID (your team, for th
 
 `python -m cfl serve` (add `--reload` while developing) serves the app at http://127.0.0.1:8000.
 The page's source is in `frontend/`. Vite builds it into `cfl/web/dist/`, which FastAPI serves.
-After a change, run `npm run build` in `frontend/`, or keep `npm run build -- --watch` running.
 Without a build, the API and the CLI work, but `/` returns an error.
+
+To work on the page, run the API and Vite's dev server side by side:
+
+```bash
+.venv/bin/python -m cfl serve --reload   # the API, on port 8000
+cd frontend && npm run dev               # the page at http://localhost:5173, updated as you edit
+```
+
+Vite sends the API's paths to port 8000. It reads them from `frontend/openapi.json`, so after you
+add an endpoint, run `python -m cfl openapi`. A test fails until you do.
 
 - **Dashboard.** A GM's overview of a team, from real results only (no projections):
   - **At a glance:** this week's category score and opponent, standings, and roster spots.
