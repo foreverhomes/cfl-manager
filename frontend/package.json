@@ -3,9 +3,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "check": "biome check && tsc"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }
 }

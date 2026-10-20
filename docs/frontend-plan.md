@@ -5,8 +5,8 @@ offseason features in [offseason-plan.md](offseason-plan.md) are the reason: off
 draft room are workflows, and the current file has no good place for them. The API keeps its role:
 FastAPI owns every rule and every state machine.
 
-Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is in progress: Vite builds
-the page, FastAPI serves the build, and `npm run dev` runs it with a proxy to FastAPI.
+Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done: Vite builds and
+serves the page, and `npm run check` runs Biome and TypeScript. F1 is next.
 
 ## Why now
 
@@ -59,7 +59,7 @@ endpoints.
 | API types | `@effect/openapi-generator` | Generates Effect Schemas and a client from FastAPI's OpenAPI document, so Python stays the one source of the shapes. |
 | Workflows | XState 5 | Only for the four workflows above (see [XState](#xstate-workflows-only)). |
 | Tests | Vitest 5, Testing Library, MSW 3 | MSW mocks the network, which is the page's boundary. |
-| Lint and format | Biome 2 | One tool and one config file for both. |
+| Lint and format | Biome 2 | One tool and one config file for both. It skips the legacy files: `src/legacy/`, `styles.css` and the HTML. |
 | Packages | npm | It comes with Node, so Vercel and a new checkout need nothing else. |
 
 Routing stays as it is until React owns the page's shell (see [Migration](#migration)). At that
@@ -457,8 +457,8 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
 - **Views** use Testing Library, with MSW handlers that return fixtures. They check what a GM sees:
   text, buttons, and disabled buttons with their blockers.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
-- **`npm run check`** runs `biome check`, `tsc --noEmit` and `vitest run`. Run it and `pytest`
-  before each PR.
+- **`npm run check`** runs `biome check` and `tsc`. F1 adds `vitest run` with the first tests. Run
+  it and `pytest` before each PR.
 
 ```ts
 // src/machines/offerSheet.test.ts
@@ -487,8 +487,8 @@ milestone whose screens it builds.
 
 | | What | With offseason milestone |
 |---|---|---|
-| **F0. Toolchain** | `frontend/` with Vite, TypeScript, Biome and Vitest. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. `python -m cfl openapi` and the staleness test, for the dev proxy. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
-| **F1. Shared parts** | `format.ts` (moved from `app.js`, with tests). `errors.ts`, `client.ts`, the query client, and the generator. The components, and the bridge. | Before 1 |
+| **F0. Toolchain** | `frontend/` with Vite, TypeScript and Biome. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. `python -m cfl openapi` and the staleness test, for the dev proxy. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
+| **F1. Shared parts** | `format.ts` (moved from `app.js`) and Vitest, with its tests. `errors.ts`, `client.ts`, the query client, and the generator. The components, and the bridge. | Before 1 |
 | **F2. Offseason hub** | The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
 | **F3. Qualifying** | Your RFAs, with Qualify (years) or Let go, and the cap and bank impact. | 2. Qualifying |
 | **F4. Offer sheets** | The RFA market and the offer form (`offerSheet`). Your RFAs with Match or Let go (`matchDecision`). Every offer, and your signings' years. | 3. Offer sheets |
