@@ -5,7 +5,8 @@ commissioner) moves the league from one phase to the next explicitly. GMs qualif
 and answer offer sheets, and draft prospects in the app. The free agent auction stays in Fantrax,
 and importing its results comes later.
 
-Status: draft. Nothing is built yet. The rule questions this plan raised were answered on
+Status: in progress. The state machine core is built: [`cfl/fsm.py`](../cfl/fsm.py) and the
+`machine_events` table. Nothing uses it yet. The rule questions this plan raised were answered on
 October 19, 2026 (see [Decisions](#decisions)). The answers are also in [rules.md](rules.md) under
 Clarifications, which the code will cite.
 
@@ -81,34 +82,39 @@ than add a library.
 If the machines grow nested states later, `python-statemachine` is the one to switch to. The
 tables below port to it directly.
 
-### Sketch
+### The helper
+
+Built in [`cfl/fsm.py`](../cfl/fsm.py):
 
 ```python
-# cfl/fsm.py
 @dataclass(frozen=True)
 class Transition:
     source: FrozenSet[str]
     dest: str
     # Returns the reasons the move can't happen now; empty means it can.
-    guard: Callable[[Connection, Dict[str, Any]], List[str]] = lambda conn, ctx: []
-    admin_only: bool = True
+    guard: Callable[[Connection, Row, Any], List[str]] = _no_guard   # (conn, the row, the caller's ctx)
 
 
 class Machine:
-    def __init__(self, name: str, table: str, transitions: Dict[str, Transition]): ...
+    def __init__(self, name: str, table: str, key_columns: Sequence[str], transitions: Dict[str, Transition]): ...
 
-    def available(self, conn, state, ctx) -> Dict[str, List[str]]:
-        """Each trigger allowed from this state, with what's stopping it (for the UI's buttons)."""
+    def available(self, conn, row, ctx=None) -> Dict[str, List[str]]:
+        """Each trigger allowed from the row's state, with what's stopping it (for the UI's buttons)."""
 
-    def fire(self, conn, key, trigger, actor, ctx, effects=None, force_reason=None) -> str:
-        """Move one row from its state by `trigger`, in one transaction:
-        1. reject a trigger that isn't allowed from the row's current state (409);
-        2. run the guard and refuse if it returns reasons, unless the admin forces it with a reason;
+    def fire(self, conn, key, trigger, actor, ctx=None, effects=None, force_reason=None) -> str:
+        """Move one row by `trigger`, in one transaction:
+        1. reject a trigger that isn't allowed from the row's current state (Conflict, 409);
+        2. run the guard and refuse if it returns reasons (Blocked, 400), unless forced with a reason;
         3. UPDATE <table> SET state=<dest> WHERE <key> AND state=<current>. If no row changed,
-           someone else moved it first (409);
-        4. run `effects` (release players, write contracts, move picks) in the same transaction;
+           someone else moved it first (Conflict, 409);
+        4. run `effects(conn, row)` (release players, write contracts, move picks) in the same
+           transaction. They mustn't commit. What they return is logged as the move's detail;
         5. log the move in machine_events: who, when, from, to, trigger, forced reason, detail."""
 ```
+
+Each machine's rows have a `state` column and are keyed by `league_id` plus whatever else
+identifies one. Who may fire a trigger is the caller's check, not the machine's, since it often
+depends on the row: the owner matches, another GM outbids, only the admin forces.
 
 The conditional `UPDATE` is the concurrency control. It works the same on SQLite and Postgres,
 needs no locks, and means two admins clicking "Open offer sheets" at once can't both succeed. It
