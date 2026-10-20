@@ -6,3 +6,5 @@ __pycache__/
 data/
 .claude/worktrees/
 salary_sheets.json
+node_modules/
+cfl/web/dist/

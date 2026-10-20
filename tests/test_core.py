@@ -55,6 +55,17 @@ def conn(tmp_path: Path) -> Iterator[Connection]:
     c.close()
 
 
+@pytest.fixture
+def web_build(tmp_path, monkeypatch):
+    """Stands in for `npm run build`, so the tests that load the page don't need Node."""
+    from cfl import api
+    build = tmp_path / "dist"
+    build.mkdir()
+    (build / "index.html").write_text("<h1>CFL Manager</h1>")
+    (build / "privacy.html").write_text("<h1>Privacy</h1>")
+    monkeypatch.setattr(api, "WEB_DIR", build)
+
+
 def test_name_helpers():
     assert split_fantrax_name("Stützle, Tim") == ("Tim", "Stützle", "Tim Stützle")
     assert normalize_name("Tim Stützle") == normalize_name("Tim Stutzle") == "timstutzle"
@@ -797,15 +808,11 @@ def test_published_sheet_layout_and_formulas():
     assert row["Cap space"][1][2] == "=C{}-C{}".format(row["Salary cap"][0], row["Committed"][0])
 
 
-def test_web_app_is_revalidated_on_every_load():
+def test_web_app_is_revalidated_on_every_load(web_build):
     from fastapi.testclient import TestClient
     from cfl.api import app
     client = TestClient(app)
     assert client.get("/").headers["cache-control"] == "no-cache"
-    res = client.get("/static/app.js")
-    assert res.status_code == 200 and res.headers["cache-control"] == "no-cache"
-    unchanged = client.get("/static/app.js", headers={"If-None-Match": res.headers["etag"]})
-    assert unchanged.status_code == 304 and unchanged.headers["cache-control"] == "no-cache"
 
 
 def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):
@@ -1164,7 +1171,7 @@ def _signed_in(credential):
     return client, client.get("/auth/me")
 
 
-def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_their_own(conn, tmp_path, monkeypatch):
+def test_a_gm_signs_in_waits_for_approval_then_sees_every_team_and_edits_only_their_own(conn, tmp_path, monkeypatch, web_build):
     from fastapi.testclient import TestClient
     from cfl.api import app
     _logins(monkeypatch, tmp_path)
@@ -1301,7 +1308,7 @@ def test_sign_in_refuses_forged_tokens_and_cookies_and_writes_from_other_sites(c
     assert boss.put("/players/f1/contract", json={"years": 1}, headers={"Origin": "http://testserver"}).status_code == 200
 
 
-def test_a_vercel_deployment_without_logins_refuses_every_request(monkeypatch, tmp_path):
+def test_a_vercel_deployment_without_logins_refuses_every_request(monkeypatch, tmp_path, web_build):
     from fastapi.testclient import TestClient
     from cfl.api import app
     monkeypatch.setenv("VERCEL", "1")

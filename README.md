@@ -16,13 +16,16 @@ python3 -m venv .venv
 cp .env.example .env            # then set FANTRAX_MY_TEAM_ID (your team, for the CLI and local use)
 .venv/bin/python -m cfl sync    # ~2s, writes data/league.db
 .venv/bin/python -m cfl teams   # find your team id for .env
+(cd frontend && npm ci && npm run build)   # the web app, into cfl/web/dist (Node 24)
 .venv/bin/python -m cfl serve   # app at http://127.0.0.1:8000, API docs at /docs
 ```
 
 ## Web app
 
 `python -m cfl serve` (add `--reload` while developing) serves the app at http://127.0.0.1:8000.
-There's no build step: it's plain HTML, CSS and JavaScript in `cfl/web/`.
+The page's source is in `frontend/`. Vite builds it into `cfl/web/dist/`, which FastAPI serves.
+After a change, run `npm run build` in `frontend/`, or keep `npm run build -- --watch` running.
+Without a build, the API and the CLI work, but `/` returns an error.
 
 - **Dashboard.** A GM's overview of a team, from real results only (no projections):
   - **At a glance:** this week's category score and opponent, standings, and roster spots.
@@ -274,7 +277,8 @@ the app and the CLI use that Postgres database instead. Nothing else changes.
 
 1. **Create the project.** In Vercel, choose **Add New > Project** and import this repository. No
    settings are needed: Vercel loads the app from `app.py`, installs `requirements.txt` and uses
-   Python 3.12 (from `.python-version`). The site won't work until it has a database.
+   Python 3.12 (from `.python-version`). `vercel.json` then builds the web app in `frontend/` with
+   Node. The site won't work until it has a database.
 2. **Add the database.** In the project's **Storage** tab, create a **Neon** database on the free
    plan, in AWS `us-east-1` (next to Vercel's default region, Washington, D.C.). Connecting it to
    the project adds `DATABASE_URL`.
@@ -418,7 +422,7 @@ cfl/
   analysis.py   projections, z-scores, team profiles, targets, trade partners
   api.py        FastAPI app (also serves the web app)
   auth.py       Sign in with Google, sessions, who may do what
-  web/          dashboard + trade builder (HTML/CSS/JS, no build)
+  web/dist/     the built web app (git-ignored)
   watch.py      day-to-day change tracking: IR moves, roster changes, category trends
   reconcile.py  compare a league-wide contract sheet with the app; import missing contracts
   changes.py    change log: compares every player's team and contract after each sync and edit
@@ -427,6 +431,7 @@ cfl/
   fsm.py        state machines for the offseason: checked, logged moves that two people can't both win
   __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
+frontend/       the web app's source (HTML, CSS, JS), built with Vite
 tests/          offline unit tests (pytest)
 data/           league.db (git-ignored)
 ```
