@@ -36,7 +36,7 @@ cd frontend && npm run dev               # the page at http://localhost:5173, up
 Vite sends the API's paths to port 8000. It reads them from `frontend/openapi.json`, so after you
 add an endpoint, run `python -m cfl openapi`. A test fails until you do.
 
-Before a PR, run `npm run check` in `frontend/` (Biome, then TypeScript) and `pytest`.
+Before a PR, run `npm run check` in `frontend/` (Biome, TypeScript, then Vitest) and `pytest`.
 
 - **Dashboard.** A GM's overview of a team, from real results only (no projections):
   - **At a glance:** this week's category score and opponent, standings, and roster spots.

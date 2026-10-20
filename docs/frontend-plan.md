@@ -5,8 +5,8 @@ offseason features in [offseason-plan.md](offseason-plan.md) are the reason: off
 draft room are workflows, and the current file has no good place for them. The API keeps its role:
 FastAPI owns every rule and every state machine.
 
-Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done: Vite builds and
-serves the page, and `npm run check` runs Biome and TypeScript. F1 is next.
+Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done. F1 is in progress:
+`format.ts` and Vitest are done.
 
 ## Why now
 
@@ -457,8 +457,8 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
 - **Views** use Testing Library, with MSW handlers that return fixtures. They check what a GM sees:
   text, buttons, and disabled buttons with their blockers.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
-- **`npm run check`** runs `biome check` and `tsc`. F1 adds `vitest run` with the first tests. Run
-  it and `pytest` before each PR.
+- **`npm run check`** runs `biome check`, `tsc` and `vitest run`. Run it and `pytest` before each
+  PR.
 
 ```ts
 // src/machines/offerSheet.test.ts
@@ -488,8 +488,8 @@ milestone whose screens it builds.
 | | What | With offseason milestone |
 |---|---|---|
 | **F0. Toolchain** | `frontend/` with Vite, TypeScript and Biome. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. `python -m cfl openapi` and the staleness test, for the dev proxy. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
-| **F1. Shared parts** | `format.ts` (moved from `app.js`) and Vitest, with its tests. `errors.ts`, `client.ts`, the query client, and the generator. The components, and the bridge. | Before 1 |
-| **F2. Offseason hub** | The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
+| **F1. Shared parts** | In four PRs: `format.ts` (moved from `app.js`) and Vitest; the generated API types; `errors.ts` and `client.ts`; React, the query client and the bridge, with the first view. | Before 1 |
+| **F2. Offseason hub** | Each component (`Card`, `Tile`, ...) comes with the first view that uses it. The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
 | **F3. Qualifying** | Your RFAs, with Qualify (years) or Let go, and the cap and bank impact. | 2. Qualifying |
 | **F4. Offer sheets** | The RFA market and the offer form (`offerSheet`). Your RFAs with Match or Let go (`matchDecision`). Every offer, and your signings' years. | 3. Offer sheets |
 | **F5. Draft room** | The board with polling, your pick (`draftPick`), and your list. | 4. Entry draft |
