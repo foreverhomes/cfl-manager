@@ -815,6 +815,13 @@ def test_web_app_is_revalidated_on_every_load(web_build):
     assert client.get("/").headers["cache-control"] == "no-cache"
 
 
+def test_the_frontends_copy_of_the_api_contract_is_current():
+    from cfl.api import app
+    from cfl.config import ROOT
+    committed = json.loads((ROOT / "frontend" / "openapi.json").read_text())
+    assert committed == app.openapi(), "the API changed: run python -m cfl openapi"
+
+
 def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):
     from cfl import publish as P
     settings = _owned_league(conn, tmp_path)

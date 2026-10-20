@@ -1,0 +1,2014 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CFL Manager",
+    "description": "Local store + analysis API for a Fantrax fantasy hockey league.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/auth/config": {
+      "get": {
+        "summary": "Auth Config",
+        "description": "What the sign-in page needs: whether logins are on, and the (public) Google client id.",
+        "operationId": "auth_config_auth_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "summary": "Auth Me",
+        "description": "Who's signed in, including someone still waiting for approval. 401 when nobody is.",
+        "operationId": "auth_me_auth_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/google": {
+      "post": {
+        "summary": "Auth Google",
+        "description": "Where Google's sign-in page posts the ID token (the button's redirect mode: its popup doesn't\nopen in some browsers, such as Firefox with strict tracking protection). Someone new is recorded\nas waiting for the admin's approval. Either way it's back to the page, with ?signin=failed if\nthe token didn't check out.",
+        "operationId": "auth_google_auth_google_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "Auth Logout",
+        "operationId": "auth_logout_auth_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync": {
+      "post": {
+        "summary": "Sync",
+        "operationId": "sync_sync_post",
+        "parameters": [
+          {
+            "name": "resources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Subset of: league, players, rosters, standings, matchups, stats, schedule, match, bios, salaries",
+              "title": "Resources"
+            },
+            "description": "Subset of: league, players, rosters, standings, matchups, stats, schedule, match, bios, salaries"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/publish": {
+      "get": {
+        "summary": "Publish Status",
+        "description": "Whether sheet publishing is set up, and when each app-owned team's sheet was last written.",
+        "operationId": "publish_status_publish_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Publish Now",
+        "description": "Write app-owned teams' contracts to their Google Sheets now.",
+        "operationId": "publish_now_publish_post",
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Write even if nothing changed",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Write even if nothing changed"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/log": {
+      "get": {
+        "summary": "Sync Log",
+        "operationId": "sync_log_sync_log_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/league": {
+      "get": {
+        "summary": "League",
+        "operationId": "league_league_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/categories": {
+      "get": {
+        "summary": "Categories",
+        "operationId": "categories_categories_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams": {
+      "get": {
+        "summary": "Teams",
+        "operationId": "teams_teams_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/standings": {
+      "get": {
+        "summary": "Standings",
+        "operationId": "standings_standings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/roster": {
+      "get": {
+        "summary": "Team Roster",
+        "operationId": "team_roster_teams__team_id__roster_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/overview": {
+      "get": {
+        "summary": "Team Overview",
+        "description": "The dashboard: this week's matchup, season results by category, the roster with this NHL\nseason's stats, and roster spots.",
+        "operationId": "team_overview_teams__team_id__overview_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/contracts": {
+      "get": {
+        "summary": "Team Contracts",
+        "description": "Contracts from the team's salary sheet, how each line matched a Fantrax player, and the\ncap summary. Empty when no sheet is configured for the team (see salary_sheets.json).",
+        "operationId": "team_contracts_teams__team_id__contracts_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matchups": {
+      "get": {
+        "summary": "Matchups",
+        "operationId": "matchups_matchups_get",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players": {
+      "get": {
+        "summary": "Players",
+        "operationId": "players_players_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "all, fa, or rostered",
+              "default": "all",
+              "title": "Status"
+            },
+            "description": "all, fa, or rostered"
+          },
+          {
+            "name": "position",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "F, D, G, C, LW or RW",
+              "title": "Position"
+            },
+            "description": "F, D, G, C, LW or RW"
+          },
+          {
+            "name": "team_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Name search",
+              "title": "Q"
+            },
+            "description": "Name search"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "value or adp",
+              "default": "value",
+              "title": "Sort"
+            },
+            "description": "value or adp"
+          },
+          {
+            "name": "min_games",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Min Games"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{fantrax_id}": {
+      "get": {
+        "summary": "Player",
+        "operationId": "player_players__fantrax_id__get",
+        "parameters": [
+          {
+            "name": "fantrax_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fantrax Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{fantrax_id}/contract": {
+      "get": {
+        "summary": "Player Contract",
+        "description": "The player's contract as the app uses it, what his salary sheet says, and any edit made here.",
+        "operationId": "player_contract_players__fantrax_id__contract_get",
+        "parameters": [
+          {
+            "name": "fantrax_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fantrax Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Edit Player Contract",
+        "description": "Set how many years are left on a contract (and its type). It overrides the salary sheet, and\nsurvives syncs, until reverted. The salary stays as it is unless one is given. A GM can edit\nplayers on their own team; the admin, anyone.",
+        "operationId": "edit_player_contract_players__fantrax_id__contract_put",
+        "parameters": [
+          {
+            "name": "fantrax_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fantrax Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContractEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Revert Player Contract",
+        "description": "Drop the app's contract for this player (for a sheet-read team, the sheet applies again).",
+        "operationId": "revert_player_contract_players__fantrax_id__contract_delete",
+        "parameters": [
+          {
+            "name": "fantrax_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fantrax Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/players/{fantrax_id}/birth-date": {
+      "put": {
+        "summary": "Set Birth Date",
+        "description": "Set a player's birth date by hand (it decides RFA vs UFA). Syncs never overwrite it.",
+        "operationId": "set_birth_date_players__fantrax_id__birth_date_put",
+        "parameters": [
+          {
+            "name": "fantrax_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fantrax Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BirthDateEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/picks": {
+      "get": {
+        "summary": "Team Picks",
+        "description": "The team's draft picks in the upcoming drafts: its own picks it hasn't sent away, plus picks it\nreceived in trades or as RFA compensation. Also lists its own picks that are now elsewhere, and\nevery pick deal it was part of, newest first.",
+        "operationId": "team_picks_teams__team_id__picks_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/picks/deals": {
+      "post": {
+        "summary": "Record Pick Deal",
+        "description": "Move draft picks between two teams. A GM sends their own team's picks; picks coming back in a\ntrade need the other team's GM or the admin. RFA compensation goes one way only.",
+        "operationId": "record_pick_deal_picks_deals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PickDeal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/picks/deals/{deal_id}": {
+      "delete": {
+        "summary": "Undo Pick Deal",
+        "description": "Undo a pick deal, e.g. one recorded by mistake: its picks go back to the teams that sent them.",
+        "operationId": "undo_pick_deal_picks_deals__deal_id__delete",
+        "parameters": [
+          {
+            "name": "deal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Deal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/changes": {
+      "get": {
+        "summary": "Change Log",
+        "description": "Player and contract changes, newest first: roster moves from Fantrax syncs, salary and contract\nchanges, and draft picks changing hands (kind `pick`, one row per pick).",
+        "operationId": "change_log_changes_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Subset of: added, dropped, traded, salary, contract, pick",
+              "default": [],
+              "title": "Kind"
+            },
+            "description": "Subset of: added, dropped, traded, salary, contract, pick"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/offseason": {
+      "get": {
+        "summary": "Offseason",
+        "description": "Rostered players whose contracts end in an offseason, each an RFA or a UFA by league rules.",
+        "operationId": "offseason_offseason_get",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The offseason's year: RFA or UFA is decided on July 1 of it. Defaults to the next one, after this season",
+              "title": "Year"
+            },
+            "description": "The offseason's year: RFA or UFA is decided on July 1 of it. Defaults to the next one, after this season"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis/overview": {
+      "get": {
+        "summary": "Overview",
+        "description": "Every team's projected category ranks (1 = best) and actual H2H category records.",
+        "operationId": "overview_analysis_overview_get",
+        "parameters": [
+          {
+            "name": "lineup",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax",
+              "default": "best",
+              "title": "Lineup"
+            },
+            "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis/teams/{team_id}/profile": {
+      "get": {
+        "summary": "Profile",
+        "description": "Category strengths/weaknesses (projected and actual) plus your roster valued by your needs.",
+        "operationId": "profile_analysis_teams__team_id__profile_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "strategy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "marginal (swing categories), weakness (worst categories), or even",
+              "default": "marginal",
+              "title": "Strategy"
+            },
+            "description": "marginal (swing categories), weakness (worst categories), or even"
+          },
+          {
+            "name": "spread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "marginal strategy only: wider = flatter weights",
+              "default": 1.5,
+              "title": "Spread"
+            },
+            "description": "marginal strategy only: wider = flatter weights"
+          },
+          {
+            "name": "punt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated categories to ignore, e.g. Hit,PM",
+              "title": "Punt"
+            },
+            "description": "Comma-separated categories to ignore, e.g. Hit,PM"
+          },
+          {
+            "name": "weights",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)",
+              "title": "Weights"
+            },
+            "description": "Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)"
+          },
+          {
+            "name": "lineup",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax",
+              "default": "best",
+              "title": "Lineup"
+            },
+            "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis/teams/{team_id}/targets": {
+      "get": {
+        "summary": "Targets",
+        "description": "Players ranked by how much they help *your* category needs.",
+        "operationId": "targets_analysis_teams__team_id__targets_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "fa (waivers/free agents) or trade. Defaults to trade when from_team/offer is set, else fa",
+              "title": "Source"
+            },
+            "description": "fa (waivers/free agents) or trade. Defaults to trade when from_team/offer is set, else fa"
+          },
+          {
+            "name": "drop",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "With source=fa: player(s) on your roster to release for each pickup, comma-separated ids or unique parts of names. Without it, the best drop is found for each",
+              "title": "Drop"
+            },
+            "description": "With source=fa: player(s) on your roster to release for each pickup, comma-separated ids or unique parts of names. Without it, the best drop is found for each"
+          },
+          {
+            "name": "from_team",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only players on this team: team id or a unique part of its name (implies source=trade)",
+              "title": "From Team"
+            },
+            "description": "Only players on this team: team id or a unique part of its name (implies source=trade)"
+          },
+          {
+            "name": "offer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Player(s) on your roster to trade away, comma-separated ids or unique parts of names. Returns only players of comparable market value (implies source=trade)",
+              "title": "Offer"
+            },
+            "description": "Player(s) on your roster to trade away, comma-separated ids or unique parts of names. Returns only players of comparable market value (implies source=trade)"
+          },
+          {
+            "name": "tolerance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "With offer: how far the trade rank may differ, as a fraction (0.25 = within 25%, at least \u00b13 ranks)",
+              "default": 0.25,
+              "title": "Tolerance"
+            },
+            "description": "With offer: how far the trade rank may differ, as a fraction (0.25 = within 25%, at least \u00b13 ranks)"
+          },
+          {
+            "name": "position",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "F, D, G, C, LW or RW",
+              "title": "Position"
+            },
+            "description": "F, D, G, C, LW or RW"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "min_games",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Min NHL games (this + last season)",
+              "default": 5,
+              "title": "Min Games"
+            },
+            "description": "Min NHL games (this + last season)"
+          },
+          {
+            "name": "include_minors",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Minors"
+            }
+          },
+          {
+            "name": "strategy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "marginal (swing categories), weakness (worst categories), or even",
+              "default": "marginal",
+              "title": "Strategy"
+            },
+            "description": "marginal (swing categories), weakness (worst categories), or even"
+          },
+          {
+            "name": "spread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "marginal strategy only: wider = flatter weights",
+              "default": 1.5,
+              "title": "Spread"
+            },
+            "description": "marginal strategy only: wider = flatter weights"
+          },
+          {
+            "name": "punt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated categories to ignore, e.g. Hit,PM",
+              "title": "Punt"
+            },
+            "description": "Comma-separated categories to ignore, e.g. Hit,PM"
+          },
+          {
+            "name": "weights",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)",
+              "title": "Weights"
+            },
+            "description": "Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)"
+          },
+          {
+            "name": "lineup",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax",
+              "default": "best",
+              "title": "Lineup"
+            },
+            "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis/teams/{team_id}/trade-partners": {
+      "get": {
+        "summary": "Trade Partners",
+        "description": "Teams whose strengths cover your weaknesses (and vice versa), with candidate players each way.",
+        "operationId": "trade_partners_analysis_teams__team_id__trade_partners_get",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "per_team",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 3,
+              "title": "Per Team"
+            }
+          },
+          {
+            "name": "strategy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "marginal (swing categories), weakness (worst categories), or even",
+              "default": "marginal",
+              "title": "Strategy"
+            },
+            "description": "marginal (swing categories), weakness (worst categories), or even"
+          },
+          {
+            "name": "spread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "marginal strategy only: wider = flatter weights",
+              "default": 1.5,
+              "title": "Spread"
+            },
+            "description": "marginal strategy only: wider = flatter weights"
+          },
+          {
+            "name": "punt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated categories to ignore, e.g. Hit,PM",
+              "title": "Punt"
+            },
+            "description": "Comma-separated categories to ignore, e.g. Hit,PM"
+          },
+          {
+            "name": "weights",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)",
+              "title": "Weights"
+            },
+            "description": "Manual category weights, e.g. Hit:0,G:1.5 (overrides strategy)"
+          },
+          {
+            "name": "lineup",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax",
+              "default": "best",
+              "title": "Lineup"
+            },
+            "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis/trade": {
+      "post": {
+        "summary": "Trade",
+        "description": "Cost/benefit of a trade for both teams: change in expected category wins per week, per-category\nbefore/after, games and starts volume, roster-limit drops and the market value moving each way.\nLeave other_team_id empty for a waiver move: `give` players are released and `get` must be\nfree agents (or leave `get` empty to see what losing the `give` players costs you).",
+        "operationId": "trade_analysis_trade_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "summary": "Admin Users",
+        "description": "Everyone who has signed in or been added: requests waiting for approval first.",
+        "operationId": "admin_users_admin_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Admin Add User",
+        "description": "Give someone access before they sign in, or change it if they're already listed.",
+        "operationId": "admin_add_user_admin_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{email}": {
+      "put": {
+        "summary": "Admin Set Access",
+        "description": "Approve a request, link someone's team, or change their role.",
+        "operationId": "admin_set_access_admin_users__email__put",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Email"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAccess"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Admin Remove User",
+        "description": "Take away someone's access. If they sign in again, they're a new request.",
+        "operationId": "admin_remove_user_admin_users__email__delete",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Email"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BirthDateEdit": {
+        "properties": {
+          "birth_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Date"
+          }
+        },
+        "type": "object",
+        "title": "BirthDateEdit"
+      },
+      "ContractEdit": {
+        "properties": {
+          "years": {
+            "type": "integer",
+            "title": "Years"
+          },
+          "salary": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary"
+          },
+          "contract_type": {
+            "type": "string",
+            "title": "Contract Type",
+            "default": "STANDARD"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "years"
+        ],
+        "title": "ContractEdit"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "NewUser": {
+        "properties": {
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": "gm"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "active"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "NewUser"
+      },
+      "PickDeal": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "trade"
+          },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id"
+          },
+          "other_team_id": {
+            "type": "string",
+            "title": "Other Team Id"
+          },
+          "send": {
+            "items": {
+              "$ref": "#/components/schemas/PickRef"
+            },
+            "type": "array",
+            "title": "Send",
+            "default": []
+          },
+          "receive": {
+            "items": {
+              "$ref": "#/components/schemas/PickRef"
+            },
+            "type": "array",
+            "title": "Receive",
+            "default": []
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "team_id",
+          "other_team_id"
+        ],
+        "title": "PickDeal"
+      },
+      "PickRef": {
+        "properties": {
+          "draft_year": {
+            "type": "integer",
+            "title": "Draft Year"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "original_team_id": {
+            "type": "string",
+            "title": "Original Team Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "draft_year",
+          "round",
+          "original_team_id"
+        ],
+        "title": "PickRef"
+      },
+      "TradeRequest": {
+        "properties": {
+          "team_id": {
+            "type": "string",
+            "title": "Team Id",
+            "default": "me"
+          },
+          "give": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Give",
+            "default": []
+          },
+          "other_team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other Team Id"
+          },
+          "get": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Get",
+            "default": []
+          },
+          "lineup": {
+            "type": "string",
+            "title": "Lineup",
+            "default": "best"
+          },
+          "spread": {
+            "type": "number",
+            "title": "Spread",
+            "default": 1.5
+          }
+        },
+        "type": "object",
+        "title": "TradeRequest"
+      },
+      "UserAccess": {
+        "properties": {
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": "gm"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "active"
+          }
+        },
+        "type": "object",
+        "title": "UserAccess"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

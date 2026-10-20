@@ -1,4 +1,4 @@
-"""CLI: python -m cfl {sync,import-sqlite,serve,publish,reconcile-contracts,teams,profile,targets,watch}"""
+"""CLI: python -m cfl {sync,import-sqlite,serve,openapi,publish,reconcile-contracts,teams,profile,targets,watch}"""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ import sys
 from typing import List, Optional
 
 from . import analysis as A
-from .config import get_settings
+from .config import ROOT, get_settings
 from .db import connect
 from .sync import RESOURCES, sync_all
 
@@ -137,6 +137,12 @@ def cmd_serve(args) -> None:
     uvicorn.run("cfl.api:app", host=args.host, port=args.port, reload=args.reload)
 
 
+def cmd_openapi(_args) -> None:
+    from .api import app
+
+    (ROOT / "frontend" / "openapi.json").write_text(json.dumps(app.openapi(), indent=2) + "\n")
+
+
 def cmd_teams(_args) -> None:
     settings = get_settings()
     ctx = A.load_context(connect(settings.database), settings)
@@ -248,6 +254,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--reload", action="store_true")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("openapi", help="Write the API's OpenAPI document for the frontend")
+    p.set_defaults(func=cmd_openapi)
 
     p = sub.add_parser("publish", help="Write app-owned teams' contracts to their Google Sheets")
     p.add_argument("--force", action="store_true", help="Write even if nothing changed")
