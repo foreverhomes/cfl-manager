@@ -5,7 +5,8 @@ offseason features in [offseason-plan.md](offseason-plan.md) are the reason: off
 draft room are workflows, and the current file has no good place for them. The API keeps its role:
 FastAPI owns every rule and every state machine.
 
-Status: accepted on October 20, 2026 (see [Decisions](#decisions)). Nothing is built. F0 is next.
+Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is in progress: Vite builds
+the page, and FastAPI serves the build.
 
 ## Why now
 
@@ -368,7 +369,8 @@ deployment before anything else.
 **Without Node.** The CLI, `pytest` and the API must keep working without Node or a build:
 
 - The `/static` mount doesn't check at import that `dist/` exists (`check_dir=False`).
-- The three tests that load `/` or `/privacy` use a stub build directory. Milestone F0 decides how.
+- The three tests that load `/` or `/privacy` use a stub build directory: a `web_build` fixture
+  writes one into `tmp_path`.
 
 **Dev.** Two processes:
 

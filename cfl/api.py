@@ -30,21 +30,13 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# The web app is served "no-cache": the browser keeps its copy but checks it with the server
+# The pages are served "no-cache": the browser keeps its copy but checks it with the server
 # (a cheap 304 when unchanged) on every load, so an update shows up without a hard refresh.
 NO_CACHE = {"Cache-Control": "no-cache"}
 
-
-class NoCacheStaticFiles(StaticFiles):
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        response.headers.update(NO_CACHE)
-        return response
-
-
-# "+" in an unencoded query string arrives as a space, so "+/-" shows up as "/-" after stripping.
-WEB_DIR = Path(__file__).resolve().parent / "web"
-app.mount("/static", NoCacheStaticFiles(directory=str(WEB_DIR)), name="static")
+# Written by `npm run build` in frontend/. The CLI and the tests run without it.
+WEB_DIR = Path(__file__).resolve().parent / "web" / "dist"
+app.mount("/static", StaticFiles(directory=str(WEB_DIR), check_dir=False), name="static")
 
 
 @app.get("/", include_in_schema=False)
@@ -58,6 +50,7 @@ def privacy():
     return FileResponse(str(WEB_DIR / "privacy.html"), headers=NO_CACHE)
 
 
+# "+" in an unencoded query string arrives as a space, so "+/-" shows up as "/-" after stripping.
 CATEGORY_ALIASES = {"pm": "+/-", "plusminus": "+/-", "/-": "+/-", "svpct": "SV%"}
 
 

@@ -6,7 +6,6 @@
   <title>CFL Manager</title>
   <!-- The theme picked on the Account page, applied before the page draws so it never flashes the other one. -->
   <script>try { var t = localStorage.getItem("cfl.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) {}</script>
-  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
@@ -358,6 +357,6 @@
   </dialog>
 
   <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
-  <script src="/static/app.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
