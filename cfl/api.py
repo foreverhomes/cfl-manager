@@ -28,6 +28,8 @@ app = FastAPI(
     title="CFL Manager",
     description="Local store + analysis API for a Fantrax fantasy hockey league.",
     version="0.1.0",
+    # Names the frontend's generated client methods: GET /teams/{team_id}/overview is cfl.teamOverview().
+    generate_unique_id_function=lambda route: route.name,
 )
 
 # The pages are served "no-cache": the browser keeps its copy but checks it with the server
