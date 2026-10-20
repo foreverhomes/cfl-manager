@@ -424,6 +424,7 @@ cfl/
   changes.py    change log: compares every player's team and contract after each sync and edit
   picks.py      draft picks: who owns each one, and the trades and RFA compensation that moved them
   offseason.py  contracts ending in each offseason, and whether each player becomes an RFA or a UFA
+  fsm.py        state machines for the offseason: checked, logged moves that two people can't both win
   __main__.py   CLI (sync / import-sqlite / serve / publish / reconcile-contracts / teams / profile / targets / watch)
 app.py          Vercel entrypoint
 tests/          offline unit tests (pytest)

@@ -1515,3 +1515,125 @@ def test_gms_send_their_own_picks_see_every_teams_and_undo_their_own_deals(conn,
     assert gm.delete("/picks/deals/{}".format(deal["deal_id"])).json() == {"ok": True, "picks": 1}
     assert len(gm.get("/teams/me/picks").json()["owned"]) == 16                       # own 15, plus t2's 3rd
     assert gm.delete("/picks/deals/{}".format(deal["deal_id"])).status_code == 404
+
+
+# --------------------------------------------------------------------------- state machines
+
+S1 = {"league_id": LEAGUE, "id": "s1"}
+
+
+def _offer_sheets(conn, match_guard=None):
+    """The plan's offer sheet machine, on a scratch table holding one $12 offer. Matching it needs the
+    cap space passed as the guard's ctx."""
+    from cfl.fsm import Machine, Transition
+    conn.execute("CREATE TABLE sheets (league_id TEXT NOT NULL, id TEXT NOT NULL, salary REAL NOT NULL, "
+                 "state TEXT NOT NULL, PRIMARY KEY (league_id, id))")
+    conn.execute("INSERT INTO sheets VALUES (?, 's1', 12, 'pending')", (LEAGUE,))
+    conn.commit()
+
+    def cap_space(conn, sheet, space):
+        return [] if space >= sheet["salary"] else [
+            "The owner has ${:g} of cap space for a ${:g} offer".format(space, sheet["salary"])]
+    return Machine("offer_sheet", "sheets", ["league_id", "id"], {
+        "match": Transition(frozenset({"pending"}), "matched", match_guard or cap_space),
+        "let_go": Transition(frozenset({"pending"}), "let_go"),
+        "expire": Transition(frozenset({"pending"}), "expired"),
+        "outbid": Transition(frozenset({"pending"}), "outbid"),
+        "void": Transition(frozenset({"matched", "let_go", "expired"}), "voided"),
+    })
+
+
+def _sheet(conn):
+    from cfl.db import row
+    return row(conn, "SELECT * FROM sheets WHERE id='s1'")
+
+
+def _events(conn):
+    from cfl.db import rows
+    return rows(conn, "SELECT machine, entity_id, trigger, from_state, to_state, actor, forced_reason, detail "
+                      "FROM machine_events ORDER BY id")
+
+
+def test_a_machine_moves_a_row_only_by_a_trigger_allowed_from_its_state(conn):
+    from cfl.fsm import Conflict
+    m = _offer_sheets(conn)
+    assert m.states == {"pending", "matched", "let_go", "expired", "outbid", "voided"}
+    for state in sorted(m.states):
+        for trigger, t in m.transitions.items():
+            conn.execute("UPDATE sheets SET state=?", (state,))
+            conn.commit()
+            if state in t.source:
+                assert m.fire(conn, S1, trigger, "Boss", ctx=20) == t.dest == _sheet(conn)["state"]
+            else:
+                with pytest.raises(Conflict, match="it's {}".format(state.replace("_", " "))):
+                    m.fire(conn, S1, trigger, "Boss", ctx=20)
+                assert _sheet(conn)["state"] == state
+    events = _events(conn)
+    assert len(events) == 7                                     # 4 moves from pending, and void from 3 states
+    assert events[0] == {"machine": "offer_sheet", "entity_id": "s1", "trigger": "void", "from_state": "expired",
+                         "to_state": "voided", "actor": "Boss", "forced_reason": None, "detail": None}
+
+    with pytest.raises(LookupError, match="No offer sheet s2"):
+        m.fire(conn, dict(S1, id="s2"), "void", "Boss")
+    with pytest.raises(ValueError, match="no move called withdraw"):
+        m.fire(conn, S1, "withdraw", "Boss")
+    with pytest.raises(ValueError, match="identified by league_id, id"):
+        m.fire(conn, {"id": "s1"}, "void", "Boss")
+
+
+def test_a_guard_blocks_a_move_until_the_admin_forces_it_with_a_reason(conn):
+    from cfl.fsm import Blocked
+    m = _offer_sheets(conn)
+    short = "The owner has $8 of cap space for a $12 offer"
+    assert m.available(conn, _sheet(conn), 8) == {"match": [short], "let_go": [], "expire": [], "outbid": []}
+
+    with pytest.raises(Blocked) as refused:
+        m.fire(conn, S1, "match", "Gm", ctx=8)
+    assert refused.value.reasons == [short]
+    with pytest.raises(Blocked):
+        m.fire(conn, S1, "match", "Boss", ctx=8, force_reason="  ")          # forcing takes a reason
+    assert (_sheet(conn)["state"], _events(conn)) == ("pending", [])
+
+    assert m.fire(conn, S1, "match", "Boss", ctx=8, force_reason="Commissioner's ruling") == "matched"
+    assert m.available(conn, _sheet(conn)) == {"void": []}
+    m.fire(conn, S1, "void", "Boss", force_reason="Entered by mistake")        # nothing to force past
+    forced, voided = _events(conn)
+    assert (forced["forced_reason"], json.loads(forced["detail"])) == ("Commissioner's ruling", {"overrode": [short]})
+    assert (voided["forced_reason"], voided["detail"]) == (None, None)
+
+
+def test_a_moves_effects_share_its_transaction_and_what_they_did_is_logged(conn):
+    m = _offer_sheets(conn)
+
+    def fail(conn, sheet):
+        conn.execute("UPDATE sheets SET salary = 99")
+        raise ValueError("That team doesn't own the 2027 round 3 pick")
+    with pytest.raises(ValueError, match="doesn't own"):
+        m.fire(conn, S1, "let_go", "Gm", effects=fail)
+    assert (_sheet(conn)["state"], _sheet(conn)["salary"], _events(conn)) == ("pending", 12, [])   # all undone
+
+    def send_picks(conn, sheet):
+        conn.execute("UPDATE sheets SET salary = salary + 1")
+        return {"pick_deal_id": "d1", "was": sheet["state"]}                  # the row as it was before the move
+    assert m.fire(conn, S1, "let_go", "Gm", effects=send_picks) == "let_go"
+    assert (_sheet(conn)["state"], _sheet(conn)["salary"]) == ("let_go", 13)
+    assert json.loads(_events(conn)[0]["detail"]) == {"pick_deal_id": "d1", "was": "pending"}
+
+
+def test_when_two_people_move_a_row_at_once_only_the_first_wins(conn, tmp_path):
+    from cfl.fsm import Conflict
+    other = []
+
+    def owner_lets_him_go_meanwhile(c, sheet, space):
+        # Between this move's read and its write, the owner lets the player go on another connection.
+        m.fire(other[0], S1, "let_go", "Owner")
+        return []
+    m = _offer_sheets(conn, match_guard=owner_lets_him_go_meanwhile)
+    other.append(connect(TEST_POSTGRES or tmp_path / "t.db"))
+    try:
+        with pytest.raises(Conflict, match="Someone else changed this offer sheet first"):
+            m.fire(conn, S1, "match", "Gm")
+    finally:
+        other[0].close()
+    assert _sheet(conn)["state"] == "let_go"
+    assert [(e["trigger"], e["actor"]) for e in _events(conn)] == [("let_go", "Owner")]

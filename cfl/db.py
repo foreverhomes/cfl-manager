@@ -245,6 +245,21 @@ CREATE TABLE IF NOT EXISTS pick_moves (
     moved_at        TEXT NOT NULL
 );
 
+-- Every state change of every state machine (see fsm.py): the offseason's audit trail.
+CREATE TABLE IF NOT EXISTS machine_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id       TEXT NOT NULL,
+    machine         TEXT NOT NULL,      -- which machine, e.g. phase / rfa / offer_sheet
+    entity_id       TEXT NOT NULL,      -- the row that moved: its key, without the league
+    trigger         TEXT NOT NULL,
+    from_state      TEXT,
+    to_state        TEXT NOT NULL,
+    actor           TEXT NOT NULL,      -- who, or "deadline"
+    forced_reason   TEXT,               -- set when the admin overrode a guard
+    detail          TEXT,               -- JSON: what the move's effects did, and any guard it overrode
+    at              TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS nhl_games (
     game_id         INTEGER PRIMARY KEY,
     game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
@@ -443,7 +458,7 @@ def copy_database(src: Connection, dst: Connection) -> Dict[str, int]:
             counts[table] = len(data)
         if isinstance(dst, PostgresConnection):
             # Ids came across as they were; new rows are numbered after them.
-            for table in ("sync_log", "player_changes", "pick_moves"):
+            for table in ("sync_log", "player_changes", "pick_moves", "machine_events"):
                 dst.execute("SELECT setval(pg_get_serial_sequence('{0}', 'id'), COALESCE(MAX(id), 0) + 1, false) "
                             "FROM {0}".format(table))
     return counts
