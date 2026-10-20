@@ -490,8 +490,8 @@ stateDiagram-v2
   players.
 
 Effects: a pending offer on the same player becomes `outbid`, and the new one's 24 hours start.
-The form shows the compensation and the cap and bank impact before submitting. Offers are public,
-as posts in the forum thread were.
+The form shows the compensation and the cap and bank impact before submitting, from a
+[preview](#api-and-ui). Offers are public, as posts in the forum thread were.
 
 **Match** (the owning GM). Guard: the owner has cap space for the offer's salary, net of the QO
 salary already counted ("provided they have space within the salary cap"). Effects:
@@ -752,7 +752,9 @@ Endpoints follow the existing style:
   user.
 - `POST /offseason/transitions/{trigger}`: admin.
 - `PUT /offseason/rfas/{player_id}`: qualify or let go.
+- `GET /offseason/rfas/{player_id}/preview?years=3`: what qualifying would do, without saving it.
 - `POST /offer-sheets`, then `POST /offer-sheets/{id}/{match|let-go|void}`.
+- `GET /offer-sheets/preview?player_id=…&salary=…`: what an offer would cost, without saving it.
 - `PUT` / `DELETE /cap-exemptions/{player_id}`: admin.
 - `GET /rules?year=2028`: every rule's value for a league year, with defaults and history.
 - `PUT /rules/{key}`: admin. Takes `{"value": ..., "from_year": 2028, "note": "...", "force_reason": null}`;
@@ -762,6 +764,19 @@ Endpoints follow the existing style:
 
 Each check runs in the API, not just in the page: 409 for a wrong state, 403 for a wrong person,
 and 400 with the guard's reasons.
+
+The page ([frontend-plan.md](frontend-plan.md)) needs three more things from these endpoints:
+
+- **Previews.** A form that shows an impact before it submits gets the impact from the server, so
+  the page never computes a rule itself. The offer sheet preview returns the compensation, the
+  offering team's cap space and contract-bank years after the offer, and the guard's reasons. The
+  qualifying preview does the same for one RFA and a number of years. Each runs the same guard as
+  the move it previews, and saves nothing.
+- **The server's time.** Every response with a deadline (`/offseason/state`, `/offer-sheets`,
+  `/draft`) includes `now`. Countdowns use the server's clock, so a wrong clock on a GM's computer
+  can't show the wrong time left.
+- **One read per screen.** `GET /draft` returns the whole board: every pick, who's on the clock,
+  when the clock ends, and `now`. One poll updates the screen.
 
 ## Testing
 
@@ -775,6 +790,7 @@ Machines make good tests:
   offer at once: exactly one wins.
 - **Lazy deadlines.** Move the clock, read, and check the expiry, the auto-pick, or the 1-year
   default.
+- **Previews.** A preview gives the same reasons that `fire()` gives for the same move.
 - **Rules.**
   - With no changes saved, every rule reads its default. The existing tests already cover today's
     values, so they check that moving the constants into the registry changed nothing.
