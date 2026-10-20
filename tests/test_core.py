@@ -819,7 +819,12 @@ def test_the_frontends_copy_of_the_api_contract_is_current():
     from cfl.api import app
     from cfl.config import ROOT
     committed = json.loads((ROOT / "frontend" / "openapi.json").read_text())
-    assert committed == app.openapi(), "the API changed: run python -m cfl openapi"
+    assert committed == app.openapi(), "the API changed: run npm run api in frontend/"
+
+
+def test_each_endpoint_in_the_contract_is_named_after_its_function():
+    from cfl.api import app
+    assert app.openapi()["paths"]["/teams/{team_id}/overview"]["get"]["operationId"] == "team_overview"
 
 
 def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):

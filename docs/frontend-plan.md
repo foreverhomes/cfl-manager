@@ -6,7 +6,7 @@ draft room are workflows, and the current file has no good place for them. The A
 FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done. F1 is in progress:
-`format.ts` and Vitest are done.
+`format.ts`, Vitest and the generated API client are done.
 
 ## Why now
 
@@ -183,13 +183,13 @@ declare module "@tanstack/react-query" {
 // src/queries/draft.ts
 export const draftBoard = queryOptions({
   queryKey: ["draft"],
-  queryFn: ({ signal }) => run(cfl.draft(), signal),   // cfl: the generated client
+  queryFn: ({ signal }) => run(cfl.draft(undefined), signal),   // cfl: the generated client
   refetchInterval: 30_000,   // TanStack Query polls only while the tab is visible
 });
 ```
 
-The generated client's real shape comes out of milestone [F0](#milestones). `cfl.draft()` stands
-for whatever it generates for `GET /draft`.
+`cfl.draft` is the generated method for a `GET /draft` route whose function is `draft` (see
+[the API contract](#the-api-contract)).
 
 ### XState: workflows only
 
@@ -281,6 +281,8 @@ Today's routes return plain dicts, so FastAPI's OpenAPI document has no response
 - **`npm run api` regenerates the client.** A new CLI command, `python -m cfl openapi`, writes
   `app.openapi()` to `frontend/openapi.json`. Then `openapigen` writes `src/api/generated.ts` from
   it.
+- **Operation IDs are the route functions' names,** so `GET /teams/{team_id}/overview` is
+  `cfl.teamOverview(teamId, undefined)`. Each method takes an options argument, often `undefined`.
 - **Commit both files,** so a change to the contract shows in review.
 - **A pytest test compares `frontend/openapi.json` with `app.openapi()`.** A Python change without
   `npm run api` fails `pytest`.
@@ -501,7 +503,7 @@ F0 to F4 are what June 2027 needs. F5 can wait a year, as the draft can.
 
 | Risk | What this plan does |
 |---|---|
-| Effect 4 is three weeks old, and Effect marks its HTTP modules unstable. | Effect stays in `src/api/`. Pin the versions, and upgrade the generator with Effect. If the generated client doesn't fit, F0 writes a small client over `fetch` and keeps the generated Schemas. |
+| Effect 4 is three weeks old, and Effect marks its HTTP modules unstable. | Effect stays in `src/api/`. Pin the versions, and upgrade the generator with Effect. The generated client passes strict TypeScript, so the fallback over `fetch` isn't needed. |
 | Learning Effect and XState at the same time. | Effect stays in one folder and XState in four machines. Every other screen is plain React and TanStack Query. |
 | Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has two exports and goes with `app.js`. |
 | The first Node build on Vercel. | F0 proves it on a preview deployment before any other work. |

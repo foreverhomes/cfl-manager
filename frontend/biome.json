@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "files": { "includes": ["**", "!src/legacy", "!src/styles.css", "!openapi.json", "!*.html"] },
+  "files": {
+    "includes": ["**", "!src/legacy", "!src/styles.css", "!openapi.json", "!*.html", "!src/api/generated.ts"]
+  },
   "formatter": { "indentStyle": "space", "lineWidth": 120 }
 }

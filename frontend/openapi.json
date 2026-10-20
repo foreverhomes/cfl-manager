@@ -10,7 +10,7 @@
       "get": {
         "summary": "Auth Config",
         "description": "What the sign-in page needs: whether logins are on, and the (public) Google client id.",
-        "operationId": "auth_config_auth_config_get",
+        "operationId": "auth_config",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -27,7 +27,7 @@
       "get": {
         "summary": "Auth Me",
         "description": "Who's signed in, including someone still waiting for approval. 401 when nobody is.",
-        "operationId": "auth_me_auth_me_get",
+        "operationId": "auth_me",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -44,7 +44,7 @@
       "post": {
         "summary": "Auth Google",
         "description": "Where Google's sign-in page posts the ID token (the button's redirect mode: its popup doesn't\nopen in some browsers, such as Firefox with strict tracking protection). Someone new is recorded\nas waiting for the admin's approval. Either way it's back to the page, with ?signin=failed if\nthe token didn't check out.",
-        "operationId": "auth_google_auth_google_post",
+        "operationId": "auth_google",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -60,7 +60,7 @@
     "/auth/logout": {
       "post": {
         "summary": "Auth Logout",
-        "operationId": "auth_logout_auth_logout_post",
+        "operationId": "auth_logout",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -76,7 +76,7 @@
     "/health": {
       "get": {
         "summary": "Health",
-        "operationId": "health_health_get",
+        "operationId": "health",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -92,7 +92,7 @@
     "/sync": {
       "post": {
         "summary": "Sync",
-        "operationId": "sync_sync_post",
+        "operationId": "sync",
         "parameters": [
           {
             "name": "resources",
@@ -142,7 +142,7 @@
       "get": {
         "summary": "Publish Status",
         "description": "Whether sheet publishing is set up, and when each app-owned team's sheet was last written.",
-        "operationId": "publish_status_publish_get",
+        "operationId": "publish_status",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -157,7 +157,7 @@
       "post": {
         "summary": "Publish Now",
         "description": "Write app-owned teams' contracts to their Google Sheets now.",
-        "operationId": "publish_now_publish_post",
+        "operationId": "publish_now",
         "parameters": [
           {
             "name": "force",
@@ -197,7 +197,7 @@
     "/sync/log": {
       "get": {
         "summary": "Sync Log",
-        "operationId": "sync_log_sync_log_get",
+        "operationId": "sync_log",
         "parameters": [
           {
             "name": "limit",
@@ -235,7 +235,7 @@
     "/league": {
       "get": {
         "summary": "League",
-        "operationId": "league_league_get",
+        "operationId": "league",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -251,7 +251,7 @@
     "/categories": {
       "get": {
         "summary": "Categories",
-        "operationId": "categories_categories_get",
+        "operationId": "categories",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -267,7 +267,7 @@
     "/teams": {
       "get": {
         "summary": "Teams",
-        "operationId": "teams_teams_get",
+        "operationId": "teams",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -283,7 +283,7 @@
     "/standings": {
       "get": {
         "summary": "Standings",
-        "operationId": "standings_standings_get",
+        "operationId": "standings",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -299,7 +299,7 @@
     "/teams/{team_id}/roster": {
       "get": {
         "summary": "Team Roster",
-        "operationId": "team_roster_teams__team_id__roster_get",
+        "operationId": "team_roster",
         "parameters": [
           {
             "name": "team_id",
@@ -337,7 +337,7 @@
       "get": {
         "summary": "Team Overview",
         "description": "The dashboard: this week's matchup, season results by category, the roster with this NHL\nseason's stats, and roster spots.",
-        "operationId": "team_overview_teams__team_id__overview_get",
+        "operationId": "team_overview",
         "parameters": [
           {
             "name": "team_id",
@@ -375,7 +375,7 @@
       "get": {
         "summary": "Team Contracts",
         "description": "Contracts from the team's salary sheet, how each line matched a Fantrax player, and the\ncap summary. Empty when no sheet is configured for the team (see salary_sheets.json).",
-        "operationId": "team_contracts_teams__team_id__contracts_get",
+        "operationId": "team_contracts",
         "parameters": [
           {
             "name": "team_id",
@@ -412,7 +412,7 @@
     "/matchups": {
       "get": {
         "summary": "Matchups",
-        "operationId": "matchups_matchups_get",
+        "operationId": "matchups",
         "parameters": [
           {
             "name": "period",
@@ -456,7 +456,7 @@
     "/players": {
       "get": {
         "summary": "Players",
-        "operationId": "players_players_get",
+        "operationId": "players",
         "parameters": [
           {
             "name": "status",
@@ -590,7 +590,7 @@
     "/players/{fantrax_id}": {
       "get": {
         "summary": "Player",
-        "operationId": "player_players__fantrax_id__get",
+        "operationId": "player",
         "parameters": [
           {
             "name": "fantrax_id",
@@ -628,7 +628,7 @@
       "get": {
         "summary": "Player Contract",
         "description": "The player's contract as the app uses it, what his salary sheet says, and any edit made here.",
-        "operationId": "player_contract_players__fantrax_id__contract_get",
+        "operationId": "player_contract",
         "parameters": [
           {
             "name": "fantrax_id",
@@ -664,7 +664,7 @@
       "put": {
         "summary": "Edit Player Contract",
         "description": "Set how many years are left on a contract (and its type). It overrides the salary sheet, and\nsurvives syncs, until reverted. The salary stays as it is unless one is given. A GM can edit\nplayers on their own team; the admin, anyone.",
-        "operationId": "edit_player_contract_players__fantrax_id__contract_put",
+        "operationId": "edit_player_contract",
         "parameters": [
           {
             "name": "fantrax_id",
@@ -710,7 +710,7 @@
       "delete": {
         "summary": "Revert Player Contract",
         "description": "Drop the app's contract for this player (for a sheet-read team, the sheet applies again).",
-        "operationId": "revert_player_contract_players__fantrax_id__contract_delete",
+        "operationId": "revert_player_contract",
         "parameters": [
           {
             "name": "fantrax_id",
@@ -748,7 +748,7 @@
       "put": {
         "summary": "Set Birth Date",
         "description": "Set a player's birth date by hand (it decides RFA vs UFA). Syncs never overwrite it.",
-        "operationId": "set_birth_date_players__fantrax_id__birth_date_put",
+        "operationId": "set_birth_date",
         "parameters": [
           {
             "name": "fantrax_id",
@@ -796,7 +796,7 @@
       "get": {
         "summary": "Team Picks",
         "description": "The team's draft picks in the upcoming drafts: its own picks it hasn't sent away, plus picks it\nreceived in trades or as RFA compensation. Also lists its own picks that are now elsewhere, and\nevery pick deal it was part of, newest first.",
-        "operationId": "team_picks_teams__team_id__picks_get",
+        "operationId": "team_picks",
         "parameters": [
           {
             "name": "team_id",
@@ -834,7 +834,7 @@
       "post": {
         "summary": "Record Pick Deal",
         "description": "Move draft picks between two teams. A GM sends their own team's picks; picks coming back in a\ntrade need the other team's GM or the admin. RFA compensation goes one way only.",
-        "operationId": "record_pick_deal_picks_deals_post",
+        "operationId": "record_pick_deal",
         "requestBody": {
           "content": {
             "application/json": {
@@ -871,7 +871,7 @@
       "delete": {
         "summary": "Undo Pick Deal",
         "description": "Undo a pick deal, e.g. one recorded by mistake: its picks go back to the teams that sent them.",
-        "operationId": "undo_pick_deal_picks_deals__deal_id__delete",
+        "operationId": "undo_pick_deal",
         "parameters": [
           {
             "name": "deal_id",
@@ -909,7 +909,7 @@
       "get": {
         "summary": "Change Log",
         "description": "Player and contract changes, newest first: roster moves from Fantrax syncs, salary and contract\nchanges, and draft picks changing hands (kind `pick`, one row per pick).",
-        "operationId": "change_log_changes_get",
+        "operationId": "change_log",
         "parameters": [
           {
             "name": "team_id",
@@ -979,7 +979,7 @@
       "get": {
         "summary": "Offseason",
         "description": "Rostered players whose contracts end in an offseason, each an RFA or a UFA by league rules.",
-        "operationId": "offseason_offseason_get",
+        "operationId": "offseason",
         "parameters": [
           {
             "name": "year",
@@ -1026,7 +1026,7 @@
       "get": {
         "summary": "Overview",
         "description": "Every team's projected category ranks (1 = best) and actual H2H category records.",
-        "operationId": "overview_analysis_overview_get",
+        "operationId": "overview",
         "parameters": [
           {
             "name": "lineup",
@@ -1067,7 +1067,7 @@
       "get": {
         "summary": "Profile",
         "description": "Category strengths/weaknesses (projected and actual) plus your roster valued by your needs.",
-        "operationId": "profile_analysis_teams__team_id__profile_get",
+        "operationId": "profile",
         "parameters": [
           {
             "name": "team_id",
@@ -1178,7 +1178,7 @@
       "get": {
         "summary": "Targets",
         "description": "Players ranked by how much they help *your* category needs.",
-        "operationId": "targets_analysis_teams__team_id__targets_get",
+        "operationId": "targets",
         "parameters": [
           {
             "name": "team_id",
@@ -1424,7 +1424,7 @@
       "get": {
         "summary": "Trade Partners",
         "description": "Teams whose strengths cover your weaknesses (and vice versa), with candidate players each way.",
-        "operationId": "trade_partners_analysis_teams__team_id__trade_partners_get",
+        "operationId": "trade_partners",
         "parameters": [
           {
             "name": "team_id",
@@ -1545,7 +1545,7 @@
       "post": {
         "summary": "Trade",
         "description": "Cost/benefit of a trade for both teams: change in expected category wins per week, per-category\nbefore/after, games and starts volume, roster-limit drops and the market value moving each way.\nLeave other_team_id empty for a waiver move: `give` players are released and `get` must be\nfree agents (or leave `get` empty to see what losing the `give` players costs you).",
-        "operationId": "trade_analysis_trade_post",
+        "operationId": "trade",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1582,7 +1582,7 @@
       "get": {
         "summary": "Admin Users",
         "description": "Everyone who has signed in or been added: requests waiting for approval first.",
-        "operationId": "admin_users_admin_users_get",
+        "operationId": "admin_users",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1597,7 +1597,7 @@
       "post": {
         "summary": "Admin Add User",
         "description": "Give someone access before they sign in, or change it if they're already listed.",
-        "operationId": "admin_add_user_admin_users_post",
+        "operationId": "admin_add_user",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1634,7 +1634,7 @@
       "put": {
         "summary": "Admin Set Access",
         "description": "Approve a request, link someone's team, or change their role.",
-        "operationId": "admin_set_access_admin_users__email__put",
+        "operationId": "admin_set_access",
         "parameters": [
           {
             "name": "email",
@@ -1680,7 +1680,7 @@
       "delete": {
         "summary": "Admin Remove User",
         "description": "Take away someone's access. If they sign in again, they're a new request.",
-        "operationId": "admin_remove_user_admin_users__email__delete",
+        "operationId": "admin_remove_user",
         "parameters": [
           {
             "name": "email",
