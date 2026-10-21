@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import openapi from "./openapi.json";
+import openapi from "./openapi.json" with { type: "json" };
 
 const prefixes = new Set(Object.keys(openapi.paths).map((path) => `/${path.split("/")[1]}`));
 

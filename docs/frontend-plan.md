@@ -6,7 +6,7 @@ draft room are workflows, and the current file has no good place for them. The A
 FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done. F1 is in progress:
-`format.ts`, Vitest and the generated API client are done.
+`format.ts`, Vitest, the generated API client, `errors.ts` and `client.ts` are done.
 
 ## Why now
 
@@ -119,7 +119,8 @@ What Effect does here:
   example `Effect.catchTag("Blocked", ...)` or `error instanceof Blocked`.
 - **It cancels.** TanStack Query's abort signal interrupts the call and its `fetch`. This replaces
   the request counters.
-- **It retries** a GET after a network error, for example during a cold start.
+- **Retries are TanStack Query's.** It retries a failed query, and the query client limits that to
+  `Failed` with status 0, a network error such as a cold start.
 
 ```ts
 // src/api/errors.ts
@@ -136,22 +137,24 @@ export type ApiError = Unauthorized | Forbidden | Conflict | Blocked | NotSynced
 ```
 
 ```ts
-// src/api/client.ts
-import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
-import { FetchHttpClient, type HttpClient } from "effect/http";
-import type { ApiError } from "./errors";
+// src/api/client.ts (part)
+export const cfl = make(Effect.runSync(Effect.provide(Effect.service(HttpClient.HttpClient), FetchHttpClient.layer)));
 
-const runtime = ManagedRuntime.make(FetchHttpClient.layer);
-
-// Rejects with the ApiError itself, so TanStack Query's `error` is typed.
-export async function run<A>(call: Effect.Effect<A, ApiError, HttpClient.HttpClient>, signal?: AbortSignal): Promise<A> {
-  const exit = await runtime.runPromiseExit(call, { signal });
+// Rejects with an ApiError, so TanStack Query's `error` is typed.
+export async function run<A, E>(call: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> {
+  const exit = await Effect.runPromiseExit(call, { signal });
   if (Exit.isSuccess(exit)) return exit.value;
-  throw Cause.squash(exit.cause);
+  const error = Cause.squash(exit.cause);
+  if (HttpClientError.isHttpClientError(error) && error.reason._tag === "StatusCodeError") {
+    throw apiError(error.reason.response.status, Option.getOrUndefined(fromJson(error.reason.description)));
+  }
+  throw new Failed({ status: 0, message: String(error) });
 }
 ```
 
-`client.ts` also turns each failed response into an `ApiError`:
+`cfl` is the generated client, built once over `fetch`, so a call is one expression:
+`run(cfl.teamOverview(teamId, undefined), signal)`. `apiError()` turns each failed response into
+an `ApiError`. It decodes the body with an Effect Schema:
 
 | Response | Error |
 |---|---|
@@ -160,7 +163,8 @@ export async function run<A>(call: Effect.Effect<A, ApiError, HttpClient.HttpCli
 | 409 with `code: "conflict"` | `Conflict`. Someone else moved it first. |
 | Any other 409 | `NotSynced`, the existing "League not synced yet" |
 | 400 with `code: "blocked"` | `Blocked`, with the guard's reasons |
-| Anything else | `Failed` |
+| Any other status | `Failed`, with the status and the body's `detail` or `detail.error` |
+| The network fails, the call is aborted, or anything else | `Failed`, with status 0 |
 
 Effect 4.0.0 came out on October 1, 2026. Effect marks its core and `Schema` stable. It marks its
 HTTP modules (`effect/http`) unstable, so a minor release can change them. Pin `effect` and
@@ -388,7 +392,7 @@ logins are on locally. `.claude/launch.json` gets a second entry for the Vite se
 // frontend/vite.config.ts
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import openapi from "./openapi.json";
+import openapi from "./openapi.json" with { type: "json" };
 
 const prefixes = new Set(Object.keys(openapi.paths).map((path) => `/${path.split("/")[1]}`));
 

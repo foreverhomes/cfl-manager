@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "module": "preserve",
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["vite/client"]
