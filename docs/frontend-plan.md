@@ -44,8 +44,8 @@ endpoints.
   mean the API doesn't have to move under `/api`.
 - **One Vercel project and one deployment.** FastAPI still serves the page.
 - **Logins.** The session is a same-origin cookie, as today.
-- **`styles.css`.** The React components use its classes (`card`, `kpis`, `tile`, `pill`,
-  `segmented`). There's no CSS framework.
+- **`styles.css`.** The legacy markup keeps its classes (`card`, `kpis`, `tile`, `pill`,
+  `segmented`). React views use Mantine, themed to its tokens (see [the stack](#the-stack)).
 
 ## The stack
 
@@ -53,6 +53,7 @@ endpoints.
 |---|---|---|
 | Language | TypeScript 7, `strict` | Types for the API's shapes, and for each machine's states and events. |
 | UI | React 19 | XState's and Effect's React bindings target React. It has the most libraries and examples. |
+| Components | Mantine 9 | Each component's CSS is imported on its own, in Mantine's CSS layer, so `styles.css` wins any conflict. Its variables point at the `styles.css` tokens, and dark mode follows `data-theme` (`src/views/theme.ts`). |
 | Build | Vite 8 | A dev server with Fast Refresh and a proxy to FastAPI. Production builds with hashed file names. |
 | Server data | TanStack Query 5 | Caching, deduplication, invalidation, refetch on focus and polling. It replaces `cached()`, the request counters and `resetCaches()`. |
 | API calls and errors | Effect 4 | Decoded responses, typed errors for 400/403/409, cancellation and retries. Only in `src/api/` (see [Effect](#effect-the-api-boundary)). |
@@ -74,6 +75,7 @@ point, decide whether TanStack Router's typed search params are worth one more l
 | Preact | A much smaller runtime with React's API. | The XState and Effect bindings target React, so Preact needs its compatibility layer. |
 | Svelte 5 or Solid | Smaller and faster than React. | A second way to think about UI. Fewer people use their XState and Effect bindings. |
 | `@effect/atom-react` instead of TanStack Query | The official Effect binding. Typed errors reach components as values. | Its first stable release came with Effect 4 in October 2026, and few examples exist yet. A later switch stays inside `src/queries/`. |
+| shadcn/ui on Tailwind instead of Mantine | You own the components' code. Theming is CSS variables. | Tailwind's reset restyles the legacy page. A CSS framework to learn, on top of Effect and XState. The components are copied into the repo. |
 
 React's runtime is the largest of these. That doesn't matter for an app that 11 GMs use. With
 React, TanStack Query and Effect in one file, the page was 146 kB gzipped. The legacy page alone is 25 kB.
@@ -343,8 +345,12 @@ frontend/
       client.ts
     queries/              one file per resource: keys and queryOptions
     machines/             XState machines, with no React imports
-    components/           Card, Tile, Segmented, SectionedTable, Tip, ConfirmDialog, Countdown
+    components/           the app's own components, built on Mantine
     views/                one folder per tab: offseason/, rules/, draft/, ...
+      theme.ts            Mantine's CSS imports, the theme, and the color-scheme bridge
+      Providers.tsx       Mantine and TanStack Query, for mountView and the tests
+      test-utils.tsx      renderView()
+    test-setup.ts         matchMedia for jsdom
 cfl/web/dist/             the build, which git ignores and FastAPI serves
 ```
 
@@ -479,7 +485,8 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
 - **Views** use Testing Library, with MSW handlers that return fixtures. They check what a GM sees:
   text, buttons, and disabled buttons with their blockers. A view test starts with
   `// @vitest-environment jsdom`. Other tests run in Node. `server.listen({ onUnhandledFrame: "error" })`
-  (MSW 3's name for it) fails a test on any request that it doesn't answer.
+  (MSW 3's name for it) fails a test on any request that it doesn't answer. `renderView()` wraps a
+  view in the page's providers, and `src/test-setup.ts` adds the `matchMedia` that Mantine needs.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
 - **`npm run check`** runs `biome check`, `tsc` and `vitest run`. Run it and `pytest` before each
   PR.
@@ -513,7 +520,7 @@ milestone whose screens it builds.
 |---|---|---|
 | **F0. Toolchain** | `frontend/` with Vite, TypeScript and Biome. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. `python -m cfl openapi` and the staleness test, for the dev proxy. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
 | **F1. Shared parts** | In five PRs: `format.ts` (moved from `app.js`) and Vitest; the generated API types; `errors.ts` and `client.ts`; React, the query client, the bridge and `mountView`; the "Your account" card, the first view in the page. | Before 1 |
-| **F2. Offseason hub** | Each component (`Card`, `Tile`, ...) comes with the first view that uses it. The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
+| **F2. Offseason hub** | Each Mantine component's CSS import goes into `theme.ts` with the first view that uses it. The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
 | **F3. Qualifying** | Your RFAs, with Qualify (years) or Let go, and the cap and bank impact. | 2. Qualifying |
 | **F4. Offer sheets** | The RFA market and the offer form (`offerSheet`). Your RFAs with Match or Let go (`matchDecision`). Every offer, and your signings' years. | 3. Offer sheets |
 | **F5. Draft room** | The board with polling, your pick (`draftPick`), and your list. | 4. Entry draft |
@@ -528,6 +535,7 @@ F0 to F4 are what June 2027 needs. F5 can wait a year, as the draft can.
 | Effect 4 is three weeks old, and Effect marks its HTTP modules unstable. | Effect stays in `src/api/`. Pin the versions, and upgrade the generator with Effect. The generated client passes strict TypeScript, so the fallback over `fetch` isn't needed. |
 | Learning Effect and XState at the same time. | Effect stays in one folder and XState in four machines. Every other screen is plain React and TanStack Query. |
 | Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has three exports and goes with `app.js`. |
+| Mantine's CSS is imported one component at a time while the legacy page lives. | A missing import renders the component unstyled, with no error, so `theme.ts` lists every import. Mantine's `styles.css` isn't used, because its baseline restyles the legacy page. After the shell moves, import `styles.layer.css` instead. |
 | The first Node build on Vercel. | F0 proves it on a preview deployment before any other work. |
 | Polling uses Vercel's Hobby plan allowance. | The draft board polls every 30 seconds, only while its tab is visible. Check the usage after the first draft. |
 
@@ -544,6 +552,7 @@ Accepted on October 20, 2026:
 | Migration | React views inside the current page, new screens first. No rewrite. |
 | API types | Pydantic response models in Python, and Effect Schemas generated from them and committed. |
 | The offseason API | Previews, `now`, and one read per screen. They're in offseason-plan.md. |
+| Component library | Mantine 9, added on October 21, 2026. A spike on the Account card left every legacy tab unchanged in light and dark, and the Account tab adds 25 kB gzipped. |
 
 ### Not in this plan
 
@@ -551,4 +560,4 @@ Accepted on October 20, 2026:
 - **Moving the API under `/api`.**
 - **CI.** There's none today, and this plan doesn't add it.
 - **Browser tests** with Playwright. Add them if the draft room needs them.
-- **A component library or a CSS framework.**
+- **A CSS framework,** such as Tailwind.
