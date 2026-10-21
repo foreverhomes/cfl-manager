@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import type { Me, Team } from "../../api/generated";
 import { queryClient } from "../../queries/client";
+import { renderView } from "../test-utils";
 import { AccountCard } from "./AccountCard";
 
 const teams: ReadonlyArray<Team> = [
@@ -32,11 +32,7 @@ afterAll(() => server.close());
 
 const showCard = (me: Me) => {
   server.use(http.get("*/auth/me", () => HttpResponse.json(me)));
-  render(
-    <QueryClientProvider client={queryClient}>
-      <AccountCard />
-    </QueryClientProvider>,
-  );
+  renderView(<AccountCard />);
 };
 
 it("shows a GM who they are, their team and their role", async () => {
