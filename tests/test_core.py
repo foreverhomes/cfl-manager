@@ -827,6 +827,14 @@ def test_each_endpoint_in_the_contract_is_named_after_its_function():
     assert app.openapi()["paths"]["/teams/{team_id}/overview"]["get"]["operationId"] == "team_overview"
 
 
+def test_the_contract_describes_what_the_account_card_reads():
+    from cfl.api import app
+    paths = app.openapi()["paths"]
+    def schema(path): return paths[path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert schema("/auth/me")["$ref"] == "#/components/schemas/Me"
+    assert schema("/teams")["items"]["$ref"] == "#/components/schemas/Team"
+
+
 def test_publish_posts_once_per_change(conn, tmp_path, monkeypatch):
     from cfl import publish as P
     settings = _owned_league(conn, tmp_path)

@@ -1,5 +1,6 @@
 "use strict";
 
+import { dataChanged, onDataChanged, onSignedOut } from "../bridge";
 import { fmtCat, fmtMoney, fmtNum, fmtSigned, ordinal } from "../format";
 
 /* ================================================================ helpers */
@@ -193,6 +194,8 @@ const getProfile = (id) => cached(state.profiles, `${id}|${state.strategy}`,
   `/analysis/teams/${encodeURIComponent(id)}/profile?strategy=${state.strategy}`);
 const getLeagueAnalysis = () => cached(state.leagueAnalysis, "league", "/analysis/overview");
 function resetCaches() { state.profiles.clear(); state.overviews.clear(); state.leagueAnalysis.clear(); }
+onDataChanged(resetCaches);
+onSignedOut(showSignIn);
 
 /* ================================================================ header / boot */
 
@@ -359,7 +362,7 @@ async function runSync(mode) {
   try {
     const res = await request("POST", "/sync", { params: cfg.resources ? { resources: cfg.resources } : {} });
     const failed = res.results.filter((r) => r.status !== "ok").map((r) => r.resource);
-    resetCaches();
+    dataChanged();
     state.health = await api.get("/health");
     state.teams = await api.get("/teams");
     try { state.league = await api.get("/league"); } catch (_) { /* still unsynced */ }
@@ -1690,7 +1693,7 @@ function birthDateRow(p, d) {
 }
 
 function afterContractChange(message) {
-  resetCaches();
+  dataChanged();
   byId("sync-status").textContent = `${message}. Cap and trade numbers updated.`;
   setTimeout(renderPublish, 3000);   // the server republishes the sheet in the background
   const view = currentView();
@@ -2138,12 +2141,8 @@ function showWaiting() {
   byId("google-button").hidden = true;
 }
 
-async function signOut() {
-  try { await api.post("/auth/logout"); } catch (_) { /* signed out either way */ }
-  if (window.google && google.accounts) google.accounts.id.disableAutoSelect();
-  window.location.hash = "";
-  window.location.reload();
-}
+// React and Effect load with import() when first needed, so tabs that don't use them don't download them.
+const signOut = () => import("../auth").then((auth) => auth.signOut());
 
 /* ================================================================ account */
 
@@ -2159,19 +2158,10 @@ function setTheme(theme) {
 }
 
 function renderAccount() {
-  const me = state.me;
-  const row = (label, value) => [h("dt", {}, label), h("dd", {}, value)];
-  byId("account-sub").textContent = me.auth ? "Signed in with Google" : "Logins aren't set up on this computer";
-  byId("account-body").replaceChildren(h("div", {},
-    me.auth ? h("div", { class: "account-who" }, avatar(me, "large"),
-      h("div", {}, h("div", { class: "account-who-name" }, me.name || me.email), me.name ? h("div", { class: "sub" }, me.email) : null)) : null,
-    h("dl", { class: "account-facts" },
-      row("Team", me.team_id ? teamName(me.team_id) : "Not linked yet"),
-      row("Role", me.is_admin ? "Admin" : "GM")),
-    me.auth
-      ? h("button", { class: "btn ghost", type: "button", onclick: signOut }, "Sign out")
-      : h("p", { class: "card-sub" }, "Without GOOGLE_CLIENT_ID, everyone who opens the app is the admin, so there's nothing to sign out of.")));
   segmented(byId("theme-choice"), THEMES, prefs.get("theme", "system"), setTheme);
+  Promise.all([import("../views/mount"), import("../views/account/AccountCard")])
+    .then(([{ mountView }, { AccountCard }]) => mountView(byId("account-card"), AccountCard))
+    .catch(showError);
 }
 
 /* ================================================================ admin */

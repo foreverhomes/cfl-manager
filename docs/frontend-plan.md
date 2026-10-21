@@ -5,9 +5,8 @@ offseason features in [offseason-plan.md](offseason-plan.md) are the reason: off
 draft room are workflows, and the current file has no good place for them. The API keeps its role:
 FastAPI owns every rule and every state machine.
 
-Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done. F1 is in progress:
-`format.ts`, Vitest, the generated API client, `errors.ts`, `client.ts`, the query client, the bridge
-and `mountView` are done. The "Your account" card is next.
+Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
+account" card is the first React view in the page. F2 waits for offseason milestone 1.
 
 ## Why now
 
@@ -76,7 +75,9 @@ point, decide whether TanStack Router's typed search params are worth one more l
 | Svelte 5 or Solid | Smaller and faster than React. | A second way to think about UI. Fewer people use their XState and Effect bindings. |
 | `@effect/atom-react` instead of TanStack Query | The official Effect binding. Typed errors reach components as values. | Its first stable release came with Effect 4 in October 2026, and few examples exist yet. A later switch stays inside `src/queries/`. |
 
-React's runtime is the largest of these. That doesn't matter for an app that 11 GMs use.
+React's runtime is the largest of these. That doesn't matter for an app that 11 GMs use. With
+React, TanStack Query and Effect in one file, the page was 146 kB gzipped. The legacy page alone is 25 kB.
+`app.js` now loads the React side only when a view needs it (see [the bridge](#the-bridge)).
 
 ## How the pieces fit
 
@@ -433,20 +434,25 @@ export function dataChanged() {
   queryClient.invalidateQueries();
   for (const listener of listeners) listener();
 }
+
+// onSignedOut(listener) is the same, for a query that fails with Unauthorized (the cache is watched).
 ```
 
 ```js
 // src/legacy/app.js
-import { dataChanged, onDataChanged } from "../bridge";
-import { mountView } from "../views/mount";
+import { dataChanged, onDataChanged, onSignedOut } from "../bridge";
 
 onDataChanged(resetCaches);
-// route():          if (view === "offseason") { mountView(byId("view-offseason"), Offseason); return; }
+onSignedOut(showSignIn);
+// renderAccount():  Promise.all([import("../views/mount"), import("../views/account/AccountCard")])
+//                     .then(([{ mountView }, { AccountCard }]) => mountView(byId("account-card"), AccountCard))
 // after an edit:    dataChanged() instead of resetCaches()
 ```
 
 `mountView(element, View)` creates one React root per element, once, and wraps it in the shared
-`QueryClient`. So a view keeps its state when its tab shows again. The
+`QueryClient`. So a view keeps its state when its tab shows again. `app.js` loads React and Effect
+with `import()` when a view first needs them. The first load is 38 kB gzipped, and the Account tab
+adds 108 kB. The
 legacy `route()` shows and hides the tab's section as it does now. A React view that opens a
 player's contract calls the legacy `openPlayer()` until Players & cap moves to React.
 
@@ -472,7 +478,8 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
   (`it.each`) of each event from each state, as the server's machine tests do.
 - **Views** use Testing Library, with MSW handlers that return fixtures. They check what a GM sees:
   text, buttons, and disabled buttons with their blockers. A view test starts with
-  `// @vitest-environment jsdom`. Other tests run in Node.
+  `// @vitest-environment jsdom`. Other tests run in Node. `server.listen({ onUnhandledFrame: "error" })`
+  (MSW 3's name for it) fails a test on any request that it doesn't answer.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
 - **`npm run check`** runs `biome check`, `tsc` and `vitest run`. Run it and `pytest` before each
   PR.
@@ -520,7 +527,7 @@ F0 to F4 are what June 2027 needs. F5 can wait a year, as the draft can.
 |---|---|
 | Effect 4 is three weeks old, and Effect marks its HTTP modules unstable. | Effect stays in `src/api/`. Pin the versions, and upgrade the generator with Effect. The generated client passes strict TypeScript, so the fallback over `fetch` isn't needed. |
 | Learning Effect and XState at the same time. | Effect stays in one folder and XState in four machines. Every other screen is plain React and TanStack Query. |
-| Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has two exports and goes with `app.js`. |
+| Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has three exports and goes with `app.js`. |
 | The first Node build on Vercel. | F0 proves it on a preview deployment before any other work. |
 | Polling uses Vercel's Hobby plan allowance. | The draft board polls every 30 seconds, only while its tab is visible. Check the usage after the first draft. |
 

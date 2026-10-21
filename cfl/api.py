@@ -291,7 +291,18 @@ def categories(conn: Connection = Depends(get_conn)):
                   key=lambda c: A.stat_line_key(c["short_name"], c["grp"]))
 
 
-@data.get("/teams")
+class Team(BaseModel):
+    id: str
+    name: str
+    short_name: Optional[str]
+    rank: Optional[int]
+    record: Optional[str]
+    games_back: Optional[float]
+    win_pct: Optional[float]
+    is_me: int
+
+
+@data.get("/teams", response_model=List[Team])
 def teams(conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
     s = get_settings()
     return rows(conn, """
@@ -844,7 +855,16 @@ def auth_config():
     return {"enabled": bool(s.google_client_id), "google_client_id": s.google_client_id}
 
 
-@app.get("/auth/me")
+class Me(BaseModel):
+    email: str
+    name: Optional[str]
+    team_id: Optional[str]
+    is_admin: bool
+    status: str
+    auth: bool
+
+
+@app.get("/auth/me", response_model=Me)
 def auth_me(user: User = Depends(signed_in_user)):
     """Who's signed in, including someone still waiting for approval. 401 when nobody is."""
     return user.public(auth=bool(get_settings().google_client_id))
