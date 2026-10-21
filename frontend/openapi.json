@@ -33,7 +33,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
               }
             }
           }
@@ -273,7 +275,13 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Team"
+                  },
+                  "type": "array",
+                  "title": "Response Teams"
+                }
               }
             }
           }
@@ -1787,6 +1795,58 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "Me": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "auth": {
+            "type": "boolean",
+            "title": "Auth"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "name",
+          "team_id",
+          "is_admin",
+          "status",
+          "auth"
+        ],
+        "title": "Me"
+      },
       "NewUser": {
         "properties": {
           "team_id": {
@@ -1893,6 +1953,89 @@
           "original_team_id"
         ],
         "title": "PickRef"
+      },
+      "Team": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "short_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Name"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "record": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record"
+          },
+          "games_back": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Games Back"
+          },
+          "win_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Pct"
+          },
+          "is_me": {
+            "type": "integer",
+            "title": "Is Me"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "short_name",
+          "rank",
+          "record",
+          "games_back",
+          "win_pct",
+          "is_me"
+        ],
+        "title": "Team"
       },
       "TradeRequest": {
         "properties": {

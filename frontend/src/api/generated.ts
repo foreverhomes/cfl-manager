@@ -7,8 +7,12 @@ import * as HttpClientError from "effect/http/HttpClientError"
 import * as HttpClientRequest from "effect/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/http/HttpClientResponse"
 // non-recursive definitions
+export type Me = { readonly "email": string, readonly "name": string | null, readonly "team_id": string | null, readonly "is_admin": boolean, readonly "status": string, readonly "auth": boolean } & { readonly [x: string]: Schema.Json }
+export const Me = Schema.StructWithRest(Schema.Struct({ "email": Schema.String.annotate({ "title": "Email" }), "name": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Name" }), "team_id": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Team Id" }), "is_admin": Schema.Boolean.annotate({ "title": "Is Admin" }), "status": Schema.String.annotate({ "title": "Status" }), "auth": Schema.Boolean.annotate({ "title": "Auth" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "Me", "identifier": "Me" })
 export type ValidationError = { readonly "loc": ReadonlyArray<string | number>, readonly "msg": string, readonly "type": string, readonly "input"?: Schema.Json, readonly "ctx"?: { readonly [x: string]: Schema.Json } } & { readonly [x: string]: Schema.Json }
 export const ValidationError = Schema.StructWithRest(Schema.Struct({ "loc": Schema.Array(Schema.Union([Schema.String, Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" }))])).annotate({ "title": "Location" }), "msg": Schema.String.annotate({ "title": "Message" }), "type": Schema.String.annotate({ "title": "Error Type" }), "input": Schema.optionalKey(Schema.Json.annotate({ "expected": "JSON value", "title": "Input" })), "ctx": Schema.optionalKey(Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" })).annotate({ "title": "Context" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "ValidationError", "identifier": "ValidationError" })
+export type Team = { readonly "id": string, readonly "name": string, readonly "short_name": string | null, readonly "rank": number | null, readonly "record": string | null, readonly "games_back": number | null, readonly "win_pct": number | null, readonly "is_me": number } & { readonly [x: string]: Schema.Json }
+export const Team = Schema.StructWithRest(Schema.Struct({ "id": Schema.String.annotate({ "title": "Id" }), "name": Schema.String.annotate({ "title": "Name" }), "short_name": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Short Name" }), "rank": Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "Rank" }), "record": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Record" }), "games_back": Schema.Union([Schema.Finite, Schema.Null]).annotate({ "title": "Games Back" }), "win_pct": Schema.Union([Schema.Finite, Schema.Null]).annotate({ "title": "Win Pct" }), "is_me": Schema.Number.annotate({ "title": "Is Me" }).check(Schema.isInt().annotate({ "expected": "an integer" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "Team", "identifier": "Team" })
 export type ContractEdit = { readonly "years": number, readonly "salary"?: number | null, readonly "contract_type"?: string, readonly "note"?: string | null } & { readonly [x: string]: Schema.Json }
 export const ContractEdit = Schema.StructWithRest(Schema.Struct({ "years": Schema.Number.annotate({ "title": "Years" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "salary": Schema.optionalKey(Schema.Union([Schema.Finite, Schema.Null]).annotate({ "title": "Salary" })), "contract_type": Schema.optionalKey(Schema.String.annotate({ "title": "Contract Type", "default": "STANDARD" })), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "ContractEdit", "identifier": "ContractEdit" })
 export type BirthDateEdit = { readonly "birth_date"?: string | null } & { readonly [x: string]: Schema.Json }
@@ -28,8 +32,8 @@ export const PickDeal = Schema.StructWithRest(Schema.Struct({ "kind": Schema.opt
 // schemas
 export type AuthConfig200 = Schema.Json
 export const AuthConfig200 = Schema.Json.annotate({ "expected": "JSON value" })
-export type AuthMe200 = Schema.Json
-export const AuthMe200 = Schema.Json.annotate({ "expected": "JSON value" })
+export type AuthMe200 = Me
+export const AuthMe200 = Me
 export type AuthGoogle200 = Schema.Json
 export const AuthGoogle200 = Schema.Json.annotate({ "expected": "JSON value" })
 export type AuthLogout200 = Schema.Json
@@ -60,8 +64,8 @@ export type League200 = Schema.Json
 export const League200 = Schema.Json.annotate({ "expected": "JSON value" })
 export type Categories200 = Schema.Json
 export const Categories200 = Schema.Json.annotate({ "expected": "JSON value" })
-export type Teams200 = Schema.Json
-export const Teams200 = Schema.Json.annotate({ "expected": "JSON value" })
+export type Teams200 = ReadonlyArray<Team>
+export const Teams200 = Schema.Array(Team).annotate({ "title": "Response Teams" })
 export type Standings200 = Schema.Json
 export const Standings200 = Schema.Json.annotate({ "expected": "JSON value" })
 export type TeamRoster200 = Schema.Json
