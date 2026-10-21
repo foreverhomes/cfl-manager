@@ -6,7 +6,8 @@ draft room are workflows, and the current file has no good place for them. The A
 FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 is done. F1 is in progress:
-`format.ts`, Vitest, the generated API client, `errors.ts` and `client.ts` are done.
+`format.ts`, Vitest, the generated API client, `errors.ts`, `client.ts`, the query client, the bridge
+and `mountView` are done. The "Your account" card is next.
 
 ## Why now
 
@@ -174,7 +175,11 @@ HTTP modules (`effect/http`) unstable, so a minor release can change them. Pin `
 
 ```ts
 // src/queries/client.ts
-export const queryClient = new QueryClient();
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: (failures, error) => error instanceof Failed && error.status === 0 && failures < 3 },
+  },
+});
 
 declare module "@tanstack/react-query" {
   interface Register {
@@ -420,7 +425,9 @@ sides use the one copy.
 // src/bridge.ts
 const listeners = new Set<() => void>();
 
-export const onDataChanged = (listener: () => void) => listeners.add(listener);
+export function onDataChanged(listener: () => void) {
+  listeners.add(listener);
+}
 
 export function dataChanged() {
   queryClient.invalidateQueries();
@@ -434,15 +441,18 @@ import { dataChanged, onDataChanged } from "../bridge";
 import { mountView } from "../views/mount";
 
 onDataChanged(resetCaches);
-// route():          if (view === "offseason") { mountView("offseason", byId("view-offseason")); return; }
+// route():          if (view === "offseason") { mountView(byId("view-offseason"), Offseason); return; }
 // after an edit:    dataChanged() instead of resetCaches()
 ```
 
-`mountView()` creates one React root per tab, once, and wraps it in the shared `QueryClient`. The
+`mountView(element, View)` creates one React root per element, once, and wraps it in the shared
+`QueryClient`. So a view keeps its state when its tab shows again. The
 legacy `route()` shows and hides the tab's section as it does now. A React view that opens a
 player's contract calls the legacy `openPlayer()` until Players & cap moves to React.
 
 ### Order
+
+First, in F1: the "Your account" card, to prove the stack before F2 has endpoints.
 
 1. **New screens**, with the offseason milestones (see [Milestones](#milestones)).
 2. **Changes.** The smallest existing tab.
@@ -461,7 +471,8 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
   `machine.provide()` replaces the actors that call the API. Each machine gets one table test
   (`it.each`) of each event from each state, as the server's machine tests do.
 - **Views** use Testing Library, with MSW handlers that return fixtures. They check what a GM sees:
-  text, buttons, and disabled buttons with their blockers.
+  text, buttons, and disabled buttons with their blockers. A view test starts with
+  `// @vitest-environment jsdom`. Other tests run in Node.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
 - **`npm run check`** runs `biome check`, `tsc` and `vitest run`. Run it and `pytest` before each
   PR.
@@ -494,7 +505,7 @@ milestone whose screens it builds.
 | | What | With offseason milestone |
 |---|---|---|
 | **F0. Toolchain** | `frontend/` with Vite, TypeScript and Biome. The files move, Vite bundles `app.js`, `vercel.json` runs the build, and FastAPI serves `dist/`. The Node-free tests, `npm run check`, and the README's setup and deploy sections. `python -m cfl openapi` and the staleness test, for the dev proxy. Nothing looks or works differently. Done when a preview deployment matches production. | Before 1 |
-| **F1. Shared parts** | In four PRs: `format.ts` (moved from `app.js`) and Vitest; the generated API types; `errors.ts` and `client.ts`; React, the query client and the bridge, with the first view. | Before 1 |
+| **F1. Shared parts** | In five PRs: `format.ts` (moved from `app.js`) and Vitest; the generated API types; `errors.ts` and `client.ts`; React, the query client, the bridge and `mountView`; the "Your account" card, the first view in the page. | Before 1 |
 | **F2. Offseason hub** | Each component (`Card`, `Tile`, ...) comes with the first view that uses it. The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
 | **F3. Qualifying** | Your RFAs, with Qualify (years) or Let go, and the cap and bank impact. | 2. Qualifying |
 | **F4. Offer sheets** | The RFA market and the offer form (`offerSheet`). Your RFAs with Match or Let go (`matchDecision`). Every offer, and your signings' years. | 3. Offer sheets |
