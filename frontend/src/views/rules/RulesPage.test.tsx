@@ -160,7 +160,6 @@ it("saves a change from a season with its reason, then shows the rules as they a
 it.each([
   ["money", "released for free", "$4.5", 4.5],
   ["share", "buyout costs", "40%", 0.4],
-  ["month_day", "UFA age is measured on", "06-15", "06-15"],
 ])("sends a %s value as the API takes it", async (_kind, label, typed, value) => {
   const sent = recordChanges();
   showPage(() => HttpResponse.json(admin));
@@ -170,6 +169,19 @@ it.each([
 
   await waitForElementToBeRemoved(() => screen.queryByRole("dialog"));
   expect(sent).toMatchObject([{ value }]);
+});
+
+it("picks a day of the year from a calendar, and sends it as MM-DD", async () => {
+  const sent = recordChanges();
+  showPage(() => HttpResponse.json(admin));
+  const form = await openForm("UFA age is measured on");
+  fireEvent.click(form.getByLabelText("Value"));
+  // The calendar is a Popover too, so jsdom hides it.
+  fireEvent.click(await screen.findByRole("button", { name: "July 15", hidden: true }));
+  fireEvent.click(form.getByRole("button", { name: "Save" }));
+
+  await waitForElementToBeRemoved(() => screen.queryByRole("dialog"));
+  expect(sent).toMatchObject([{ value: "07-15" }]);
 });
 
 it("puts a rule's default back", async () => {

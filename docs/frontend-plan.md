@@ -128,20 +128,23 @@ rules to `styles.css`. Before you write markup or a component of your own, look 
 | Text and links | `Title`, `Text` (`span`, `inherit`, `c="dimmed"` for muted text), `Anchor` |
 | Tables and lists | `Table` (`Table.Thead`, `Table.Tr`, `Table.Th`, `Table.Td`, …), `List` |
 | Forms | `TextInput`, `NumberInput`, `Select`, `SegmentedControl`, `Switch`, `Checkbox`, `Textarea`, `Button` |
+| Dates | `DatePickerInput`, `DateTimePicker` and the others in `@mantine/dates` |
 | Status | `Alert`, `Loader`, `Skeleton`, `Badge`, `Tooltip` |
 | Overlays | `Modal`, `Popover`, `Menu`, `Drawer` |
 
 - **The look comes from `theme.ts`.** When a component doesn't match the page, change the theme:
   the component's CSS variables, `defaultProps` or `styles` under `components`. Every view then
   gets the fix. For example, the theme gives `Table` the page's 14px text, its 6px by 8px cells and
-  its `--grid` row lines. It gives an input's box the page's `--surface` and `--border`.
+  its `--grid` row lines. It gives an input's box and a dropdown the page's `--surface` and
+  `--border`.
 - **Each component's `.layer.css` goes into `theme.ts`** with the first view that uses it. A
   component without it renders unstyled, with no error.
 - **The element a view mounts into stays legacy.** `app.js` mounts a view inside an element that
   `index.html` owns, such as `<article class="card">`. It keeps its class until the shell moves to
   React.
-- **Mantine's other packages are new dependencies.** `@mantine/form`, `@mantine/notifications` and
-  `@mantine/dates` are separate packages, so ask before you add one.
+- **Mantine's other packages are new dependencies.** `@mantine/dates` is in (see
+  [Decisions](#decisions)). `@mantine/form` and `@mantine/notifications` are separate packages too,
+  so ask before you add one.
 - **One exception is left:** the Account card's facts list uses the legacy `account-facts` class.
   Move it to Mantine when the card next changes.
 
@@ -589,6 +592,7 @@ Accepted on October 20, 2026:
 | The offseason API | Previews, `now`, and one read per screen. They're in offseason-plan.md. |
 | Component library | Mantine 9, added on October 21, 2026. A spike on the Account card left every legacy tab unchanged in light and dark, and the Account tab adds 25 kB gzipped. |
 | How React views use Mantine | A Mantine component wherever Mantine has one, themed in `theme.ts`. No legacy classes and no new `styles.css` rules in React views. Decided on October 22, 2026. |
+| Dates | `@mantine/dates`, with its peer `dayjs`, added on October 22, 2026 for the Rules page's day of the year. The offseason needs it too: the admin sets the deadline for picking an offer sheet signing's years. It's pinned to `@mantine/core`'s version, which its peer dependency requires, so upgrade the Mantine packages together. With the Rules page's one `DatePickerInput`, it added 7.4 kB of JS to that page and 3.2 kB to the views' CSS, gzipped. |
 
 ### Not in this plan
 
