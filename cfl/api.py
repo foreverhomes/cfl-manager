@@ -582,9 +582,10 @@ def _team_picks(conn: Connection, ctx: A.Context, team_id: str, user: User) -> D
             d["can_undo"] = False
     for d in deals.values():
         d["moves"].reverse()
-    return {"team_id": team_id, "team_name": teams[team_id],
-            "draft_years": PK.draft_years(season, ctx.rules["draft.drafts_shown"]),
-            "rounds": ctx.rules["draft.rounds"], "kinds": PK.MOVE_KINDS, "can_edit": auth.can_edit_team(user, team_id),
+    years = PK.draft_years(season, ctx.rules["draft.drafts_shown"])
+    return {"team_id": team_id, "team_name": teams[team_id], "draft_years": years,
+            "rounds": {y: max(p["round"] for p in picks if p["draft_year"] == y) for y in years},
+            "kinds": PK.MOVE_KINDS, "can_edit": auth.can_edit_team(user, team_id),
             "owned": [p for p in picks if p["owner_team_id"] == team_id],
             "sent": [p for p in picks if p["original_team_id"] == team_id and p["owner_team_id"] != team_id],
             "deals": list(deals.values())}

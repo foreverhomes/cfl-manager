@@ -1765,11 +1765,12 @@ function describeDeal(d) {
 
 function renderPicks(res) {
   const count = res.owned.length;
+  const counts = [...new Set(Object.values(res.rounds))];   // each draft's rounds
   byId("picks-sub").textContent = `${count} pick${count === 1 ? "" : "s"} in the next ${res.draft_years.length} drafts. ` +
-    `Every team gets ${res.rounds} a year; they move in trades and as RFA compensation.`;
+    `Every team gets ${counts.length === 1 ? `${counts[0]} a year` : "one each round"}; they move in trades and as RFA compensation.`;
   byId("picks-actions").replaceChildren(...(res.can_edit
     ? [h("button", { class: "btn small", type: "button", onclick: () => openPickDeal(res) }, "Trade or send picks…")] : []));
-  const rounds = Array.from({ length: res.rounds }, (_, i) => i + 1);
+  const rounds = Array.from({ length: Math.max(...counts) }, (_, i) => i + 1);
   const at = (list, y, r) => list.filter((p) => p.draft_year === y && p.round === r);
   const ownFirst = (a, b) => (b.original_team_id === res.team_id) - (a.original_team_id === res.team_id);
   const grid = h("div", { class: "scroll-x" }, h("table", { class: "data-table picks-table" },
@@ -1778,6 +1779,7 @@ function renderPicks(res) {
     h("tbody", {}, res.draft_years.map((y) => h("tr", {},
       h("td", { class: "left pick-year" }, String(y)),
       rounds.map((r) => {
+        if (r > res.rounds[y]) return h("td", {});   // this draft has fewer rounds
         const chips = [...at(res.owned, y, r).sort(ownFirst), ...at(res.sent, y, r)].map((p) => pickChip(p, res.team_id));
         return h("td", { class: "left" }, chips.length ? chips : h("span", { class: "sub" }, "–"));
       }),
