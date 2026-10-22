@@ -16,6 +16,7 @@ from cfl import analysis as A
 from cfl import db
 from cfl.config import Settings
 from cfl.db import Connection, connect, upsert
+from cfl.rules import KINDS, RULES
 from cfl.sync import match_players, match_sheet_names, normalize_name, parse_salary_sheet, split_fantrax_name
 
 LEAGUE = "L1"
@@ -1719,13 +1720,6 @@ def test_when_two_people_move_a_row_at_once_only_the_first_wins(conn, tmp_path):
 
 # --------------------------------------------------------------------------- league rules
 
-def _change_rule(conn, key, from_year, value):
-    conn.execute("INSERT INTO league_rules (league_id, key, from_year, value, changed_by, changed_at) "
-                 "VALUES (?, ?, ?, ?, 'Boss', '2026-11-01T00:00:00Z')",
-                 (LEAGUE, key, from_year, None if value is None else json.dumps(value)))
-    conn.commit()
-
-
 def test_every_rule_reads_its_default_with_no_changes_saved(conn):
     from cfl import rules as R
     assert R.load(conn, LEAGUE, 2026) == {key: rule.default for key, rule in R.RULES.items()}
@@ -1733,19 +1727,20 @@ def test_every_rule_reads_its_default_with_no_changes_saved(conn):
 
 def test_a_rule_change_applies_from_its_league_year_on(conn):
     from cfl import rules as R
-    _change_rule(conn, "contracts.year_bank", 2028, 60)
+    R.change(conn, LEAGUE, "contracts.year_bank", 60, 2028, "Boss")
     assert [R.load(conn, LEAGUE, y)["contracts.year_bank"] for y in (2027, 2028, 2029)] == [50, 60, 60]
 
 
 def test_the_latest_change_wins_and_null_puts_the_default_back(conn):
     from cfl import rules as R
-    _change_rule(conn, "contracts.year_bank", 2030, 70)
-    _change_rule(conn, "contracts.year_bank", 2028, 60)    # a later vote: 2030 is 60 too
-    _change_rule(conn, "contracts.year_bank", 2029, None)
+    R.change(conn, LEAGUE, "contracts.year_bank", 70, 2030, "Boss")
+    R.change(conn, LEAGUE, "contracts.year_bank", 60, 2028, "Boss", "2027 vote")   # 2030 is 60 too
+    R.change(conn, LEAGUE, "contracts.year_bank", None, 2029, "Boss")
     assert [R.load(conn, LEAGUE, y)["contracts.year_bank"] for y in (2028, 2029, 2030)] == [60, 50, 50]
 
 
 def test_a_saved_salary_cap_wins_over_fantraxs(conn, tmp_path):
+    from cfl import rules as R
     conn.execute("INSERT INTO teams (id, league_id, name, salary_cap) VALUES ('t1', ?, 'One', 210)", (LEAGUE,))
     conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, section, salary, years_remaining, salaries) "
                  "VALUES (?, 't1', 'Somebody', 'ROSTER', 3, 1, '[3]')", (LEAGUE,))
@@ -1753,7 +1748,55 @@ def test_a_saved_salary_cap_wins_over_fantraxs(conn, tmp_path):
     settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
     cap = lambda: A.cap_summary(A.load_context(conn, settings), "t1")["cap"]  # noqa: E731
     assert cap() == 210
-    _change_rule(conn, "contracts.salary_cap", 2027, 230)          # next season's, so not this one's
+    R.change(conn, LEAGUE, "contracts.salary_cap", 230, 2027, "Boss")     # next season's, so not this one's
     assert cap() == 210
-    _change_rule(conn, "contracts.salary_cap", 2026, 225)
+    R.change(conn, LEAGUE, "contracts.salary_cap", 225, 2026, "Boss")
     assert cap() == 225
+
+
+def test_a_rule_change_cant_start_before_this_league_year(conn):
+    from cfl import rules as R
+    with pytest.raises(ValueError, match="before 2026"):
+        R.change(conn, LEAGUE, "contracts.year_bank", 60, 2025, "Boss")
+    R.change(conn, LEAGUE, "contracts.year_bank", 60, 2026, "Boss")
+    assert [R.load(conn, LEAGUE, y)["contracts.year_bank"] for y in (2025, 2026)] == [50, 60]
+
+
+@pytest.mark.parametrize("key, value, problem", [
+    ("contracts.year_bank", 0, "a whole number of 1 or more"),
+    ("contracts.year_bank", 2.5, "a whole number of 1 or more"),
+    ("contracts.year_bank", True, "a whole number of 1 or more"),
+    ("contracts.year_bank", "50", "a whole number of 1 or more"),
+    ("contracts.salary_cap", 0, r"more than \$0"),
+    ("contracts.max_years", 6, "at most 5"),
+    ("contracts.ufa_day", "02-29", "MM-DD"),                     # not a day in most years
+    ("contracts.ufa_day", "7-1", "MM-DD"),
+    ("contracts.buyout_share", 0, "above 0, up to 1"),
+    ("contracts.elc_salary", -1, r"\$0 or more"),
+])
+def test_a_rule_change_must_fit_its_rule(conn, key, value, problem):
+    from cfl import rules as R
+    with pytest.raises(ValueError, match=problem):
+        R.change(conn, LEAGUE, key, value, 2027, "Boss")
+    assert R.load(conn, LEAGUE, 2027) == R.defaults()
+
+
+def test_an_unknown_rule_cant_change(conn):
+    from cfl import rules as R
+    with pytest.raises(LookupError, match="No rule called contracts.roster_size"):
+        R.change(conn, LEAGUE, "contracts.roster_size", 26, 2027, "Boss")
+
+
+@pytest.mark.parametrize("key", sorted(k for k, rule in RULES.items() if rule.default is not None))
+def test_every_rules_default_fits_it(key):
+    rule = RULES[key]
+    test, _ = KINDS[rule.kind]
+    assert test(rule.default) and rule.check(rule.default) is None
+
+
+def test_an_elc_cant_outlast_the_longest_contract_in_any_year(conn):
+    from cfl import rules as R
+    R.change(conn, LEAGUE, "contracts.elc_max_years", 4, 2030, "Boss")
+    with pytest.raises(ValueError, match="From 2030: an ELC can't be longer than the longest contract, 3 seasons"):
+        R.change(conn, LEAGUE, "contracts.max_years", 3, 2028, "Boss")     # 2028 and 2029 would be fine
+    assert [R.load(conn, LEAGUE, y)["contracts.max_years"] for y in (2028, 2030)] == [5, 5]
