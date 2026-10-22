@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .db import Connection, row, rows, transaction
 from .sync import SHEET_SEASONS, league_season, now_iso
@@ -77,6 +77,18 @@ def load(conn: Connection, league_id: str, year: int) -> Dict[str, Any]:
         if c["key"] in RULES:   # a rule removed from the code can still have saved changes
             out[c["key"]] = RULES[c["key"]].default if c["value"] is None else json.loads(c["value"])
     return out
+
+
+def describe(conn: Connection, league_id: str, year: int) -> List[Dict[str, Any]]:
+    """Each rule with its value for a league year, its default, and every saved change to it, newest first."""
+    values, changes = load(conn, league_id, year), {key: [] for key in RULES}
+    for c in rows(conn, "SELECT key, from_year, value, note, changed_by, changed_at FROM league_rules "
+                        "WHERE league_id=? ORDER BY id DESC", (league_id,)):
+        key = c.pop("key")
+        if key in changes:
+            changes[key].append(dict(c, value=None if c["value"] is None else json.loads(c["value"])))
+    return [{"key": key, "label": r.label, "kind": r.kind, "cite": r.cite, "default": r.default,
+             "value": values[key], "changes": changes[key]} for key, r in RULES.items()]
 
 
 def _conflict(conn: Connection, league_id: str, year: int) -> Optional[str]:

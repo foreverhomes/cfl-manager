@@ -1831,3 +1831,54 @@ def test_a_draft_cant_lose_a_round_with_a_traded_pick(conn):
         R.change(conn, LEAGUE, "draft.rounds", 4, 2028, "Boss")          # 2028 would be fine
     assert R.load(conn, LEAGUE, 2028)["draft.rounds"] == 5
     R.change(conn, LEAGUE, "draft.rounds", 6, 2028, "Boss")              # adding a round is fine
+
+
+def _rules_users(conn, monkeypatch, tmp_path):
+    """Logins on: the admin (Boss) and a GM of t1, each a signed-in client."""
+    _logins(monkeypatch, tmp_path)
+    _two_teams(conn)
+    boss, _ = _signed_in("boss")
+    boss.post("/admin/users", json={"email": "gm@example.com", "team_id": "t1"})
+    return boss, _signed_in("gm")[0]
+
+
+def test_everyone_reads_each_rules_value_default_and_changes_for_a_league_year(conn, tmp_path, monkeypatch):
+    from cfl import rules as R
+    boss, gm = _rules_users(conn, monkeypatch, tmp_path)
+    R.change(conn, LEAGUE, "contracts.year_bank", 60, 2028, "Boss", "2027 league vote")
+    now, later = gm.get("/rules").json(), gm.get("/rules", params={"year": 2028}).json()
+    bank = {r["key"]: r for r in now["rules"]}["contracts.year_bank"]
+    assert (now["year"], now["league_year"], now["can_edit"], boss.get("/rules").json()["can_edit"]) == (2026, 2026, False, True)
+    assert {k: bank[k] for k in ("label", "kind", "cite", "default", "value")} == {
+        "label": "Contract-year bank", "kind": "count", "cite": "Contracts", "default": 50, "value": 50}
+    assert [{k: c[k] for k in ("from_year", "value", "note", "changed_by")} for c in bank["changes"]] == [
+        {"from_year": 2028, "value": 60, "note": "2027 league vote", "changed_by": "Boss"}]
+    assert {r["key"]: r["value"] for r in later["rules"]}["contracts.year_bank"] == 60
+
+
+def test_the_contract_describes_the_rules():
+    from cfl.api import app
+    paths = app.openapi()["paths"]
+    assert paths["/rules"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"] == \
+        "#/components/schemas/LeagueRules"
+
+
+def test_only_the_admin_changes_a_rule(conn, tmp_path, monkeypatch):
+    boss, gm = _rules_users(conn, monkeypatch, tmp_path)
+    change = {"value": 60, "from_year": 2028, "note": "2027 league vote"}
+    assert gm.put("/rules/contracts.year_bank", json=change).status_code == 403
+    assert boss.put("/rules/contracts.year_bank", json={"from_year": 2028}).status_code == 422   # a reset says null
+    res = boss.put("/rules/contracts.year_bank", json=change).json()
+    bank = {r["key"]: r for r in res["rules"]}["contracts.year_bank"]
+    assert (res["year"], bank["value"], bank["changes"][0]["changed_by"]) == (2028, 60, "Boss")
+
+
+@pytest.mark.parametrize("key, change, status, detail", [
+    ("contracts.year_bank", {"value": 0, "from_year": 2027}, 400, "a whole number of 1 or more"),
+    ("contracts.year_bank", {"value": 60, "from_year": 2025}, 400, "can't start before 2026"),
+    ("contracts.roster_size", {"value": 26, "from_year": 2027}, 404, "No rule called contracts.roster_size"),
+])
+def test_a_rule_change_the_rules_refuse_says_why(conn, tmp_path, monkeypatch, key, change, status, detail):
+    boss, _ = _rules_users(conn, monkeypatch, tmp_path)
+    res = boss.put("/rules/" + key, json=change)
+    assert (res.status_code, detail in res.json()["detail"]) == (status, True)

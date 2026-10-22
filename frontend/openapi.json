@@ -1030,6 +1030,105 @@
         }
       }
     },
+    "/rules": {
+      "get": {
+        "summary": "Rules",
+        "description": "Every league rule setting, with its value for a league year, its default, and every change to it.",
+        "operationId": "rules",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The league year. Defaults to the current one",
+              "title": "Year"
+            },
+            "description": "The league year. Defaults to the current one"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeagueRules"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rules/{key}": {
+      "put": {
+        "summary": "Change Rule",
+        "description": "Change a league rule from a league year on, and return the rules for that year. 400 for a past year, a\nvalue that doesn't fit the rule, or one that conflicts with another rule or with a traded draft pick.",
+        "operationId": "change_rule",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeagueRules"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analysis/overview": {
       "get": {
         "summary": "Overview",
@@ -1795,6 +1894,81 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LeagueRule": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "cite": {
+            "type": "string",
+            "title": "Cite"
+          },
+          "default": {
+            "title": "Default"
+          },
+          "value": {
+            "title": "Value"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/RuleChange"
+            },
+            "type": "array",
+            "title": "Changes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "kind",
+          "cite",
+          "default",
+          "value",
+          "changes"
+        ],
+        "title": "LeagueRule"
+      },
+      "LeagueRules": {
+        "properties": {
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "league_year": {
+            "type": "integer",
+            "title": "League Year"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/LeagueRule"
+            },
+            "type": "array",
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "year",
+          "league_year",
+          "can_edit",
+          "rules"
+        ],
+        "title": "LeagueRules"
+      },
       "Me": {
         "properties": {
           "email": {
@@ -1953,6 +2127,73 @@
           "original_team_id"
         ],
         "title": "PickRef"
+      },
+      "RuleChange": {
+        "properties": {
+          "from_year": {
+            "type": "integer",
+            "title": "From Year"
+          },
+          "value": {
+            "title": "Value"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_year",
+          "value",
+          "note",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "RuleChange"
+      },
+      "RuleEdit": {
+        "properties": {
+          "value": {
+            "title": "Value"
+          },
+          "from_year": {
+            "type": "integer",
+            "title": "From Year"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "from_year"
+        ],
+        "title": "RuleEdit"
       },
       "Team": {
         "properties": {

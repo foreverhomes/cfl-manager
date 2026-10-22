@@ -9,8 +9,9 @@ Status: in progress. Two parts are built. Nothing uses either part yet:
 
 - The state machine core: [`cfl/fsm.py`](../cfl/fsm.py) and the `machine_events` table.
 - The rules registry: [`cfl/rules.py`](../cfl/rules.py) and the `league_rules` table. The code reads
-  each rule in it from the registry. `change()` saves a change after its checks, and nothing calls
-  it yet. Each draft has the rounds of its own league year. The rule questions this plan raised were answered on
+  each rule in it from the registry. `change()` saves a change after its checks. `GET /rules` reads
+  the rules for a league year, and the admin changes one with `PUT /rules/{key}`. Each draft has
+  the rounds of its own league year. The rule questions this plan raised were answered on
 October 19, 2026 (see [Decisions](#decisions)). The answers are also in [rules.md](rules.md) under
 Clarifications, which the code will cite.
 
