@@ -318,6 +318,19 @@ the app and the CLI use that Postgres database instead. Nothing else changes.
    site. Keep that on until logins work. Then switch it to **Standard Protection**, which still
    guards preview deployments, so GMs can reach the production site and sign in with Google.
 
+**Preview deployments** use the production database unless you change it, so their schema changes
+and edits reach production. To give each preview its own copy, open the database in the
+**Storage** tab and, under **Advanced Options > Deployments Configuration**, enable **Preview**,
+**Required** for Preview, and **Resource must be active before deployment**. Each PR's previews then
+use a Neon branch named `preview/<git branch>`, a copy of production when it's made. Neon's free
+plan allows 10 branches, and Vercel keeps a branch as long as its deployments (months), so
+`.github/workflows/neon-preview-cleanup.yml` deletes a PR's branch when the PR closes. It needs two
+settings under the repository's **Settings > Secrets and variables > Actions**, and does nothing
+until the variable is set:
+
+- The secret `NEON_API_KEY`: an API key from the Neon Console's **Account settings > API keys**.
+- The variable `NEON_PROJECT_ID`: the ID on the Neon project's **Settings** page.
+
 With `DATABASE_URL` in `.env`, local commands (`sync`, `serve`, `watch`, ...) read and write the
 Neon database too, so the site and your terminal agree. Remove it to go back to `data/league.db`.
 

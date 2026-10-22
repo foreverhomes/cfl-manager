@@ -1,0 +1,27 @@
+# Deletes a PR's Neon branch when the PR closes. Vercel's Neon integration makes one, named
+# preview/<git branch>, for the PR's preview deployments, and keeps it as long as Vercel keeps those
+# deployments (months). Neon's free plan allows 10 branches. See "Deploying to Vercel" in README.md.
+name: Delete the Neon preview branch
+on:
+  pull_request:
+    types: [closed]
+permissions: {}
+jobs:
+  delete:
+    # Off until the NEON_PROJECT_ID variable is set. A fork's PR gets no preview branch and no secrets.
+    if: vars.NEON_PROJECT_ID != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      BRANCH: preview/${{ github.head_ref }}   # an env var, so a branch name can't run as shell code
+    steps:
+      - shell: bash
+        run: |
+          npm install --global --silent neonctl@2
+          names=$(neonctl branches list --project-id "$PROJECT_ID" --output json | jq -r '.[].name')
+          if grep -qxF "$BRANCH" <<< "$names"; then
+            neonctl branches delete "$BRANCH" --project-id "$PROJECT_ID"
+          else
+            echo "No Neon branch named $BRANCH, so there is nothing to delete."
+          fi
