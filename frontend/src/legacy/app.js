@@ -383,7 +383,7 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "offseason", "admin", "account"];
+const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "rules", "offseason", "admin", "account"];
 const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
@@ -396,13 +396,14 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = ["players", "changes", "offseason", "admin", "account"].includes(view);   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "rules", "offseason", "admin", "account"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     if (v !== "account") byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
   }
   byId("account-link").setAttribute("aria-current", view === "account" ? "page" : "false");   // in the header, not a tab
   if (view === "account") { renderAccount(); return; }
+  if (view === "rules") { showView("rules-card", () => import("../views/rules/RulesPage").then((m) => m.RulesPage)); return; }
   if (view === "admin") { loadAdmin(); return; }
   if (view === "offseason") { loadOffseason(); return; }
   if (!state.team) return;
@@ -411,6 +412,13 @@ function route() {
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
   else loadPlayers();
+}
+
+// Mounts a React view in its element the first time it shows. React and Effect load only then.
+function showView(id, load) {
+  Promise.all([import("../views/mount"), load()])
+    .then(([{ mountView }, View]) => mountView(byId(id), View))
+    .catch(showError);
 }
 
 /* ================================================================ dashboard */
@@ -2161,9 +2169,7 @@ function setTheme(theme) {
 
 function renderAccount() {
   segmented(byId("theme-choice"), THEMES, prefs.get("theme", "system"), setTheme);
-  Promise.all([import("../views/mount"), import("../views/account/AccountCard")])
-    .then(([{ mountView }, { AccountCard }]) => mountView(byId("account-card"), AccountCard))
-    .catch(showError);
+  showView("account-card", () => import("../views/account/AccountCard").then((m) => m.AccountCard));
 }
 
 /* ================================================================ admin */

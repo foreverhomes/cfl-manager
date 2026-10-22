@@ -6,7 +6,8 @@ draft room are workflows, and the current file has no good place for them. The A
 FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
-account" card is the first React view in the page. F2 waits for offseason milestone 1.
+account" card was the first React view in the page. F2 has started: the Rules page is a React view
+on its own tab, and its edit form comes next.
 
 ## Why now
 
@@ -45,7 +46,8 @@ endpoints.
 - **One Vercel project and one deployment.** FastAPI still serves the page.
 - **Logins.** The session is a same-origin cookie, as today.
 - **`styles.css`.** The legacy markup keeps its classes (`card`, `kpis`, `tile`, `pill`,
-  `segmented`). React views use Mantine, themed to its tokens (see [the stack](#the-stack)).
+  `segmented`). React views don't use them: they use Mantine's components, themed to its tokens
+  (see [Mantine](#mantine-every-component-it-has)).
 
 ## The stack
 
@@ -53,7 +55,7 @@ endpoints.
 |---|---|---|
 | Language | TypeScript 7, `strict` | Types for the API's shapes, and for each machine's states and events. |
 | UI | React 19 | XState's and Effect's React bindings target React. It has the most libraries and examples. |
-| Components | Mantine 9 | Each component's CSS is imported on its own, in Mantine's CSS layer, so `styles.css` wins any conflict. Its variables point at the `styles.css` tokens, and dark mode follows `data-theme` (`src/views/theme.ts`). |
+| Components | Mantine 9 | React views use a Mantine component wherever Mantine has one (see [Mantine](#mantine-every-component-it-has)). Each component's CSS is imported on its own, in Mantine's CSS layer, so `styles.css` wins any conflict. Its variables point at the `styles.css` tokens, and dark mode follows `data-theme` (`src/views/theme.ts`). |
 | Build | Vite 8 | A dev server with Fast Refresh and a proxy to FastAPI. Production builds with hashed file names. |
 | Server data | TanStack Query 5 | Caching, deduplication, invalidation, refetch on focus and polling. It replaces `cached()`, the request counters and `resetCaches()`. |
 | API calls and errors | Effect 4 | Decoded responses, typed errors for 400/403/409, cancellation and retries. Only in `src/api/` (see [Effect](#effect-the-api-boundary)). |
@@ -111,6 +113,36 @@ Two rules keep the parts apart:
 | Decides | Whether a move is allowed, and who may make it | What the screen shows now |
 | Lives | In Postgres, for the whole offseason | In memory, while the form is open |
 | After a change | Logs it in `machine_events` | Invalidates queries, so the server's new state loads |
+
+### Mantine: every component it has
+
+A React view uses Mantine's component for each thing that Mantine has one for. It doesn't use the
+legacy page's classes (`data-table`, `sub`, `segmented`, `pill`, `wrap`, …), and it doesn't add
+rules to `styles.css`. Before you write markup or a component of your own, look for it in
+[Mantine's components](https://mantine.dev/core/package/).
+
+| Need | Mantine |
+|---|---|
+| Layout | `Stack`, `Group`, `SimpleGrid`, `Grid`, `Flex`, `Box` (`component="section"` and others) |
+| Text and links | `Title`, `Text` (`span`, `inherit`, `c="dimmed"` for muted text), `Anchor` |
+| Tables and lists | `Table` (`Table.Thead`, `Table.Tr`, `Table.Th`, `Table.Td`, …), `List` |
+| Forms | `TextInput`, `NumberInput`, `Select`, `SegmentedControl`, `Switch`, `Checkbox`, `Textarea`, `Button` |
+| Status | `Alert`, `Loader`, `Skeleton`, `Badge`, `Tooltip` |
+| Overlays | `Modal`, `Popover`, `Menu`, `Drawer` |
+
+- **The look comes from `theme.ts`.** When a component doesn't match the page, change the theme:
+  the component's CSS variables, `defaultProps` or `styles` under `components`. Every view then
+  gets the fix. For example, the theme gives `Table` the page's 14px text, its 6px by 8px cells and
+  its `--grid` row lines.
+- **Each component's `.layer.css` goes into `theme.ts`** with the first view that uses it. A
+  component without it renders unstyled, with no error.
+- **The element a view mounts into stays legacy.** `app.js` mounts a view inside an element that
+  `index.html` owns, such as `<article class="card">`. It keeps its class until the shell moves to
+  React.
+- **Mantine's other packages are new dependencies.** `@mantine/form`, `@mantine/notifications` and
+  `@mantine/dates` are separate packages, so ask before you add one.
+- **One exception is left:** the Account card's facts list uses the legacy `account-facts` class.
+  Move it to Mantine when the card next changes.
 
 ### Effect: the API boundary
 
@@ -553,6 +585,7 @@ Accepted on October 20, 2026:
 | API types | Pydantic response models in Python, and Effect Schemas generated from them and committed. |
 | The offseason API | Previews, `now`, and one read per screen. They're in offseason-plan.md. |
 | Component library | Mantine 9, added on October 21, 2026. A spike on the Account card left every legacy tab unchanged in light and dark, and the Account tab adds 25 kB gzipped. |
+| How React views use Mantine | A Mantine component wherever Mantine has one, themed in `theme.ts`. No legacy classes and no new `styles.css` rules in React views. Decided on October 22, 2026. |
 
 ### Not in this plan
 
