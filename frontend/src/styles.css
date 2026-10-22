@@ -433,6 +433,9 @@ input[type="search"] { width: 100%; }
 .account-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 24px; margin: 0 0 18px; }
 .account-facts dt { color: var(--ink-2); }
 .account-facts dd { margin: 0; font-weight: 500; }
+
+.rule-changes { list-style: none; margin: 0; padding: 0; }
+.rule-changes li + li { margin-top: 4px; }
 .row-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 /* ---------------------------------------------------------------- responsive */

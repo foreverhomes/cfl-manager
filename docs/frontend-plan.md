@@ -6,7 +6,8 @@ draft room are workflows, and the current file has no good place for them. The A
 FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
-account" card is the first React view in the page. F2 waits for offseason milestone 1.
+account" card was the first React view in the page. F2 has started: the Rules page is a React view
+on its own tab, and its edit form comes next.
 
 ## Why now
 

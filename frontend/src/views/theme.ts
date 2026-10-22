@@ -9,6 +9,7 @@ import "@mantine/core/styles/Text.layer.css";
 import "@mantine/core/styles/Title.layer.css";
 import "@mantine/core/styles/Group.layer.css";
 import "@mantine/core/styles/Stack.layer.css";
+import "@mantine/core/styles/Anchor.layer.css";
 import {
   Avatar,
   type CSSVariablesResolver,
