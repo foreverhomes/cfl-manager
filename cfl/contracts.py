@@ -1,9 +1,11 @@
 """Contract edits made in the app: local overrides layered over the team salary sheets."""
 
 import json
+from datetime import date
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import analysis as A
+from . import changes
 from .db import Connection, row, rows, transaction, upsert
 from .sync import MAX_CONTRACT_YEARS, current_salaries, league_season, now_iso
 
@@ -16,6 +18,7 @@ CONTRACT_TYPES = {
 # that don't use contract-bank years.
 ELC_SALARY = 3.0
 ELC_MAX_YEARS = 3
+PICKUP_SALARY = 1.0   # Fantrax has no bid amounts: a placeholder until the GM sets the winning bid
 
 
 def validate(salaries: Sequence[Optional[float]], contract_type: str) -> List[float]:
@@ -42,6 +45,20 @@ def save_override(conn: Connection, league_id: str, player_id: str, salaries: Se
             "contract_type": contract_type, "note": (note or "").strip() or None, "updated_at": now_iso(),
             "season_year": league_season(conn, league_id),
         }], ["league_id", "player_id"])
+
+
+def mark_pickups(conn: Connection, ctx: A.Context, today: Optional[date] = None) -> Dict[str, Any]:
+    """Give each player picked up in season with no contract the rules' 1-year in-season UFA deal. A pickup
+    was on no team in the last change-log snapshot; minors players are left alone (unsigned prospects)."""
+    old, day = changes.previous(conn, ctx), (today or date.today()).isoformat()
+    start, end = ctx.league["start_date"], ctx.league["end_date"]
+    if old is None or not (start and end and start <= day <= end):
+        return {"marked": []}
+    picked = [p for p in ctx.players.values() if p.team_id and p.salary is None and p.roster_status != "MINORS"
+              and old.get(p.fantrax_id, changes.NOTHING)["team_id"] is None]
+    for p in picked:
+        save_override(conn, ctx.league_id, p.fantrax_id, [PICKUP_SALARY], "IN_SEASON_UFA", A.PICKUP_NOTE)
+    return {"marked": sorted(p.name for p in picked)}
 
 
 def delete_override(conn: Connection, league_id: str, player_id: str) -> bool:

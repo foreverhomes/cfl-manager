@@ -1,7 +1,7 @@
 """Change log: what changed between two snapshots of every player's team and contract."""
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import analysis as A
 from .db import Connection, row, transaction, upsert
@@ -38,18 +38,22 @@ def snapshot(ctx: A.Context) -> Snapshot:
             for p in ctx.players.values() if p.team_id or p.contract_salaries}
 
 
-def record(conn: Connection, ctx: A.Context, source: str) -> Dict[str, Any]:
-    """Log what changed since the last snapshot, then save this one. The first run only saves a baseline,
-    and so does the first run in a new season: every contract is a season shorter then, which isn't a change."""
-    key = "changes:{}".format(ctx.league_id)
-    saved = row(conn, "SELECT value FROM app_state WHERE key=?", (key,))
-    season = ctx.league.get("season_year")
+def previous(conn: Connection, ctx: A.Context) -> Optional[Snapshot]:
+    """The last saved snapshot, or None when there is none for this season: every contract is a season
+    shorter in a new one, which isn't a change."""
+    saved = row(conn, "SELECT value FROM app_state WHERE key=?", ("changes:{}".format(ctx.league_id),))
     old = json.loads(saved["value"]) if saved else None
     if old is not None and "players" not in old:      # saved before snapshots carried their season
-        old = {"season_year": season, "players": old}
-    baseline = old is None or old["season_year"] != season
-    new = snapshot(ctx)
-    found = [] if baseline else diff(old["players"], new)
+        return old
+    return old["players"] if old and old["season_year"] == ctx.league.get("season_year") else None
+
+
+def record(conn: Connection, ctx: A.Context, source: str) -> Dict[str, Any]:
+    """Log what changed since the last snapshot, then save this one. The first run only saves a baseline,
+    and so does the first run in a new season."""
+    key, season = "changes:{}".format(ctx.league_id), ctx.league.get("season_year")
+    old, new = previous(conn, ctx), snapshot(ctx)
+    found = [] if old is None else diff(old, new)
     ts = now_iso()
     with transaction(conn):
         conn.executemany("INSERT INTO player_changes (league_id, player_id, team_id, kind, old_value, new_value, "
@@ -58,4 +62,4 @@ def record(conn: Connection, ctx: A.Context, source: str) -> Dict[str, Any]:
                            json.dumps(c["new_value"]), source, ts) for c in found])
         upsert(conn, "app_state", [{"key": key, "value": json.dumps({"season_year": season, "players": new}),
                                     "updated_at": ts}], ["key"])
-    return {"baseline": baseline, "changes": len(found)}
+    return {"baseline": old is None, "changes": len(found)}

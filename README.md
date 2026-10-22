@@ -136,7 +136,8 @@ Resources: `league`, `players`, `rosters`, `standings`, `matchups`, `stats`, `sc
 and rostered prospects are looked up one by one through NHL.com's player search, which also
 handles transliterations like Yegor/Egor. Lookups happen only for players still missing a date. Matchup scores
 for completed periods are fetched once and skipped after that. Every run is recorded in `sync_log`.
-Every run ends with a `changes` step that logs what changed for the **Changes** view.
+Every run ends with a `pickups` step, which gives in-season pickups with no contract their in-season
+UFA deal (see below), and then a `changes` step that logs what changed for the **Changes** view.
 
 ## Salaries and the cap
 
@@ -190,6 +191,11 @@ A Drive shortcut doesn't work; use the URL of the sheet it points to.
   and doesn't use contract-bank years.
   API: `GET/DELETE /players/{id}/contract`, and `PUT` with
   `{"years": 2, "contract_type": "ELC", "note": "..."}` (optional `salary`).
+- **In-season pickups:** during the season (between the league's Fantrax start and end dates), a
+  sync gives each player picked up from free agency with no contract a 1-year in-season UFA deal.
+  Minors players are skipped, since they're unsigned prospects. Fantrax has no bid amounts, so the
+  salary is a $1 placeholder until someone sets the winning bid in the contract editor. If his
+  team's salary sheet lists him first, the sheet's salary applies, and he stays an in-season UFA.
 - **Coverage:** the sync reports, per team, rostered players with no salary on the sheet. A high
   count usually means that GM's sheet is out of date.
 - **RFA or UFA at expiry:** a player is a **UFA** if he's 27 or older on July 1 after his
