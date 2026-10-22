@@ -1800,3 +1800,34 @@ def test_an_elc_cant_outlast_the_longest_contract_in_any_year(conn):
     with pytest.raises(ValueError, match="From 2030: an ELC can't be longer than the longest contract, 3 seasons"):
         R.change(conn, LEAGUE, "contracts.max_years", 3, 2028, "Boss")     # 2028 and 2029 would be fine
     assert [R.load(conn, LEAGUE, y)["contracts.max_years"] for y in (2028, 2030)] == [5, 5]
+
+
+def test_each_draft_has_its_league_years_rounds(conn):
+    from collections import Counter
+    from cfl import picks as PK
+    from cfl import rules as R
+    R.change(conn, LEAGUE, "draft.rounds", 6, 2028, "Boss")
+    picks = PK.all_picks(conn, LEAGUE, ["t1", "t2"], 2026)
+    assert Counter(p["draft_year"] for p in picks) == {2027: 2 * 5, 2028: 2 * 6, 2029: 2 * 6}
+
+
+def test_a_teams_picks_come_with_each_drafts_rounds(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl import rules as R
+    from cfl.api import app
+    _two_teams(conn)
+    R.change(conn, LEAGUE, "draft.rounds", 6, 2028, "Boss")
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+    res = TestClient(app).get("/teams/t1/picks").json()
+    assert (res["rounds"], len(res["owned"])) == ({"2027": 5, "2028": 6, "2029": 6}, 5 + 6 + 6)
+
+
+def test_a_draft_cant_lose_a_round_with_a_traded_pick(conn):
+    from cfl import picks as PK
+    from cfl import rules as R
+    PK.move(conn, LEAGUE, ["t1", "t2"], 2026, "trade", [("t1", "t2", [_pick(2029, 5, "t1")])], None, "Boss")
+    with pytest.raises(ValueError, match="From 2029: a round 5 pick in the 2029 draft changed hands"):
+        R.change(conn, LEAGUE, "draft.rounds", 4, 2028, "Boss")          # 2028 would be fine
+    assert R.load(conn, LEAGUE, 2028)["draft.rounds"] == 5
+    R.change(conn, LEAGUE, "draft.rounds", 6, 2028, "Boss")              # adding a round is fine

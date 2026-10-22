@@ -79,10 +79,15 @@ def load(conn: Connection, league_id: str, year: int) -> Dict[str, Any]:
     return out
 
 
-def _conflict(rules: Dict[str, Any]) -> Optional[str]:
-    """What's wrong with one league year's rules taken together, if anything."""
+def _conflict(conn: Connection, league_id: str, year: int) -> Optional[str]:
+    """What's wrong with a league year's rules, taken together and with its draft's moved picks, if anything."""
+    rules = load(conn, league_id, year)
     if rules["contracts.elc_max_years"] > rules["contracts.max_years"]:
         return "an ELC can't be longer than the longest contract, {} seasons".format(rules["contracts.max_years"])
+    moved = row(conn, "SELECT MAX(round) AS r FROM pick_moves WHERE league_id=? AND draft_year=?",
+                (league_id, year))["r"]
+    if moved and moved > rules["draft.rounds"]:
+        return "a round {} pick in the {} draft changed hands".format(moved, year)
     return None
 
 
@@ -91,7 +96,8 @@ def change(conn: Connection, league_id: str, key: str, value: Any, from_year: in
     """Save a change to a rule from a league year on. A value of None puts the default back.
 
     Refuses an unknown rule, a year before this league year, a value that doesn't fit the rule, and a
-    value that conflicts with another rule in any year from from_year on: later saved changes count too.
+    value that conflicts with another rule, or with a draft pick that moved, in any year from from_year on.
+    Later saved changes count too.
     """
     rule = RULES.get(key)
     if rule is None:
@@ -109,8 +115,9 @@ def change(conn: Connection, league_id: str, key: str, value: Any, from_year: in
                      "VALUES (?, ?, ?, ?, ?, ?, ?)",
                      (league_id, key, from_year, None if value is None else json.dumps(value),
                       (note or "").strip() or None, actor, now_iso()))
-        last = row(conn, "SELECT MAX(from_year) AS y FROM league_rules WHERE league_id=?", (league_id,))["y"]
+        last = max(row(conn, "SELECT MAX(from_year) AS y FROM league_rules WHERE league_id=?", (league_id,))["y"],
+                   row(conn, "SELECT MAX(draft_year) AS y FROM pick_moves WHERE league_id=?", (league_id,))["y"] or 0)
         for year in range(from_year, last + 1):
-            problem = _conflict(load(conn, league_id, year))
+            problem = _conflict(conn, league_id, year)
             if problem:
                 raise ValueError("From {}: {}".format(year, problem))   # the transaction undoes the insert

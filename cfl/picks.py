@@ -35,11 +35,12 @@ def latest_moves(conn: Connection, league_id: str) -> Dict[PickKey, Dict[str, An
 
 
 def all_picks(conn: Connection, league_id: str, team_ids: Sequence[str], season_year: int) -> List[Dict[str, Any]]:
-    """Every pick in the upcoming drafts, with its owner and the move that put it there (None if it never moved)."""
+    """Every pick in the upcoming drafts, with its owner and the move that put it there (None if it never moved).
+    Each draft has the rounds of its own league year's rules."""
     moved, rules = latest_moves(conn, league_id), R.load(conn, league_id, season_year)
     out = []
     for year in draft_years(season_year, rules["draft.drafts_shown"]):
-        for rnd in range(1, rules["draft.rounds"] + 1):
+        for rnd in range(1, R.load(conn, league_id, year)["draft.rounds"] + 1):
             for team in team_ids:
                 last = moved.get((year, rnd, team))
                 out.append({"draft_year": year, "round": rnd, "original_team_id": team,
