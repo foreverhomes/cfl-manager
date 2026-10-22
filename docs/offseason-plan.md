@@ -5,8 +5,11 @@ commissioner) moves the league from one phase to the next explicitly. GMs qualif
 and answer offer sheets, and draft prospects in the app. The free agent auction stays in Fantrax,
 and importing its results comes later.
 
-Status: in progress. The state machine core is built: [`cfl/fsm.py`](../cfl/fsm.py) and the
-`machine_events` table. Nothing uses it yet. The rule questions this plan raised were answered on
+Status: in progress. Two parts are built. Nothing uses either part yet:
+
+- The state machine core: [`cfl/fsm.py`](../cfl/fsm.py) and the `machine_events` table.
+- The rules registry: [`cfl/rules.py`](../cfl/rules.py) and the `league_rules` table. The code reads
+  each rule in it from the registry, and nothing writes `league_rules` yet. The rule questions this plan raised were answered on
 October 19, 2026 (see [Decisions](#decisions)). The answers are also in [rules.md](rules.md) under
 Clarifications, which the code will cite.
 
@@ -204,9 +207,9 @@ who may do what.
   - the rules.md section it comes from;
   - the phases it's locked during.
 
-  Code reads `ctx.rules["rfa.match_hours"]`, never a constant. The constants in the code today
+  Code reads `ctx.rules["rfa.match_hours"]`, never a constant. The constants that the code had
   (`UFA_AGE`, `CONTRACT_YEAR_BANK`, `MAX_CONTRACT_YEARS`, `ELC_SALARY`, `PICK_ROUNDS` and the rest)
-  become the registry's defaults.
+  are now the registry's defaults.
 - **Changes take effect from a league year.** Each change names the league year it starts in: the
   current one or a later one, never a past one. A rule's value for a year is its latest change from
   that year or earlier, or else its default. So the league can vote in November to change the
@@ -229,11 +232,11 @@ who may do what.
 
 **Contracts and the cap**
 
-| Setting | Default | In the code today | Locked during |
+| Setting | Default | Replaces | Locked during |
 |---|---|---|---|
 | Salary cap | Fantrax's ($220 if it reports none) | `DEFAULT_SALARY_CAP` | qualifying, offer sheets |
 | Contract-year bank | 50 | `CONTRACT_YEAR_BANK` | qualifying, offer sheets |
-| Longest contract | 5 years | `MAX_CONTRACT_YEARS` | qualifying, offer sheets |
+| Longest contract | 5 years | `MAX_CONTRACT_YEARS` (salary sheets keep 5 season columns, `SHEET_SEASONS`) | qualifying, offer sheets |
 | UFA age, and the day it's measured | 27, on July 1 | `UFA_AGE` | qualifying, offer sheets |
 | ELC salary and longest ELC | $3, 3 years | `ELC_SALARY`, `ELC_MAX_YEARS` | — |
 | Free release up to | $3 | `FREE_RELEASE_MAX_SALARY` | — |
@@ -262,7 +265,7 @@ offer sheet machine, and its guard refuses it while "offers can be withdrawn" is
 
 **Entry draft**
 
-| Setting | Default | In the code today | Locked during |
+| Setting | Default | Replaces | Locked during |
 |---|---|---|---|
 | Rounds | 5 | `PICK_ROUNDS` | season over, entry draft |
 | Drafts shown and tradeable | 3 | `PICK_YEARS` | — |

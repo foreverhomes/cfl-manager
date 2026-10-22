@@ -493,10 +493,11 @@ def edit_player_contract(fantrax_id: str, edit: ContractEdit, background: Backgr
     survives syncs, until reverted. The salary stays as it is unless one is given. A GM can edit
     players on their own team; the admin, anyone."""
     s = get_settings()
-    p = _editable_player(_ctx(conn, s), fantrax_id, user)
+    ctx = _ctx(conn, s)
+    p = _editable_player(ctx, fantrax_id, user)
     salary = edit.salary
     if salary is None:
-        salary = C.ELC_SALARY if edit.contract_type == "ELC" else p.salary
+        salary = ctx.rules["contracts.elc_salary"] if edit.contract_type == "ELC" else p.salary
     if salary is None:
         raise HTTPException(400, detail="{} has no salary on file yet; include one".format(p.name))
     try:
@@ -581,8 +582,9 @@ def _team_picks(conn: Connection, ctx: A.Context, team_id: str, user: User) -> D
             d["can_undo"] = False
     for d in deals.values():
         d["moves"].reverse()
-    return {"team_id": team_id, "team_name": teams[team_id], "draft_years": PK.draft_years(season),
-            "rounds": PK.PICK_ROUNDS, "kinds": PK.MOVE_KINDS, "can_edit": auth.can_edit_team(user, team_id),
+    return {"team_id": team_id, "team_name": teams[team_id],
+            "draft_years": PK.draft_years(season, ctx.rules["draft.drafts_shown"]),
+            "rounds": ctx.rules["draft.rounds"], "kinds": PK.MOVE_KINDS, "can_edit": auth.can_edit_team(user, team_id),
             "owned": [p for p in picks if p["owner_team_id"] == team_id],
             "sent": [p for p in picks if p["original_team_id"] == team_id and p["owner_team_id"] != team_id],
             "deals": list(deals.values())}

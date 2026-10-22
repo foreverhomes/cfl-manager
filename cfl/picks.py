@@ -1,4 +1,4 @@
-"""Draft picks: every team gets PICK_ROUNDS picks in each upcoming draft, and picks change hands
+"""Draft picks: every team gets one pick a round in each upcoming draft, and picks change hands
 by trade or as compensation for signing another team's RFA.
 
 Only the moves are stored. A pick belongs to its original team until it's moved, then to whoever
@@ -8,19 +8,18 @@ its latest move sent it to, so a new draft year needs no setup: its picks appear
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from . import rules as R
 from .db import Connection, rows, transaction
 from .sync import now_iso
 
-PICK_ROUNDS = 5     # league rule: 5 picks per team per draft
-PICK_YEARS = 3      # drafts shown and tradeable, starting with the one after this season
 MOVE_KINDS = {"trade": "Trade", "rfa": "RFA compensation"}
 
 PickKey = Tuple[int, int, str]   # (draft_year, round, original_team_id)
 
 
-def draft_years(season_year: int) -> List[int]:
+def draft_years(season_year: int, count: int) -> List[int]:
     """The drafts picks exist for: the one before next season, and the ones after it."""
-    return [season_year + 1 + i for i in range(PICK_YEARS)]
+    return [season_year + 1 + i for i in range(count)]
 
 
 def _key(p: Dict[str, Any]) -> PickKey:
@@ -37,10 +36,10 @@ def latest_moves(conn: Connection, league_id: str) -> Dict[PickKey, Dict[str, An
 
 def all_picks(conn: Connection, league_id: str, team_ids: Sequence[str], season_year: int) -> List[Dict[str, Any]]:
     """Every pick in the upcoming drafts, with its owner and the move that put it there (None if it never moved)."""
-    moved = latest_moves(conn, league_id)
+    moved, rules = latest_moves(conn, league_id), R.load(conn, league_id, season_year)
     out = []
-    for year in draft_years(season_year):
-        for rnd in range(1, PICK_ROUNDS + 1):
+    for year in draft_years(season_year, rules["draft.drafts_shown"]):
+        for rnd in range(1, rules["draft.rounds"] + 1):
             for team in team_ids:
                 last = moved.get((year, rnd, team))
                 out.append({"draft_year": year, "round": rnd, "original_team_id": team,

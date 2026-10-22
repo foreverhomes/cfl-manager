@@ -4,29 +4,27 @@ import json
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import analysis as A
+from . import rules as R
 from .db import Connection, row, rows, transaction, upsert
-from .sync import MAX_CONTRACT_YEARS, current_salaries, league_season, now_iso
+from .sync import current_salaries, league_season, now_iso
 
 CONTRACT_TYPES = {
     "STANDARD": "Standard",
     "ELC": "Entry-level (ELC)",
     "IN_SEASON_UFA": "In-season UFA",
 }
-# League rules: ELCs are a set $3 for at most 3 seasons; in-season UFA pickups get 1-year deals
-# that don't use contract-bank years.
-ELC_SALARY = 3.0
-ELC_MAX_YEARS = 3
 
 
-def validate(salaries: Sequence[Optional[float]], contract_type: str) -> List[float]:
+def validate(salaries: Sequence[Optional[float]], contract_type: str, rules: Dict[str, Any]) -> List[float]:
     if contract_type not in CONTRACT_TYPES:
         raise ValueError("contract_type must be one of: {}".format(", ".join(CONTRACT_TYPES)))
-    if not 1 <= len(salaries) <= MAX_CONTRACT_YEARS:
-        raise ValueError("A contract runs 1 to {} seasons".format(MAX_CONTRACT_YEARS))
+    if not 1 <= len(salaries) <= rules["contracts.max_years"]:
+        raise ValueError("A contract runs 1 to {} seasons".format(rules["contracts.max_years"]))
     if any(s is None or s < 0 for s in salaries):
         raise ValueError("Each season needs a salary of $0 or more, with no gaps")
-    if contract_type == "ELC" and (len(salaries) > ELC_MAX_YEARS or any(s != ELC_SALARY for s in salaries)):
-        raise ValueError("An ELC is ${:g} a season for at most {} seasons".format(ELC_SALARY, ELC_MAX_YEARS))
+    elc_salary, elc_years = rules["contracts.elc_salary"], rules["contracts.elc_max_years"]
+    if contract_type == "ELC" and (len(salaries) > elc_years or any(s != elc_salary for s in salaries)):
+        raise ValueError("An ELC is ${:g} a season for at most {} seasons".format(elc_salary, elc_years))
     if contract_type == "IN_SEASON_UFA" and len(salaries) != 1:
         raise ValueError("In-season UFA pickups get 1-year contracts")
     return [float(s) for s in salaries]
@@ -35,12 +33,13 @@ def validate(salaries: Sequence[Optional[float]], contract_type: str) -> List[fl
 def save_override(conn: Connection, league_id: str, player_id: str, salaries: Sequence[Optional[float]],
                   contract_type: str = "STANDARD", note: Optional[str] = None) -> None:
     """Save an app contract record. Its salaries start this season (the league's current one)."""
-    clean = validate(salaries, contract_type)
+    season = league_season(conn, league_id)
+    clean = validate(salaries, contract_type, R.load(conn, league_id, season))
     with transaction(conn):
         upsert(conn, "contract_overrides", [{
             "league_id": league_id, "player_id": player_id, "salaries": json.dumps(clean),
             "contract_type": contract_type, "note": (note or "").strip() or None, "updated_at": now_iso(),
-            "season_year": league_season(conn, league_id),
+            "season_year": season,
         }], ["league_id", "player_id"])
 
 
@@ -78,7 +77,8 @@ def contract_detail(conn: Connection, ctx: A.Context, player_id: str) -> Dict[st
         "app_owned": p.team_id in ctx.app_owned,
         "birth_date_source": (row(conn, "SELECT birth_date_source FROM players WHERE fantrax_id=?", (player_id,))
                               or {}).get("birth_date_source"),
-        "seasons": [A.season_label(ctx, i) for i in range(MAX_CONTRACT_YEARS)],
+        "seasons": [A.season_label(ctx, i) for i in range(ctx.rules["contracts.max_years"])],
         "contract_types": CONTRACT_TYPES,
-        "rules": {"max_years": MAX_CONTRACT_YEARS, "elc_salary": ELC_SALARY, "elc_max_years": ELC_MAX_YEARS},
+        "rules": {"max_years": ctx.rules["contracts.max_years"], "elc_salary": ctx.rules["contracts.elc_salary"],
+                  "elc_max_years": ctx.rules["contracts.elc_max_years"]},
     }

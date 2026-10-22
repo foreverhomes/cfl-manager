@@ -17,9 +17,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import analysis as A
+from . import rules as R
 from .contracts import validate
 from .db import Connection, rows, transaction, upsert
-from .sync import MAX_CONTRACT_YEARS, _money, _season_start, league_season, normalize_name, now_iso
+from .sync import SHEET_SEASONS, _money, _season_start, league_season, normalize_name, now_iso
 
 # Sheet contract types the app tracks separately; every other signed type is a standard contract.
 SHEET_TYPES = {"elc": "ELC", "in-season ufa": "IN_SEASON_UFA"}
@@ -74,7 +75,7 @@ def parse_contract_sheet(sheet_rows: List[List[str]], season_year: int) -> List[
     last = first
     while last + 1 < len(header) and _season_start(header[last + 1]) is not None:
         last += 1
-    last = min(last, first + MAX_CONTRACT_YEARS - 1)
+    last = min(last, first + SHEET_SEASONS - 1)
 
     def cell(r: List[str], name: str) -> str:
         j = col.get(name)
@@ -252,7 +253,7 @@ def compare(ctx: A.Context, matches: Sequence[Match], owner_team: Dict[str, str]
                 out["roster_only"].append(record)
                 continue
             try:
-                validate(e.salaries, e.contract_type)
+                validate(e.salaries, e.contract_type, ctx.rules)
             except ValueError as exc:
                 out["review"].append(dict(record, reasons=["sheet contract breaks a league rule: {}".format(exc)]))
                 continue
@@ -321,6 +322,7 @@ def reconcile(conn: Connection, ctx: A.Context, sheet_rows: List[List[str]]) -> 
 def import_contracts(conn: Connection, league_id: str, imports: Sequence[Dict[str, Any]]) -> int:
     """Save the sheet's contract for each import as an app contract record, all in one transaction."""
     ts, season = now_iso(), league_season(conn, league_id)
+    rules = R.load(conn, league_id, season)
     records = []
     for r in imports:
         note = "{}, row {}".format(NOTE_PREFIX, r["sheet_row"])
@@ -329,7 +331,7 @@ def import_contracts(conn: Connection, league_id: str, imports: Sequence[Dict[st
         if r["sheet_note"]:
             note += ": " + r["sheet_note"]
         records.append({"league_id": league_id, "player_id": r["fantrax_id"],
-                        "salaries": json.dumps(validate(r["sheet"], r["sheet_contract_type"])),
+                        "salaries": json.dumps(validate(r["sheet"], r["sheet_contract_type"], rules)),
                         "contract_type": r["sheet_contract_type"], "note": note, "updated_at": ts,
                         "season_year": season})
     with transaction(conn):

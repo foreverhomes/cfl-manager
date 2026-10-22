@@ -466,7 +466,7 @@ def test_cap_summary_follows_league_rules():
     assert cap["future"][0] == {"season": "2027/28", "committed": 20 + 8 + 2, "space": 20,   # IR returns
                                 "rfa_holds": 0, "rfa_players": []}     # no birth dates, so no RFAs known
     assert A.cap_summary(ctx, "t2") is None
-    assert [A.release_cost(p) for p in players] == [10, 5, 4, 0, 0]   # $3 or less is a free release
+    assert [A.release_cost(ctx, p) for p in players] == [10, 5, 4, 0, 0]   # $3 or less is a free release
 
 
 def test_cap_summary_carries_rfas_forward_as_holds():
@@ -1480,7 +1480,7 @@ def test_every_team_starts_with_five_picks_in_each_upcoming_draft_and_trades_mov
     from cfl import picks as PK
     teams = ["t1", "t2", "t3"]
     start = PK.all_picks(conn, LEAGUE, teams, 2026)
-    assert PK.draft_years(2026) == [2027, 2028, 2029]
+    assert PK.draft_years(2026, 3) == [2027, 2028, 2029]
     assert len(start) == 3 * 5 * 3 and all(p["owner_team_id"] == p["original_team_id"] for p in start)
 
     deal = PK.move(conn, LEAGUE, teams, 2026, "trade",
@@ -1664,3 +1664,45 @@ def test_when_two_people_move_a_row_at_once_only_the_first_wins(conn, tmp_path):
         other[0].close()
     assert _sheet(conn)["state"] == "let_go"
     assert [(e["trigger"], e["actor"]) for e in _events(conn)] == [("let_go", "Owner")]
+
+
+# --------------------------------------------------------------------------- league rules
+
+def _change_rule(conn, key, from_year, value):
+    conn.execute("INSERT INTO league_rules (league_id, key, from_year, value, changed_by, changed_at) "
+                 "VALUES (?, ?, ?, ?, 'Boss', '2026-11-01T00:00:00Z')",
+                 (LEAGUE, key, from_year, None if value is None else json.dumps(value)))
+    conn.commit()
+
+
+def test_every_rule_reads_its_default_with_no_changes_saved(conn):
+    from cfl import rules as R
+    assert R.load(conn, LEAGUE, 2026) == {key: rule.default for key, rule in R.RULES.items()}
+
+
+def test_a_rule_change_applies_from_its_league_year_on(conn):
+    from cfl import rules as R
+    _change_rule(conn, "contracts.year_bank", 2028, 60)
+    assert [R.load(conn, LEAGUE, y)["contracts.year_bank"] for y in (2027, 2028, 2029)] == [50, 60, 60]
+
+
+def test_the_latest_change_wins_and_null_puts_the_default_back(conn):
+    from cfl import rules as R
+    _change_rule(conn, "contracts.year_bank", 2030, 70)
+    _change_rule(conn, "contracts.year_bank", 2028, 60)    # a later vote: 2030 is 60 too
+    _change_rule(conn, "contracts.year_bank", 2029, None)
+    assert [R.load(conn, LEAGUE, y)["contracts.year_bank"] for y in (2028, 2029, 2030)] == [60, 50, 50]
+
+
+def test_a_saved_salary_cap_wins_over_fantraxs(conn, tmp_path):
+    conn.execute("INSERT INTO teams (id, league_id, name, salary_cap) VALUES ('t1', ?, 'One', 210)", (LEAGUE,))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, section, salary, years_remaining, salaries) "
+                 "VALUES (?, 't1', 'Somebody', 'ROSTER', 3, 1, '[3]')", (LEAGUE,))
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+    cap = lambda: A.cap_summary(A.load_context(conn, settings), "t1")["cap"]  # noqa: E731
+    assert cap() == 210
+    _change_rule(conn, "contracts.salary_cap", 2027, 230)          # next season's, so not this one's
+    assert cap() == 210
+    _change_rule(conn, "contracts.salary_cap", 2026, 225)
+    assert cap() == 225

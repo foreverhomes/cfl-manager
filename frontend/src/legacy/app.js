@@ -1474,7 +1474,7 @@ const PLAYER_COLUMNS = [
   { key: "contract_type", label: "Type", left: true, value: (p) => TYPE_SHORT[p.contract_type] || "",
     render: (p) => TYPE_SHORT[p.contract_type] || "" },
 ];
-const CONTRACT_SEASONS = 5;   // league maximum, sync.MAX_CONTRACT_YEARS
+const CONTRACT_SEASONS = 5;   // season columns, sync.SHEET_SEASONS
 // A salary for each season under contract, then the RFA/UFA pill in the first season after it ends.
 const seasonColumns = (count) => Array.from({ length: count }, (_, i) => {
   const y = state.league.season_year + i;
