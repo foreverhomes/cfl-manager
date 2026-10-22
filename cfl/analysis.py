@@ -57,6 +57,8 @@ FREE_RELEASE_MAX_SALARY = 3.0
 # A player whose contract ends becomes a UFA if he is this old on July 1 after his last season,
 # otherwise an RFA. In-season UFA pickups go back to the auction as UFAs whatever their age.
 UFA_AGE = 27
+# The note on an in-season UFA deal a sync made for a pickup (contracts.mark_pickups).
+PICKUP_NOTE = "Picked up in season: set the winning bid"
 
 
 class NotSynced(RuntimeError):
@@ -408,8 +410,10 @@ def load_context(conn: Connection, settings: Settings) -> Context:
         salaries = current_salaries(o, league["season_year"])
         if p is None or not salaries:
             continue
-        p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), salaries
         p.contract_type = o["contract_type"]
+        if o["note"] == PICKUP_NOTE and p.contract_source == "sheet":   # the sheet has his winning bid
+            continue
+        p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), salaries
         p.contract_source = "app" if p.team_id in ctx.app_owned else "override"
         if p.team_id:
             ctx.contract_teams.add(p.team_id)
