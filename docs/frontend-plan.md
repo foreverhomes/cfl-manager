@@ -558,6 +558,7 @@ Accepted on October 20, 2026:
 
 - **Notifications,** such as an email when you're on the clock or get an offer.
 - **Moving the API under `/api`.**
-- **CI.** There's none today, and this plan doesn't add it.
+- **CI.** No workflow runs the checks today, and this plan doesn't add one. The one workflow deletes
+  a closed PR's Neon preview branch.
 - **Browser tests** with Playwright. Add them if the draft room needs them.
 - **A CSS framework,** such as Tailwind.
