@@ -26,6 +26,7 @@ import "@mantine/core/styles/InlineInput.layer.css";
 import "@mantine/core/styles/Checkbox.layer.css";
 import "@mantine/core/styles/Alert.layer.css";
 import "@mantine/core/styles/Loader.layer.css";
+import "@mantine/dates/styles.layer.css";
 import {
   Avatar,
   Checkbox,
@@ -34,10 +35,11 @@ import {
   Input,
   type MantineColorScheme,
   type MantineColorSchemeManager,
+  Popover,
   Table,
 } from "@mantine/core";
 
-// The shades Mantine draws an input's box with, in light and dark. On the box only, they're the page's.
+// The shades Mantine draws an input's box and a dropdown with, in light and dark. There only, they're the page's.
 const box = {
   "--mantine-color-white": "var(--surface)",
   "--mantine-color-gray-4": "var(--border)",
@@ -78,6 +80,7 @@ export const theme = createTheme({
     }),
     Input: Input.extend({ styles: { wrapper: box } }),
     Checkbox: Checkbox.extend({ defaultProps: { radius: 4 }, styles: { input: box } }),
+    Popover: Popover.extend({ styles: { dropdown: box } }),
   },
 });
 

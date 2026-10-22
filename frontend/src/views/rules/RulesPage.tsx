@@ -15,6 +15,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import { DatePickerInput } from "@mantine/dates";
 import { useDisclosure } from "@mantine/hooks";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -46,7 +47,7 @@ function show(kind: string, value: LeagueRule["value"]): string {
   return String(value);
 }
 
-// How a box shows each kind. The API checks the value, and a day of the year is typed as MM-DD.
+// How a box shows each kind. The API checks the value, and a day of the year comes from a calendar.
 const INPUTS: Record<string, NumberInputProps> = {
   money: { prefix: "$", min: 0, decimalScale: 1 },
   count: { min: 1, allowDecimal: false },
@@ -174,10 +175,18 @@ function RuleForm({ rule, leagueYear, onSaved }: { rule: LeagueRule; leagueYear:
       }}
     >
       {rule.kind === "month_day" ? (
-        <TextInput
+        // The rule has no year, so the calendar stays in 2001: no Feb 29, as in the API's check.
+        <DatePickerInput
           {...box}
-          description="Month and day, as MM-DD"
-          onChange={(event) => setValue(event.currentTarget.value)}
+          value={`2001-${value}`}
+          onChange={(date) => date && setValue(date.slice(5))}
+          valueFormat="MMMM D"
+          monthLabelFormat="MMMM"
+          maxLevel="month"
+          hideWeekdays
+          getDayAriaLabel={(date) => show(rule.kind, date.slice(5))}
+          minDate="2001-01-01"
+          maxDate="2001-12-31"
         />
       ) : (
         <NumberInput {...box} {...INPUTS[rule.kind]} onChange={setValue} />
