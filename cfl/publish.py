@@ -16,10 +16,10 @@ import requests
 from . import analysis as A
 from .config import ROOT, Settings
 from .db import Connection, row, transaction, upsert
-from .sync import MAX_CONTRACT_YEARS, app_owned_teams, now_iso
+from .sync import SHEET_SEASONS, app_owned_teams, now_iso
 
-WIDTH = 2 + MAX_CONTRACT_YEARS + 2           # Player, Pos, one column per season, At expiry, Notes
-SEASON_COLS = [chr(ord("C") + i) for i in range(MAX_CONTRACT_YEARS)]
+WIDTH = 2 + SHEET_SEASONS + 2           # Player, Pos, one column per season, At expiry, Notes
+SEASON_COLS = [chr(ord("C") + i) for i in range(SHEET_SEASONS)]
 HEADER_STYLE = {"bold": True, "background": "#ccffff"}
 SECTION_STYLE = {"bold": True}
 TOTAL_STYLE = {"bold": True, "background": "#ccffff"}
@@ -43,8 +43,8 @@ def _at_expiry(ctx: A.Context, p: A.Player) -> str:
 
 
 def _player_row(ctx: A.Context, p: A.Player, note: str = "") -> List[Any]:
-    seasons = [_num(x) for x in p.contract_salaries[:MAX_CONTRACT_YEARS]]
-    seasons += [""] * (MAX_CONTRACT_YEARS - len(seasons))
+    seasons = [_num(x) for x in p.contract_salaries[:SHEET_SEASONS]]
+    seasons += [""] * (SHEET_SEASONS - len(seasons))
     type_note = TYPE_NOTE.get(p.contract_type, "") if p.salary is not None else ""
     return [p.name, _pos(p)] + seasons + [_at_expiry(ctx, p), "; ".join(x for x in (type_note, note) if x)]
 
@@ -81,7 +81,7 @@ def build_roster_sheet(ctx: A.Context, team_id: str) -> Dict[str, Any]:
     exempt = lambda p: p.contract_type == "IN_SEASON_UFA"  # noqa: E731
 
     # A leading apostrophe keeps "2026/2027" as text rather than letting Sheets read it as a date.
-    add(["Player", "Pos"] + ["'" + A.season_label(ctx, i).replace("/", "/20") for i in range(MAX_CONTRACT_YEARS)]
+    add(["Player", "Pos"] + ["'" + A.season_label(ctx, i).replace("/", "/20") for i in range(SHEET_SEASONS)]
         + ["At expiry", "Notes"], HEADER_STYLE)
     cap_rows, bank_rows = [], []
     for label, group in (("Forwards", "F"), ("Defense", "D"), ("Goalies", "G")):
@@ -93,12 +93,11 @@ def build_roster_sheet(ctx: A.Context, team_id: str) -> Dict[str, Any]:
                 bank_rows.append(r)
     add(["Buyouts"], SECTION_STYLE)
     for salaries in ctx.buyouts.get(team_id, []):
-        cap_rows.append(add(["Buyout", ""] + [_num(x) for x in salaries[:MAX_CONTRACT_YEARS]]
-                            + [""] * (MAX_CONTRACT_YEARS - len(salaries)) + ["", "Half salary, rest of contract"]))
+        cap_rows.append(add(["Buyout", ""] + [_num(x) for x in salaries[:SHEET_SEASONS]]
+                            + [""] * (SHEET_SEASONS - len(salaries)) + ["", "Half salary, rest of contract"]))
     add([])
     committed_at = add(["Committed"], TOTAL_STYLE)
-    cap_at = add(["Salary cap", ""] + [_num(ctx.salary_caps.get(team_id) or A.DEFAULT_SALARY_CAP)] * MAX_CONTRACT_YEARS,
-                 SECTION_STYLE)
+    cap_at = add(["Salary cap", ""] + [_num(A.salary_cap(ctx, team_id))] * SHEET_SEASONS, SECTION_STYLE)
     space_at = add(["Cap space"], TOTAL_STYLE)
     years_at = add(["Contract years"], SECTION_STYLE)
     add([])
@@ -124,7 +123,7 @@ def build_roster_sheet(ctx: A.Context, team_id: str) -> Dict[str, Any]:
     values[space_at - 1] = space + ["", ""]
     bank = _ranges(bank_rows)
     values[years_at - 1] = ["Contract years", "", "=COUNT({})".format(",".join(bank)) if bank else 0] \
-        + [""] * (MAX_CONTRACT_YEARS - 1) + ["", "Seasons left on each contract, this one included; minors and IR excluded"]
+        + [""] * (SHEET_SEASONS - 1) + ["", "Seasons left on each contract, this one included; minors and IR excluded"]
     return {"values": values, "styles": styles, "width": WIDTH}
 
 

@@ -260,6 +260,19 @@ CREATE TABLE IF NOT EXISTS machine_events (
     at              TEXT NOT NULL
 );
 
+-- Changes to league rule settings (each rule and its default are in rules.py). A rule's value for a
+-- league year is its most recent change with from_year at or before that year.
+CREATE TABLE IF NOT EXISTS league_rules (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    league_id       TEXT NOT NULL,
+    key             TEXT NOT NULL,      -- e.g. contracts.year_bank
+    from_year       INTEGER NOT NULL,   -- the league year it takes effect
+    value           TEXT,               -- JSON; NULL puts the default back
+    note            TEXT,               -- why, e.g. "2027 league vote"
+    changed_by      TEXT NOT NULL,
+    changed_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS nhl_games (
     game_id         INTEGER PRIMARY KEY,
     game_date       TEXT NOT NULL,      -- local game day, YYYY-MM-DD
@@ -458,7 +471,7 @@ def copy_database(src: Connection, dst: Connection) -> Dict[str, int]:
             counts[table] = len(data)
         if isinstance(dst, PostgresConnection):
             # Ids came across as they were; new rows are numbered after them.
-            for table in ("sync_log", "player_changes", "pick_moves", "machine_events"):
+            for table in ("sync_log", "player_changes", "pick_moves", "machine_events", "league_rules"):
                 dst.execute("SELECT setval(pg_get_serial_sequence('{0}', 'id'), COALESCE(MAX(id), 0) + 1, false) "
                             "FROM {0}".format(table))
     return counts

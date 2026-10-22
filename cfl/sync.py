@@ -489,7 +489,7 @@ SEASON_CELL = re.compile(r"^\s*(\d{2}|\d{4})\s*[/-]\s*(\d{2}|\d{4})\s*$")
 NAME_HEADERS = {"player", "players", "name", "skaters"}
 PRICE_HEADERS = ("salary", "contract price", "bid price", "price")
 LENGTH_HEADERS = ("years left", "contract length", "years")
-MAX_CONTRACT_YEARS = 5   # league rule
+SHEET_SEASONS = 5   # season columns on a salary sheet (the contracts.max_years rule is the league's limit)
 # Rows whose name cell is one of these start a section (compared lowercase, trailing ':' stripped).
 SECTION_LABELS = {
     "buyouts": "BUYOUT", "buyout": "BUYOUT", "cap punishment": "BUYOUT",
@@ -574,7 +574,7 @@ def parse_salary_sheet(rows: List[List[str]], season_year: int, salary_column: A
     def salaries_for(r: List[str]) -> List[float]:
         if layout == "seasons":
             out: List[float] = []
-            for j in range(season_col, season_col + MAX_CONTRACT_YEARS):
+            for j in range(season_col, season_col + SHEET_SEASONS):
                 amount = _money(cell(r, j))
                 if amount is None:
                     break
@@ -584,7 +584,7 @@ def parse_salary_sheet(rows: List[List[str]], season_year: int, salary_column: A
         if salary is None:
             return []
         years = int(_money(cell(r, years_col)) or 1)
-        return [salary] * max(1, min(years, MAX_CONTRACT_YEARS))
+        return [salary] * max(1, min(years, SHEET_SEASONS))
 
     section, seen, duplicates, contracts = "ROSTER", set(), [], []
     for r in rows[header_at + 1:]:
