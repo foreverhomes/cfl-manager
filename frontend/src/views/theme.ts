@@ -12,14 +12,38 @@ import "@mantine/core/styles/Stack.layer.css";
 import "@mantine/core/styles/Anchor.layer.css";
 import "@mantine/core/styles/Table.layer.css";
 import "@mantine/core/styles/List.layer.css";
+import "@mantine/core/styles/Paper.layer.css";
+import "@mantine/core/styles/CloseButton.layer.css";
+import "@mantine/core/styles/Overlay.layer.css";
+import "@mantine/core/styles/ModalBase.layer.css";
+import "@mantine/core/styles/Modal.layer.css";
+import "@mantine/core/styles/Input.layer.css";
+import "@mantine/core/styles/NumberInput.layer.css";
+import "@mantine/core/styles/Popover.layer.css";
+import "@mantine/core/styles/Combobox.layer.css";
+import "@mantine/core/styles/ScrollArea.layer.css";
+import "@mantine/core/styles/InlineInput.layer.css";
+import "@mantine/core/styles/Checkbox.layer.css";
+import "@mantine/core/styles/Alert.layer.css";
+import "@mantine/core/styles/Loader.layer.css";
 import {
   Avatar,
+  Checkbox,
   type CSSVariablesResolver,
   createTheme,
+  Input,
   type MantineColorScheme,
   type MantineColorSchemeManager,
   Table,
 } from "@mantine/core";
+
+// The shades Mantine draws an input's box with, in light and dark. On the box only, they're the page's.
+const box = {
+  "--mantine-color-white": "var(--surface)",
+  "--mantine-color-gray-4": "var(--border)",
+  "--mantine-color-dark-6": "var(--surface)",
+  "--mantine-color-dark-4": "var(--border)",
+};
 
 export const theme = createTheme({
   fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
@@ -52,6 +76,8 @@ export const theme = createTheme({
         },
       },
     }),
+    Input: Input.extend({ styles: { wrapper: box } }),
+    Checkbox: Checkbox.extend({ defaultProps: { radius: 4 }, styles: { input: box } }),
   },
 });
 
@@ -66,6 +92,8 @@ const tokens = {
   "--mantine-color-default-border": "var(--border)",
   "--mantine-primary-color-filled": "var(--accent)",
   "--mantine-primary-color-contrast": "var(--accent-ink)",
+  "--mantine-color-red-light": "color-mix(in oklab, var(--bad) 7%, var(--surface))",
+  "--mantine-color-red-light-color": "var(--bad)",
 };
 export const cssVariables: CSSVariablesResolver = () => ({ variables: {}, light: tokens, dark: tokens });
 
