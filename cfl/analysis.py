@@ -51,6 +51,8 @@ NON_LINEUP_STATUSES = {"MINORS", "INJURED_RESERVE"}
 CAPPED_STATUSES = {"ACTIVE", "RESERVE"}   # what counts against the roster limit and the salary cap
 
 DEFAULT_SALARY_CAP = 220.0   # when no rule change sets the cap and Fantrax reports none
+# The note on an in-season UFA deal a sync made for a pickup (contracts.mark_pickups).
+PICKUP_NOTE = "Picked up in season: set the winning bid"
 
 
 class NotSynced(RuntimeError):
@@ -404,8 +406,10 @@ def load_context(conn: Connection, settings: Settings) -> Context:
         salaries = current_salaries(o, league["season_year"])
         if p is None or not salaries:
             continue
-        p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), salaries
         p.contract_type = o["contract_type"]
+        if o["note"] == PICKUP_NOTE and p.contract_source == "sheet":   # the sheet has his winning bid
+            continue
+        p.salary, p.contract_years, p.contract_salaries = salaries[0], len(salaries), salaries
         p.contract_source = "app" if p.team_id in ctx.app_owned else "override"
         if p.team_id:
             ctx.contract_teams.add(p.team_id)

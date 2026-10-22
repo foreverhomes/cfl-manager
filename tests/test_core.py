@@ -6,7 +6,7 @@ it is wiped before every test.
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -1085,14 +1085,65 @@ def test_a_new_season_is_not_logged_as_a_change_to_every_contract(conn, tmp_path
     assert json.loads(logged["old_value"])["salaries"] == [5]
 
 
-def test_every_sync_ends_by_recording_player_changes(conn, tmp_path, monkeypatch):
+@pytest.mark.parametrize("snap_season, was_on, status, sheet, today, contract", [
+    (2026, None, "ACTIVE", [], date(2026, 11, 1), (1, "IN_SEASON_UFA")),     # picked up in season
+    (2026, None, "ACTIVE", [], date(2026, 9, 1), (None, "STANDARD")),        # before the season starts
+    (2026, "t2", "ACTIVE", [], date(2026, 11, 1), (None, "STANDARD")),       # traded, not picked up
+    (2026, None, "ACTIVE", [8], date(2026, 11, 1), (8, "STANDARD")),         # already has a contract
+    (2026, None, "MINORS", [], date(2026, 11, 1), (None, "STANDARD")),       # an unsigned prospect
+    (2025, None, "ACTIVE", [], date(2026, 11, 1), (None, "STANDARD")),       # first sync of the season
+])
+def test_in_season_pickups_with_no_contract_get_a_one_year_in_season_ufa_deal(
+        conn, tmp_path, snap_season, was_on, status, sheet, today, contract):
+    from cfl import contracts as C
+    conn.execute("UPDATE league SET start_date='2026-10-04', end_date='2027-04-04' WHERE id=?", (LEAGUE,))
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One'), ('t2', ?, 'Two')", (LEAGUE, LEAGUE))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    conn.execute("INSERT INTO league_players VALUES (?, 'f1', 'G', 'T')", (LEAGUE,))
+    conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f1', 'G', ?)", (LEAGUE, status))
+    conn.executemany("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                     "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', ?, 1, ?)",
+                     [(LEAGUE, s, json.dumps([s])) for s in sheet])
+    upsert(conn, "app_state", [{"key": "changes:" + LEAGUE, "updated_at": "x", "value": json.dumps(
+        {"season_year": snap_season, "players": {"f1": _entry(was_on)}})}], ["key"])
+    conn.commit()
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+
+    C.mark_pickups(conn, A.load_context(conn, settings), today)
+    p = A.load_context(conn, settings).players["f1"]
+    assert (p.salary, p.contract_type) == contract
+
+
+@pytest.mark.parametrize("note, contract", [
+    (A.PICKUP_NOTE, (8, "IN_SEASON_UFA", "sheet")),    # the sheet has his winning bid now
+    ("Bid $2", (1, "IN_SEASON_UFA", "override")),      # someone edited the deal: the edit wins
+])
+def test_a_salary_sheet_that_lists_a_pickup_gives_his_salary_and_keeps_the_in_season_ufa_type(
+        conn, tmp_path, note, contract):
+    from cfl import contracts as C
+    conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))
+    _player(conn, "f1", "Daccord, Joey", "SEA", "G")
+    conn.execute("INSERT INTO league_players VALUES (?, 'f1', 'G', 'T')", (LEAGUE,))
+    conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f1', 'G', 'ACTIVE')", (LEAGUE,))
+    conn.execute("INSERT INTO contracts (league_id, team_id, sheet_name, player_id, section, salary, "
+                 "years_remaining, salaries) VALUES (?, 't1', 'Joey Daccord', 'f1', 'ROSTER', 8, 1, '[8]')", (LEAGUE,))
+    conn.commit()
+    C.save_override(conn, LEAGUE, "f1", [C.PICKUP_SALARY], "IN_SEASON_UFA", note)
+    settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
+
+    p = A.load_context(conn, settings).players["f1"]
+    assert (p.salary, p.contract_type, p.contract_source) == contract
+
+
+def test_every_sync_ends_by_marking_pickups_then_recording_player_changes(conn, tmp_path, monkeypatch):
     import cfl.sync as sync
     monkeypatch.setattr(sync, "sync_standings", lambda conn, fx: {"teams": 0})
     settings = Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json")
 
     results = sync.sync_all(conn, settings, ["standings"])
-    assert [(r["resource"], r["status"]) for r in results] == [("standings", "ok"), ("changes", "ok")]
-    assert results[-1]["detail"] == {"baseline": True, "changes": 0}
+    assert [(r["resource"], r["status"]) for r in results] == [
+        ("standings", "ok"), ("pickups", "ok"), ("changes", "ok")]
+    assert [r["detail"] for r in results[1:]] == [{"marked": []}, {"baseline": True, "changes": 0}]
 
 
 def test_a_failed_sync_step_is_logged_and_the_next_one_still_runs(conn):
