@@ -19,6 +19,10 @@ export type BirthDateEdit = { readonly "birth_date"?: string | null } & { readon
 export const BirthDateEdit = Schema.StructWithRest(Schema.Struct({ "birth_date": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Birth Date" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "BirthDateEdit", "identifier": "BirthDateEdit" })
 export type PickRef = { readonly "draft_year": number, readonly "round": number, readonly "original_team_id": string } & { readonly [x: string]: Schema.Json }
 export const PickRef = Schema.StructWithRest(Schema.Struct({ "draft_year": Schema.Number.annotate({ "title": "Draft Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "round": Schema.Number.annotate({ "title": "Round" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "original_team_id": Schema.String.annotate({ "title": "Original Team Id" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "PickRef", "identifier": "PickRef" })
+export type RuleChange = { readonly "from_year": number, readonly "value": Schema.Json, readonly "note": string | null, readonly "changed_by": string, readonly "changed_at": string } & { readonly [x: string]: Schema.Json }
+export const RuleChange = Schema.StructWithRest(Schema.Struct({ "from_year": Schema.Number.annotate({ "title": "From Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "note": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" }), "changed_by": Schema.String.annotate({ "title": "Changed By" }), "changed_at": Schema.String.annotate({ "title": "Changed At" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "RuleChange", "identifier": "RuleChange" })
+export type RuleEdit = { readonly "value": Schema.Json, readonly "from_year": number, readonly "note"?: string | null } & { readonly [x: string]: Schema.Json }
+export const RuleEdit = Schema.StructWithRest(Schema.Struct({ "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "from_year": Schema.Number.annotate({ "title": "From Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "RuleEdit", "identifier": "RuleEdit" })
 export type TradeRequest = { readonly "team_id"?: string, readonly "give"?: ReadonlyArray<string>, readonly "other_team_id"?: string | null, readonly "get"?: ReadonlyArray<string>, readonly "lineup"?: string, readonly "spread"?: number } & { readonly [x: string]: Schema.Json }
 export const TradeRequest = Schema.StructWithRest(Schema.Struct({ "team_id": Schema.optionalKey(Schema.String.annotate({ "title": "Team Id", "default": "me" })), "give": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Give", "default": [] })), "other_team_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Other Team Id" })), "get": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Get", "default": [] })), "lineup": Schema.optionalKey(Schema.String.annotate({ "title": "Lineup", "default": "best" })), "spread": Schema.optionalKey(Schema.Number.annotate({ "title": "Spread", "default": 1.5 }).check(Schema.isFinite().annotate({ "expected": "a finite number" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "TradeRequest", "identifier": "TradeRequest" })
 export type NewUser = { readonly "team_id"?: string | null, readonly "role"?: string, readonly "status"?: string, readonly "email": string } & { readonly [x: string]: Schema.Json }
@@ -29,6 +33,10 @@ export type HTTPValidationError = { readonly "detail"?: ReadonlyArray<Validation
 export const HTTPValidationError = Schema.StructWithRest(Schema.Struct({ "detail": Schema.optionalKey(Schema.Array(ValidationError).annotate({ "title": "Detail" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "HTTPValidationError", "identifier": "HTTPValidationError" })
 export type PickDeal = { readonly "kind"?: string, readonly "team_id": string, readonly "other_team_id": string, readonly "send"?: ReadonlyArray<PickRef>, readonly "receive"?: ReadonlyArray<PickRef>, readonly "note"?: string | null } & { readonly [x: string]: Schema.Json }
 export const PickDeal = Schema.StructWithRest(Schema.Struct({ "kind": Schema.optionalKey(Schema.String.annotate({ "title": "Kind", "default": "trade" })), "team_id": Schema.String.annotate({ "title": "Team Id" }), "other_team_id": Schema.String.annotate({ "title": "Other Team Id" }), "send": Schema.optionalKey(Schema.Array(PickRef).annotate({ "title": "Send", "default": [] })), "receive": Schema.optionalKey(Schema.Array(PickRef).annotate({ "title": "Receive", "default": [] })), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "PickDeal", "identifier": "PickDeal" })
+export type LeagueRule = { readonly "key": string, readonly "label": string, readonly "kind": string, readonly "cite": string, readonly "default": Schema.Json, readonly "value": Schema.Json, readonly "changes": ReadonlyArray<RuleChange> } & { readonly [x: string]: Schema.Json }
+export const LeagueRule = Schema.StructWithRest(Schema.Struct({ "key": Schema.String.annotate({ "title": "Key" }), "label": Schema.String.annotate({ "title": "Label" }), "kind": Schema.String.annotate({ "title": "Kind" }), "cite": Schema.String.annotate({ "title": "Cite" }), "default": Schema.Json.annotate({ "expected": "JSON value", "title": "Default" }), "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "changes": Schema.Array(RuleChange).annotate({ "title": "Changes" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "LeagueRule", "identifier": "LeagueRule" })
+export type LeagueRules = { readonly "year": number, readonly "league_year": number, readonly "can_edit": boolean, readonly "rules": ReadonlyArray<LeagueRule> } & { readonly [x: string]: Schema.Json }
+export const LeagueRules = Schema.StructWithRest(Schema.Struct({ "year": Schema.Number.annotate({ "title": "Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "league_year": Schema.Number.annotate({ "title": "League Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "can_edit": Schema.Boolean.annotate({ "title": "Can Edit" }), "rules": Schema.Array(LeagueRule).annotate({ "title": "Rules" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "LeagueRules", "identifier": "LeagueRules" })
 // schemas
 export type AuthConfig200 = Schema.Json
 export const AuthConfig200 = Schema.Json.annotate({ "expected": "JSON value" })
@@ -142,6 +150,18 @@ export type Offseason200 = Schema.Json
 export const Offseason200 = Schema.Json.annotate({ "expected": "JSON value" })
 export type Offseason422 = HTTPValidationError
 export const Offseason422 = HTTPValidationError
+export type RulesParams = { readonly "year"?: number | null }
+export const RulesParams = Schema.Struct({ "year": Schema.optionalKey(Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "Year", "description": "The league year. Defaults to the current one" })) })
+export type Rules200 = LeagueRules
+export const Rules200 = LeagueRules
+export type Rules422 = HTTPValidationError
+export const Rules422 = HTTPValidationError
+export type ChangeRuleRequestJson = RuleEdit
+export const ChangeRuleRequestJson = RuleEdit
+export type ChangeRule200 = LeagueRules
+export const ChangeRule200 = LeagueRules
+export type ChangeRule422 = HTTPValidationError
+export const ChangeRule422 = HTTPValidationError
 export type OverviewParams = { readonly "lineup"?: string }
 export const OverviewParams = Schema.Struct({ "lineup": Schema.optionalKey(Schema.String.annotate({ "title": "Lineup", "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax", "default": "best" })) })
 export type Overview200 = Schema.Json
@@ -509,6 +529,24 @@ export const make = (
       orElse: unexpectedStatus
     }))
     ),
+    "rules": (options: Parameters<Cfl["rules"]>[0]) => HttpClientRequest.get("/rules").pipe(
+      HttpClientRequest.setUrlParams({ "year": options?.params?.["year"] as any }),
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(Rules200),
+      "422": decodeError("Rules422", Rules422),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "changeRule": (key, options: Parameters<Cfl["changeRule"]>[1]) => __makePathRequest(HttpClientRequest.put, [key], () => "/rules/" + __encodePathParam(key) + "").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ChangeRule200),
+      "422": decodeError("ChangeRule422", ChangeRule422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "overview": (options: Parameters<Cfl["overview"]>[0]) => HttpClientRequest.get("/analysis/overview").pipe(
       HttpClientRequest.setUrlParams({ "lineup": options?.params?.["lineup"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -799,6 +837,21 @@ readonly "changeLog": {
 readonly "offseason": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof OffseasonParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<Offseason200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"Offseason422", Offseason422>>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof OffseasonParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<Offseason200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"Offseason422", Offseason422>>;
+  }
+  /**
+* Every league rule setting, with its value for a league year, its default, and every change to it.
+*/
+readonly "rules": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof RulesParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<Rules200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"Rules422", Rules422>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof RulesParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<Rules200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"Rules422", Rules422>>;
+  }
+  /**
+* Change a league rule from a league year on, and return the rules for that year. 400 for a past year, a
+* value that doesn't fit the rule, or one that conflicts with another rule or with a traded draft pick.
+*/
+readonly "changeRule": {
+    <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof ChangeRuleRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<ChangeRule200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"ChangeRule422", ChangeRule422>>;
+    <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof ChangeRuleRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<ChangeRule200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"ChangeRule422", ChangeRule422>>;
   }
   /**
 * Every team's projected category ranks (1 = best) and actual H2H category records.

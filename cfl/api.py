@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
@@ -19,10 +19,11 @@ from . import contracts as C
 from . import offseason as O
 from . import picks as PK
 from . import publish as P
+from . import rules as R
 from .auth import User
 from .config import Settings, get_settings
 from .db import Connection, connect, row, rows, transaction
-from .sync import RESOURCES, _logged, current_period, now_iso, sync_all
+from .sync import RESOURCES, _logged, current_period, league_season, now_iso, sync_all
 
 app = FastAPI(
     title="CFL Manager",
@@ -707,6 +708,70 @@ def offseason(year: Optional[int] = Query(None, description="The offseason's yea
         return O.expiring(_ctx(conn, get_settings()), year)
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
+
+
+# --------------------------------------------------------------------------- league rules
+
+
+class RuleChange(BaseModel):
+    from_year: int
+    value: Any                      # null puts the default back
+    note: Optional[str]
+    changed_by: str
+    changed_at: str
+
+
+class LeagueRule(BaseModel):
+    key: str
+    label: str
+    kind: str                       # money / count / share / month_day
+    cite: str                       # the docs/rules.md section it comes from
+    default: Any                    # the cap's is null: Fantrax's, else $220
+    value: Any                      # in the league year asked about
+    changes: List[RuleChange]       # every saved change, newest first
+
+
+class LeagueRules(BaseModel):
+    year: int                       # the league year the values are for
+    league_year: int                # the current one: a change can't start before it
+    can_edit: bool
+    rules: List[LeagueRule]
+
+
+def _rules(conn: Connection, year: Optional[int], user: User) -> Dict:
+    league_id = get_settings().league_id
+    league_year = league_season(conn, league_id)
+    if league_year is None:
+        raise A.NotSynced("League not synced yet: POST /sync")
+    year = year or league_year
+    return {"year": year, "league_year": league_year, "can_edit": user.is_admin,
+            "rules": R.describe(conn, league_id, year)}
+
+
+@data.get("/rules", response_model=LeagueRules)
+def rules(year: Optional[int] = Query(None, description="The league year. Defaults to the current one"),
+          conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Every league rule setting, with its value for a league year, its default, and every change to it."""
+    return _rules(conn, year, user)
+
+
+class RuleEdit(BaseModel):
+    value: Any                      # required: null puts the default back
+    from_year: int                  # the league year it takes effect: this one or a later one
+    note: Optional[str] = None      # why, e.g. "2027 league vote"
+
+
+@data.put("/rules/{key}", response_model=LeagueRules, dependencies=ADMIN_ONLY)
+def change_rule(key: str, edit: RuleEdit, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Change a league rule from a league year on, and return the rules for that year. 400 for a past year, a
+    value that doesn't fit the rule, or one that conflicts with another rule or with a traded draft pick."""
+    try:
+        R.change(conn, get_settings().league_id, key, edit.value, edit.from_year, user.name or user.email, edit.note)
+    except LookupError as exc:
+        raise HTTPException(404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    return _rules(conn, edit.from_year, user)
 
 
 # --------------------------------------------------------------------------- analysis
