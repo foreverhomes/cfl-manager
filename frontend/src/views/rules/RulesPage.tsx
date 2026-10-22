@@ -1,8 +1,26 @@
-import { Anchor, List, Stack, Table, Text, Title } from "@mantine/core";
-import { useQuery } from "@tanstack/react-query";
+import {
+  Alert,
+  Anchor,
+  Button,
+  Checkbox,
+  Group,
+  List,
+  Modal,
+  NumberInput,
+  type NumberInputProps,
+  Select,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import type { LeagueRule } from "../../api/generated";
 import { fmtMoney } from "../../format";
-import { rules } from "../../queries/rules";
+import { changeRule, rules } from "../../queries/rules";
 
 const AREAS = { contracts: "Contracts and the cap", draft: "Entry draft" };
 const WRITTEN_RULES = "https://github.com/foreverhomes/cfl-manager/blob/main/docs/rules.md";
@@ -20,12 +38,25 @@ const anchor = (heading: string) =>
 function show(kind: string, value: LeagueRule["value"]): string {
   if (value === null) return "Fantrax's"; // only the cap has no value of its own
   if (kind === "money") return fmtMoney(Number(value));
-  if (kind === "share") return `${Number(value) * 100}%`;
+  if (kind === "share") return `${Math.round(Number(value) * 100)}%`;
   if (kind === "month_day") {
     const [month, date] = String(value).split("-").map(Number);
     return new Date(2001, month - 1, date).toLocaleDateString("en-US", { month: "long", day: "numeric" });
   }
   return String(value);
+}
+
+// How a box shows each kind. The API checks the value, and a day of the year is typed as MM-DD.
+const INPUTS: Record<string, NumberInputProps> = {
+  money: { prefix: "$", min: 0, decimalScale: 1 },
+  count: { min: 1, allowDecimal: false },
+  share: { suffix: "%", min: 1, max: 100, allowDecimal: false },
+};
+
+// The value as the form shows it: a share as a whole percent, and the cap's null as an empty box.
+function typed(kind: string, value: LeagueRule["value"]): string | number {
+  if (kind === "share") return Math.round(Number(value) * 100);
+  return typeof value === "number" || typeof value === "string" ? value : "";
 }
 
 export function RulesPage() {
@@ -50,13 +81,14 @@ export function RulesPage() {
                 <Table.Th>Rule</Table.Th>
                 <Table.Th>Value</Table.Th>
                 <Table.Th>Changes</Table.Th>
+                {data.can_edit && <Table.Th />}
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {data.rules
                 .filter((rule) => rule.key.startsWith(`${prefix}.`))
                 .map((rule) => (
-                  <RuleRow key={rule.key} rule={rule} />
+                  <RuleRow key={rule.key} rule={rule} canEdit={data.can_edit} leagueYear={data.league_year} />
                 ))}
             </Table.Tbody>
           </Table>
@@ -66,7 +98,8 @@ export function RulesPage() {
   );
 }
 
-function RuleRow({ rule }: { rule: LeagueRule }) {
+function RuleRow({ rule, canEdit, leagueYear }: { rule: LeagueRule; canEdit: boolean; leagueYear: number }) {
+  const [editing, { open, close }] = useDisclosure();
   return (
     <Table.Tr>
       <Table.Td>
@@ -106,6 +139,67 @@ function RuleRow({ rule }: { rule: LeagueRule }) {
           </Text>
         )}
       </Table.Td>
+      {canEdit && (
+        <Table.Td>
+          <Button size="xs" variant="default" onClick={open}>
+            Change
+          </Button>
+          <Modal opened={editing} onClose={close} title={rule.label}>
+            <RuleForm rule={rule} leagueYear={leagueYear} onSaved={close} />
+          </Modal>
+        </Table.Td>
+      )}
     </Table.Tr>
+  );
+}
+
+function RuleForm({ rule, leagueYear, onSaved }: { rule: LeagueRule; leagueYear: number; onSaved: () => void }) {
+  const [value, setValue] = useState(typed(rule.kind, rule.value));
+  const [from, setFrom] = useState<string | null>(String(leagueYear));
+  const [note, setNote] = useState("");
+  const [toDefault, setToDefault] = useState(false);
+  const save = useMutation(changeRule(rule.key));
+  const seasons = Array.from({ length: 5 }, (_, i) => ({
+    value: String(leagueYear + i),
+    label: season(leagueYear + i),
+  }));
+  const box = { label: "Value", value, disabled: toDefault };
+  return (
+    <Stack
+      component="form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const sent = rule.kind === "share" ? Number(value) / 100 : value;
+        save.mutate({ value: toDefault ? null : sent, from_year: Number(from), note }, { onSuccess: onSaved });
+      }}
+    >
+      {rule.kind === "month_day" ? (
+        <TextInput
+          {...box}
+          description="Month and day, as MM-DD"
+          onChange={(event) => setValue(event.currentTarget.value)}
+        />
+      ) : (
+        <NumberInput {...box} {...INPUTS[rule.kind]} onChange={setValue} />
+      )}
+      <Checkbox
+        label={`Use the default: ${show(rule.kind, rule.default)}`}
+        checked={toDefault}
+        onChange={(event) => setToDefault(event.currentTarget.checked)}
+      />
+      <Select label="Starts in" data={seasons} value={from} onChange={setFrom} allowDeselect={false} />
+      <TextInput
+        label="Why"
+        placeholder="2027 league vote"
+        value={note}
+        onChange={(event) => setNote(event.currentTarget.value)}
+      />
+      {save.error && <Alert color="red">{save.error.message}</Alert>}
+      <Group justify="flex-end">
+        <Button type="submit" loading={save.isPending}>
+          Save
+        </Button>
+      </Group>
+    </Stack>
   );
 }

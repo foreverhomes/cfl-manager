@@ -10,4 +10,11 @@ if (typeof window !== "undefined") {
     removeEventListener: () => {},
     dispatchEvent: () => false,
   });
+  // Nor ResizeObserver or scrollIntoView, which a Select's options use.
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+  Element.prototype.scrollIntoView = () => {};
 }

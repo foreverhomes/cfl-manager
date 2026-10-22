@@ -77,7 +77,9 @@ Before a PR, run `npm run check` in `frontend/` (Biome, TypeScript, then Vitest)
   roster move it picks up isn't logged either.
 - **Rules.** Every league rule setting that a vote can change: its value this season, its default
   when they differ, every change with the season it starts in, and a link to its section of
-  [the league rules](docs/rules.md). Everyone can read it.
+  [the league rules](docs/rules.md). Everyone can read it. The admin changes a rule there: a new value
+  or the default, the season it starts in, and why. A change that breaks another rule, or a traded
+  draft pick, is refused with the reason.
 - **Trade builder** (admin only). Select any of your players. Optionally pick a trade partner and
   their players.
   - **Live evaluation:** the trade is re-evaluated on every change, showing each side's change in

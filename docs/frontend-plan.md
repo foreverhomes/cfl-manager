@@ -7,7 +7,8 @@ FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
 account" card was the first React view in the page. F2 has started: the Rules page is a React view
-on its own tab, and its edit form comes next.
+on its own tab, and the admin changes a rule there. The rest of F2 waits for the league phases
+(offseason milestone 1).
 
 ## Why now
 
@@ -133,7 +134,7 @@ rules to `styles.css`. Before you write markup or a component of your own, look 
 - **The look comes from `theme.ts`.** When a component doesn't match the page, change the theme:
   the component's CSS variables, `defaultProps` or `styles` under `components`. Every view then
   gets the fix. For example, the theme gives `Table` the page's 14px text, its 6px by 8px cells and
-  its `--grid` row lines.
+  its `--grid` row lines. It gives an input's box the page's `--surface` and `--border`.
 - **Each component's `.layer.css` goes into `theme.ts`** with the first view that uses it. A
   component without it renders unstyled, with no error.
 - **The element a view mounts into stays legacy.** `app.js` mounts a view inside an element that
@@ -382,7 +383,7 @@ frontend/
       theme.ts            Mantine's CSS imports, the theme, and the color-scheme bridge
       Providers.tsx       Mantine and TanStack Query, for mountView and the tests
       test-utils.tsx      renderView()
-    test-setup.ts         matchMedia for jsdom
+    test-setup.ts         matchMedia, ResizeObserver and scrollIntoView for jsdom
 cfl/web/dist/             the build, which git ignores and FastAPI serves
 ```
 
@@ -518,7 +519,9 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
   text, buttons, and disabled buttons with their blockers. A view test starts with
   `// @vitest-environment jsdom`. Other tests run in Node. `server.listen({ onUnhandledFrame: "error" })`
   (MSW 3's name for it) fails a test on any request that it doesn't answer. `renderView()` wraps a
-  view in the page's providers, and `src/test-setup.ts` adds the `matchMedia` that Mantine needs.
+  view in the page's providers, and `src/test-setup.ts` adds the browser parts that Mantine needs.
+  jsdom has no layout, so Mantine hides a `Popover`, such as a `Select`'s options: find an option
+  with `{ hidden: true }`.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
 - **`npm run check`** runs `biome check`, `tsc` and `vitest run`. Run it and `pytest` before each
   PR.
