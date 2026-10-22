@@ -1,4 +1,4 @@
-import { Anchor, Stack, Text, Title } from "@mantine/core";
+import { Anchor, List, Stack, Table, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import type { LeagueRule } from "../../api/generated";
 import { fmtMoney } from "../../format";
@@ -42,29 +42,25 @@ export function RulesPage() {
         </Text>
       </Stack>
       {Object.entries(AREAS).map(([prefix, title]) => (
-        <section key={prefix}>
-          <Title order={3} mt={16} mb={4}>
-            {title}
-          </Title>
-          <div className="scroll-x">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="left">Rule</th>
-                  <th className="left">Value</th>
-                  <th className="left">Changes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.rules
-                  .filter((rule) => rule.key.startsWith(`${prefix}.`))
-                  .map((rule) => (
-                    <RuleRow key={rule.key} rule={rule} />
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <Stack component="section" key={prefix} gap={4} mt={16}>
+          <Title order={3}>{title}</Title>
+          <Table>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Rule</Table.Th>
+                <Table.Th>Value</Table.Th>
+                <Table.Th>Changes</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {data.rules
+                .filter((rule) => rule.key.startsWith(`${prefix}.`))
+                .map((rule) => (
+                  <RuleRow key={rule.key} rule={rule} />
+                ))}
+            </Table.Tbody>
+          </Table>
+        </Stack>
       ))}
     </>
   );
@@ -72,39 +68,44 @@ export function RulesPage() {
 
 function RuleRow({ rule }: { rule: LeagueRule }) {
   return (
-    <tr>
-      <td className="left wrap">
+    <Table.Tr>
+      <Table.Td>
         {rule.label}
         <Text size="xs" c="dimmed">
-          Rules: <Anchor href={`${WRITTEN_RULES}#${anchor(rule.cite)}`}>{rule.cite}</Anchor>
+          Rules:{" "}
+          <Anchor href={`${WRITTEN_RULES}#${anchor(rule.cite)}`} inherit>
+            {rule.cite}
+          </Anchor>
         </Text>
-      </td>
-      <td className="left">
+      </Table.Td>
+      <Table.Td style={{ whiteSpace: "nowrap" }}>
         {show(rule.kind, rule.value)}
         {rule.value !== rule.default && (
           <Text size="xs" c="dimmed">
             Default {show(rule.kind, rule.default)}
           </Text>
         )}
-      </td>
-      <td className="left wrap">
+      </Table.Td>
+      <Table.Td>
         {rule.changes.length ? (
-          <ul className="rule-changes">
+          <List listStyleType="none" spacing={4}>
             {rule.changes.map((c) => (
-              <li key={c.changed_at + c.from_year}>
+              <List.Item key={c.changed_at + c.from_year}>
                 {c.value === null ? "The default" : show(rule.kind, c.value)} from {season(c.from_year)}
                 {c.note && `: ${c.note}`}
-                <span className="sub">
+                <Text span inherit c="dimmed">
                   {" "}
                   · {c.changed_by}, {day(c.changed_at)}
-                </span>
-              </li>
+                </Text>
+              </List.Item>
             ))}
-          </ul>
+          </List>
         ) : (
-          <span className="sub">None</span>
+          <Text span inherit c="dimmed">
+            None
+          </Text>
         )}
-      </td>
-    </tr>
+      </Table.Td>
+    </Table.Tr>
   );
 }

@@ -10,12 +10,15 @@ import "@mantine/core/styles/Title.layer.css";
 import "@mantine/core/styles/Group.layer.css";
 import "@mantine/core/styles/Stack.layer.css";
 import "@mantine/core/styles/Anchor.layer.css";
+import "@mantine/core/styles/Table.layer.css";
+import "@mantine/core/styles/List.layer.css";
 import {
   Avatar,
   type CSSVariablesResolver,
   createTheme,
   type MantineColorScheme,
   type MantineColorSchemeManager,
+  Table,
 } from "@mantine/core";
 
 export const theme = createTheme({
@@ -28,6 +31,26 @@ export const theme = createTheme({
   components: {
     Avatar: Avatar.extend({
       vars: () => ({ root: { "--avatar-bg": "var(--ink)", "--avatar-color": "var(--surface)" } }),
+    }),
+    // Like the page's .data-table: 14px text, 6px by 8px cells, --grid between rows, --axis under the header.
+    Table: Table.extend({
+      vars: () => ({
+        table: {
+          "--table-border-color": "var(--grid)",
+          "--table-vertical-spacing": "6px",
+          "--table-horizontal-spacing": "8px",
+        },
+      }),
+      styles: {
+        table: { fontSize: "var(--mantine-font-size-md)" },
+        th: {
+          color: "var(--muted)",
+          fontSize: "12px",
+          fontWeight: 500,
+          whiteSpace: "nowrap",
+          borderBottom: "1px solid var(--axis)",
+        },
+      },
     }),
   },
 });
