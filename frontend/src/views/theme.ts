@@ -26,17 +26,29 @@ import "@mantine/core/styles/InlineInput.layer.css";
 import "@mantine/core/styles/Checkbox.layer.css";
 import "@mantine/core/styles/Alert.layer.css";
 import "@mantine/core/styles/Loader.layer.css";
+import "@mantine/core/styles/Card.layer.css";
+import "@mantine/core/styles/SimpleGrid.layer.css";
+import "@mantine/core/styles/SegmentedControl.layer.css";
+import "@mantine/core/styles/Badge.layer.css";
+import "@mantine/core/styles/Tooltip.layer.css";
+import "@mantine/core/styles/Accordion.layer.css";
 import "@mantine/dates/styles.layer.css";
 import {
+  Accordion,
   Avatar,
+  Badge,
+  Card,
   Checkbox,
   type CSSVariablesResolver,
   createTheme,
   Input,
+  InputWrapper,
   type MantineColorScheme,
   type MantineColorSchemeManager,
   Popover,
+  SegmentedControl,
   Table,
+  Tooltip,
 } from "@mantine/core";
 
 // The shades Mantine draws an input's box and a dropdown with, in light and dark. There only, they're the page's.
@@ -79,6 +91,86 @@ export const theme = createTheme({
       },
     }),
     Input: Input.extend({ styles: { wrapper: box } }),
+    // Like the page's .field-label.
+    InputWrapper: InputWrapper.extend({
+      styles: {
+        label: { display: "block", fontSize: "12px", fontWeight: 400, color: "var(--ink-2)", marginBottom: "4px" },
+      },
+    }),
+    // Like the page's .card and .tile.
+    Card: Card.extend({
+      defaultProps: { withBorder: true, padding: 16 },
+      styles: {
+        root: {
+          background: "var(--surface)",
+          borderColor: "var(--border)",
+          borderRadius: "var(--radius)",
+          boxShadow: "var(--shadow)",
+        },
+      },
+    }),
+    // Like the page's .segmented: the chosen option in --ink.
+    SegmentedControl: SegmentedControl.extend({
+      vars: () => ({
+        root: {
+          "--sc-color": "var(--ink)",
+          "--sc-label-color": "var(--surface)",
+          "--sc-radius": "8px",
+          "--sc-padding": "7px 12px",
+          "--sc-font-size": "var(--mantine-font-size-md)",
+        },
+      }),
+      styles: {
+        root: {
+          "--mantine-color-gray-7": "var(--ink-2)",
+          "--mantine-color-dark-1": "var(--ink-2)",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          padding: 0,
+        },
+      },
+    }),
+    // Like the page's .pill: a dot, a border and a wash of the color, which is any CSS color.
+    Badge: Badge.extend({
+      defaultProps: { variant: "dot" },
+      vars: (_, { color }) => ({
+        root: {
+          "--badge-dot-color": color,
+          "--badge-bg": `color-mix(in oklab, ${color} 14%, transparent)`,
+          "--badge-bd": `1px solid color-mix(in oklab, ${color} 55%, transparent)`,
+          "--badge-color": "var(--ink)",
+          "--badge-fz": "11px",
+          "--badge-height": "18px",
+          "--badge-padding-x": "7px",
+          "--badge-radius": "999px",
+        },
+      }),
+      styles: { root: { textTransform: "none", fontWeight: 400, verticalAlign: "1px" } },
+    }),
+    // Like the page's .tooltip.
+    Tooltip: Tooltip.extend({
+      defaultProps: { multiline: true, w: 260 },
+      vars: () => ({
+        tooltip: { "--tooltip-bg": "var(--surface)", "--tooltip-color": "var(--ink)", "--tooltip-radius": "8px" },
+      }),
+      styles: {
+        tooltip: {
+          border: "1px solid var(--border)",
+          padding: "8px 10px",
+          fontSize: "12px",
+          boxShadow: "0 4px 16px rgba(0, 0, 0, 0.14)",
+        },
+      },
+    }),
+    // Like the page's <details>: a muted line under a rule, which opens a list.
+    Accordion: Accordion.extend({
+      styles: {
+        item: { borderBottom: 0, borderTop: "1px solid var(--border)" },
+        control: { padding: "10px 0 0", background: "transparent", color: "var(--muted)", fontSize: "12px" },
+        label: { padding: 0 },
+        content: { padding: "8px 0 0" },
+      },
+    }),
     Checkbox: Checkbox.extend({ defaultProps: { radius: 4 }, styles: { input: box } }),
     Popover: Popover.extend({ styles: { dropdown: box } }),
   },

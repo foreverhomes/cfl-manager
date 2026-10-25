@@ -1,7 +1,8 @@
 "use strict";
 
-import { dataChanged, onDataChanged, onSignedOut } from "../bridge";
-import { fmtCat, fmtMoney, fmtNum, fmtSigned, ordinal } from "../format";
+import { dataChanged, onDataChanged, onOpenPlayer, onSignedOut } from "../bridge";
+import { fmtCat, fmtMoney, fmtNum, fmtSigned, ordinal, positions, possessive, TYPE_SHORT } from "../format";
+import { GLOSSARY } from "../glossary";
 
 /* ================================================================ helpers */
 
@@ -88,13 +89,11 @@ function dirMark(v, eps) {
   const d = direction(v, eps);
   return h("span", { class: d, "aria-hidden": "true" }, ICON[d]);
 }
-function positions(p) { return (p.eligible || []).filter((e) => e !== "F").join(",") || p.position || ""; }
 function bestCats(z, n = 3) {
   return Object.entries(z || {}).sort((a, b) => b[1] - a[1]).slice(0, n)
     .map(([c, v]) => `${c} ${fmtSigned(v, 1)}`).join(" · ");
 }
 function teamName(id) { const t = state.teams.find((x) => x.id === id); return t ? t.name : id; }
-function possessive(name) { return /s$/i.test(name) ? `${name}’` : `${name}’s`; }
 
 /* ================================================================ tooltip */
 
@@ -156,11 +155,6 @@ const state = {
   playersView: "all",
   changesTeam: "",
   changesKind: "all",
-  offseason: null,      // the last /offseason response, so team and status filters redraw without a request
-  offseasonYear: null,  // null: the next offseason, whatever season the league is in
-  offseasonTeam: "",
-  offseasonView: "all",
-  offseasonSort: { key: "final_salary", dir: -1 },
   trade: {
     give: new Set(), get: new Set(), partner: "", tolerance: prefs.get("tolerance", "0.25"),
     giveMinors: false, getMinors: false, giveQuery: "", getQuery: "",
@@ -196,6 +190,7 @@ const getLeagueAnalysis = () => cached(state.leagueAnalysis, "league", "/analysi
 function resetCaches() { state.profiles.clear(); state.overviews.clear(); state.leagueAnalysis.clear(); }
 onDataChanged(resetCaches);
 onSignedOut(showSignIn);
+onOpenPlayer(openPlayer);
 
 /* ================================================================ header / boot */
 
@@ -265,8 +260,6 @@ function wireControls() {
   byId("players-team").addEventListener("change", (e) => { state.playersTeam = e.target.value; loadPlayers(); });
   byId("players-missing").addEventListener("change", loadPlayers);
   byId("changes-team").addEventListener("change", (e) => { state.changesTeam = e.target.value; loadChanges(); });
-  byId("offseason-year").addEventListener("change", (e) => { state.offseasonYear = Number(e.target.value); loadOffseason(); });
-  byId("offseason-team").addEventListener("change", (e) => { state.offseasonTeam = e.target.value; renderOffseason(); });
   byId("team-select").addEventListener("change", (e) => {
     state.team = e.target.value;
     state.trade.give.clear();
@@ -405,7 +398,7 @@ function route() {
   if (view === "account") { renderAccount(); return; }
   if (view === "rules") { showView("rules-card", () => import("../views/rules/RulesPage").then((m) => m.RulesPage)); return; }
   if (view === "admin") { loadAdmin(); return; }
-  if (view === "offseason") { loadOffseason(); return; }
+  if (view === "offseason") { showView("view-offseason", () => import("../views/offseason/OffseasonPage").then((m) => m.OffseasonPage)); return; }
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
   else if (view === "analysis") loadAnalysis();
@@ -738,42 +731,6 @@ function renderRoster(ov) {
 
 // Projections, need weights and market values: the numbers behind the trade builder.
 
-// What each number means, in plain words: the glossary at the top of the tab, and the hint on
-// each tile label and column header (hover or focus; marked with a dotted underline).
-const GLOSSARY = {
-  ecw: ["Expected category wins per week", "How many categories the team would win in a typical week, " +
-    "averaged over every opponent, from its projected lineups. Half of them (6 of 12) is an average team."],
-  strength: ["Projected strength", "The team's rank when its projected strength in every category is added up (1 = strongest)."],
-  skater_games: ["Skater games per week", "Skater games the team is projected to fill each week by setting its best " +
-    "available players every day. Bench players count on nights the regulars sit. More games, more counting stats."],
-  goalie_starts: ["Goalie starts per week", "Starts the team's goalies are projected to make each week, from how " +
-    "often each one starts for his NHL team."],
-  sd: ["vs league average", "How far the team's projected weekly total is above (blue) or below (red) the league " +
-    "average, in standard deviations (sd). About 1 sd is a clear strength or weakness; 2 is extreme."],
-  proj: ["Proj / wk", "The team's projected total in the category per week. GAA and SV% are averages."],
-  rank: ["Rank", "Projected rank in the category among all teams (1 = best). In League at a glance, the color " +
-    "shows the same distance from average as the bars."],
-  actual: ["Actual", "The team's real head-to-head record in the category this season: wins, losses and ties, one per matchup."],
-  need: ["Need", "How much one more unit of the category is worth to the team, from the Need weighting setting. " +
-    "1.00 is average; dark pills (1.15 and up) are the categories worth targeting."],
-  games: ["Games / wk", "Games per week the player is projected to spend in the team's lineup, with the best " +
-    "lineup set every day. For goalies, projected starts."],
-  value: ["Value", "The player's projected per-game production in every category, counted equally and compared " +
-    "with the players good enough to start in this league. 0 is an average starter; higher is better."],
-  need_value: ["Need value", "Value with each category weighted by the team's Need. Higher than Value means the " +
-    "player is strong where the team needs help."],
-  trade_rank: ["Trade rank", "The player's rank league-wide by Value (#1 = most valuable). Fewer goalies start, so " +
-    "goalies are spaced out on the same scale: the best goalie ranks about #9."],
-  market: ["Market", "Trade value: how far the player is above the last starter in the league. Bench-level " +
-    "players are worth about 0, so a package's values add up without two depth players matching a star."],
-  gp: ["GP (this/last)", "NHL games played this season and last. With few games, the projection leans on last " +
-    "season and the league average."],
-  best: ["Best categories", "The player's three strongest categories, in standard deviations above an average starter."],
-  marginal: ["Swing categories", "Weighs the categories where several teams are close to this one: one more goal " +
-    "or hit there flips a weekly matchup. Categories it dominates, or trails badly in, count less."],
-  weakness: ["Weakest categories", "Weighs the team's lowest-ranked categories most."],
-  even: ["Even", "Every category counts the same."],
-};
 const GLOSSARY_GROUPS = [
   ["Team projections", ["ecw", "strength", "skater_games", "goalie_starts", "sd", "proj", "rank", "actual", "need"]],
   ["Player values", ["games", "value", "need_value", "trade_rank", "market", "gp", "best"]],
@@ -982,13 +939,12 @@ function playerCell(p) {
     h("div", { class: "sub" }, [positions(p), p.nhl_team].filter(Boolean).join(" · ")));
 }
 
-// One table, with a section per roster segment (or the given `segments`) and position group so
-// columns line up across sections. Sorting applies within each section. `salary` is the amount
-// each section totals. With `groupColumns(groupKey)`, each position group has its own columns
+// One table, with a section per roster segment and position group so columns line up across
+// sections. Sorting applies within each section, and each one totals its salaries. With
+// `groupColumns(groupKey)`, each position group has its own columns
 // (all the same length), labelled under its group heading instead of once at the top; a group
 // without the sorted column keeps the order it was given.
-function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true, segments = SEGMENTS,
-  salary = (p) => p.salary, groupColumns = null }) {
+function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam = true, groupColumns = null }) {
   const colsFor = (group) => (groupColumns ? groupColumns(group.key) : columns);
   const width = colsFor(POSITION_GROUPS[0]).length;
   const comparator = (cols) => {
@@ -1017,9 +973,9 @@ function sectionedTable({ players, columns, view, sort, onSort, empty, oneTeam =
     }
     return th;
   }));
-  const money = (list) => list.reduce((sum, p) => sum + (salary(p) || 0), 0);
+  const money = (list) => list.reduce((sum, p) => sum + (p.salary || 0), 0);
   const bodies = [];
-  for (const seg of segments.filter((x) => view === "all" || x.key === view)) {
+  for (const seg of SEGMENTS.filter((x) => view === "all" || x.key === view)) {
     const inSeg = players.filter(seg.test);
     if (!inSeg.length) continue;
     bodies.push(h("tbody", { class: "seg" }, h("tr", { class: "seg-row" }, h("th", { colspan: String(width) },
@@ -1467,8 +1423,6 @@ function renderEvaluation(res) {
 
 /* ================================================================ players + contract editor */
 
-const TYPE_SHORT = { STANDARD: null, ELC: "ELC", IN_SEASON_UFA: "In-season UFA" };
-
 function playerLink(p) {
   return h("button", { type: "button", class: "player-link", onclick: () => openPlayer(p.fantrax_id),
     title: "Edit contract" }, p.name);
@@ -1708,9 +1662,8 @@ function afterContractChange(message) {
   if (view === "players") loadPlayers();
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
-  else if (view === "offseason") loadOffseason();   // a birth date or contract length can move a player
   else if (view === "analysis") loadAnalysis();
-  else loadDashboard();
+  else if (view !== "offseason") loadDashboard();   // dataChanged() reloads the React views
 }
 
 /* ================================================================ draft picks */
@@ -1976,93 +1929,6 @@ async function loadChanges() {
   } finally {
     if (token === changesSeq) out.classList.remove("is-loading");
   }
-}
-
-/* ================================================================ offseason */
-
-// What each player becomes when his contract ends. Every listed player has a contract_end.
-const EXPIRY_SEGMENTS = [
-  { key: "rfa", label: "RFAs", sub: "restricted free agents", test: (p) => p.contract_end.status === "RFA" },
-  { key: "ufa", label: "UFAs", sub: "unrestricted free agents", test: (p) => p.contract_end.status === "UFA" },
-  { key: "unknown", label: "Status unknown", sub: "no birth date on file", test: (p) => !p.contract_end.status },
-];
-
-// `res`: the /offseason response, for the season the final salary is from. `team`: the team filter.
-const offseasonColumns = (res, team) => [
-  { key: "name", label: "Player", left: true, value: (p) => p.name },
-  team ? null : { key: "fantasy_team", label: "Team", left: true, value: (p) => p.fantasy_team || "",
-    render: (p) => p.fantasy_team || "–" },
-  { key: "age_at_expiry", label: "Age July 1", value: (p) => p.contract_end.age_at_expiry,
-    render: (p) => (p.contract_end.age_at_expiry != null ? p.contract_end.age_at_expiry : "–") },
-  { key: "contract_type", label: "Type", left: true, value: (p) => TYPE_SHORT[p.contract_type] || "",
-    render: (p) => TYPE_SHORT[p.contract_type] || "" },
-  { key: "final_salary", label: `${res.after_season} salary`, value: (p) => p.final_salary, render: (p) => fmtMoney(p.final_salary) },
-  // Every contract ending in the next offseason has one season left, so the column only helps later ones.
-  res.year !== res.offseasons[0].year ? { key: "contract_years", label: "Yrs left", value: (p) => p.contract_years } : null,
-  { key: "value", label: "Value", help: "value", value: (p) => p.value, render: (p) => fmtNum(p.value, 2) },
-  { key: "trade_rank", label: "Trade rank", help: "trade_rank", asc: true, value: (p) => p.trade_rank,
-    render: (p) => (p.trade_rank ? `#${p.trade_rank}` : "–") },
-  { key: "gp_this_season", label: "GP (this/last)", help: "gp", value: (p) => p.gp_this_season,
-    render: (p) => `${p.gp_this_season}/${p.gp_last_season}` },
-].filter(Boolean);
-
-let offseasonSeq = 0;
-async function loadOffseason() {
-  const out = byId("offseason-table");
-  const token = ++offseasonSeq;
-  out.classList.add("is-loading");
-  try {
-    const res = await api.get("/offseason", { year: state.offseasonYear });
-    if (token !== offseasonSeq) return;
-    state.offseason = res;
-    renderOffseason();
-  } catch (err) {
-    if (token !== offseasonSeq) return;
-    // A remembered year can fall out of range once the league moves on a season: go back to the next one.
-    if (err.status === 400 && state.offseasonYear != null) { state.offseasonYear = null; loadOffseason(); return; }
-    out.replaceChildren(h("div", { class: "empty" }, err.message));
-  } finally {
-    if (token === offseasonSeq) out.classList.remove("is-loading");
-  }
-}
-
-function renderOffseason() {
-  const res = state.offseason;
-  const team = state.offseasonTeam;
-  const players = res.players.filter((p) => !team || p.fantasy_team_id === team);
-  const missing = res.no_contract.filter((p) => !team || p.fantasy_team_id === team);
-
-  byId("offseason-year").replaceChildren(...res.offseasons.map((o) =>
-    h("option", { value: o.year, selected: o.year === res.year }, `${o.year} (after ${o.after_season})`)));
-  byId("offseason-team").replaceChildren(
-    h("option", { value: "" }, "All teams"),
-    ...state.teams.map((t) => h("option", { value: t.id, selected: t.id === team }, t.name)));
-  const views = [["all", "All"], ["rfa", "RFAs"], ["ufa", "UFAs"]];
-  if (res.players.some((p) => !p.contract_end.status)) views.push(["unknown", "Unknown"]);
-  if (!views.some(([v]) => v === state.offseasonView)) state.offseasonView = "all";
-  segmented(byId("offseason-status"), views, state.offseasonView, (v) => { state.offseasonView = v; renderOffseason(); });
-
-  const total = (list) => list.reduce((sum, p) => sum + (p.final_salary || 0), 0);
-  byId("offseason-kpis").replaceChildren(...EXPIRY_SEGMENTS.map((seg) => {
-    const list = players.filter(seg.test);
-    if (seg.key === "unknown" && !list.length) return null;
-    return tile(seg.label, String(list.length), list.length === 1 ? "player" : "players",
-      seg.key === "unknown" ? "Add birth dates to place them" : `${fmtMoney(total(list))} in ${res.after_season} salaries`);
-  }).filter(Boolean));
-
-  byId("offseason-title").textContent = `${team ? possessive(teamName(team)) : "All"} contracts ending after ${res.after_season}`;
-  byId("offseason-sub").textContent = `Free agency is decided on July 1, ${res.year}: players ${res.ufa_age} or older ` +
-    `become UFAs, younger players RFAs, and in-season pickups are always UFAs. Click a player to open his contract.`;
-  byId("offseason-table").replaceChildren(sectionedTable({
-    players, columns: offseasonColumns(res, team), view: state.offseasonView, oneTeam: Boolean(team),
-    segments: EXPIRY_SEGMENTS, salary: (p) => p.final_salary,
-    sort: state.offseasonSort, onSort: (next) => { state.offseasonSort = next; renderOffseason(); },
-    empty: `No contracts on file end after ${res.after_season}.`,
-  }));
-  byId("offseason-missing").replaceChildren(missing.length ? h("details", { class: "offseason-missing" },
-    h("summary", {}, `${missing.length} rostered player${missing.length === 1 ? " has" : "s have"} no contract on file, ` +
-      "so they can't be placed in any offseason"),
-    h("p", { class: "player-links" }, missing.map((p) => playerLink(p)))) : "");
 }
 
 /* ================================================================ sign-in */

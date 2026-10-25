@@ -22,3 +22,14 @@ queryClient.getQueryCache().subscribe((event) => {
     for (const listener of signedOutListeners) listener();
   }
 });
+
+let playerDialog: (id: string) => void = () => {};
+
+// The legacy contract dialog, which React views open until Players & cap moves to React.
+export function onOpenPlayer(open: (id: string) => void) {
+  playerDialog = open;
+}
+
+export function openPlayer(id: string) {
+  playerDialog(id);
+}
