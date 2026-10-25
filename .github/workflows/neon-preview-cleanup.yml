@@ -18,7 +18,7 @@ jobs:
     steps:
       - shell: bash
         run: |
-          npm install --global --silent neonctl@2
+          npm install --global --silent neonctl@8.10.3
           names=$(neonctl branches list --project-id "$PROJECT_ID" --output json | jq -r '.[].name')
           if grep -qxF "$BRANCH" <<< "$names"; then
             neonctl branches delete "$BRANCH" --project-id "$PROJECT_ID"
