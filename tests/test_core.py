@@ -924,6 +924,13 @@ def test_offseason_lists_expiring_contracts_by_status_and_moves_on_with_the_seas
     assert (O.expiring(ctx)["year"], O.expiring(ctx)["after_season"]) == (2028, "2027/28")
 
 
+def test_the_contract_describes_the_expiring_contracts():
+    from cfl.api import app
+    paths = app.openapi()["paths"]
+    assert paths["/offseason"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"] == \
+        "#/components/schemas/ExpiringContracts"
+
+
 def test_bios_sync_fills_birth_dates_and_keeps_manual_ones(conn):
     from cfl.sync import sync_bios
     conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))

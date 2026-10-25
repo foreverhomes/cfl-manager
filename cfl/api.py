@@ -699,7 +699,54 @@ def change_log(team_id: Optional[str] = None,
     return out[:limit]
 
 
-@data.get("/offseason", dependencies=ADMIN_ONLY)
+class OffseasonYear(BaseModel):
+    year: int                       # RFA or UFA is decided on July 1 of it
+    after_season: str               # the season the contracts end after, e.g. 2026/27
+
+
+class ContractEnd(BaseModel):
+    after_season: str
+    year: int
+    status: Optional[str]           # RFA / UFA; null: no birth date on file
+    age_at_expiry: Optional[int]
+    reason: Optional[str]
+
+
+class ExpiringPlayer(BaseModel):
+    fantrax_id: str
+    name: str
+    nhl_team: Optional[str]
+    position: Optional[str]
+    eligible: List[str]
+    fantasy_team_id: str
+    fantasy_team: Optional[str]
+    roster_status: Optional[str]
+    gp_this_season: int
+    gp_last_season: int
+    value: Optional[float]
+    trade_rank: Optional[int]
+    contract_type: str              # STANDARD / ELC / IN_SEASON_UFA
+    contract_years: int
+    contract_end: ContractEnd
+    final_salary: float             # the salary in the contract's last season
+
+
+class NoContract(BaseModel):
+    fantrax_id: str
+    name: str
+    fantasy_team_id: str
+
+
+class ExpiringContracts(BaseModel):
+    year: int
+    after_season: str
+    offseasons: List[OffseasonYear]  # every offseason a contract on file can end in
+    ufa_age: int
+    players: List[ExpiringPlayer]
+    no_contract: List[NoContract]   # rostered outside the minors, with no contract on file
+
+
+@data.get("/offseason", response_model=ExpiringContracts, dependencies=ADMIN_ONLY)
 def offseason(year: Optional[int] = Query(None, description="The offseason's year: RFA or UFA is decided on July 1 "
                                                             "of it. Defaults to the next one, after this season"),
               conn: Connection = Depends(get_conn)):

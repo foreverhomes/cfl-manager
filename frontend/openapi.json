@@ -1013,7 +1013,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ExpiringContracts"
+                }
               }
             }
           },
@@ -1881,6 +1883,239 @@
         ],
         "title": "ContractEdit"
       },
+      "ContractEnd": {
+        "properties": {
+          "after_season": {
+            "type": "string",
+            "title": "After Season"
+          },
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "age_at_expiry": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age At Expiry"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "after_season",
+          "year",
+          "status",
+          "age_at_expiry",
+          "reason"
+        ],
+        "title": "ContractEnd"
+      },
+      "ExpiringContracts": {
+        "properties": {
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "after_season": {
+            "type": "string",
+            "title": "After Season"
+          },
+          "offseasons": {
+            "items": {
+              "$ref": "#/components/schemas/OffseasonYear"
+            },
+            "type": "array",
+            "title": "Offseasons"
+          },
+          "ufa_age": {
+            "type": "integer",
+            "title": "Ufa Age"
+          },
+          "players": {
+            "items": {
+              "$ref": "#/components/schemas/ExpiringPlayer"
+            },
+            "type": "array",
+            "title": "Players"
+          },
+          "no_contract": {
+            "items": {
+              "$ref": "#/components/schemas/NoContract"
+            },
+            "type": "array",
+            "title": "No Contract"
+          }
+        },
+        "type": "object",
+        "required": [
+          "year",
+          "after_season",
+          "offseasons",
+          "ufa_age",
+          "players",
+          "no_contract"
+        ],
+        "title": "ExpiringContracts"
+      },
+      "ExpiringPlayer": {
+        "properties": {
+          "fantrax_id": {
+            "type": "string",
+            "title": "Fantrax Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "nhl_team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nhl Team"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "eligible": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Eligible"
+          },
+          "fantasy_team_id": {
+            "type": "string",
+            "title": "Fantasy Team Id"
+          },
+          "fantasy_team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fantasy Team"
+          },
+          "roster_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roster Status"
+          },
+          "gp_this_season": {
+            "type": "integer",
+            "title": "Gp This Season"
+          },
+          "gp_last_season": {
+            "type": "integer",
+            "title": "Gp Last Season"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "trade_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Rank"
+          },
+          "contract_type": {
+            "type": "string",
+            "title": "Contract Type"
+          },
+          "contract_years": {
+            "type": "integer",
+            "title": "Contract Years"
+          },
+          "contract_end": {
+            "$ref": "#/components/schemas/ContractEnd"
+          },
+          "final_salary": {
+            "type": "number",
+            "title": "Final Salary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fantrax_id",
+          "name",
+          "nhl_team",
+          "position",
+          "eligible",
+          "fantasy_team_id",
+          "fantasy_team",
+          "roster_status",
+          "gp_this_season",
+          "gp_last_season",
+          "value",
+          "trade_rank",
+          "contract_type",
+          "contract_years",
+          "contract_end",
+          "final_salary"
+        ],
+        "title": "ExpiringPlayer"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2054,6 +2289,47 @@
           "email"
         ],
         "title": "NewUser"
+      },
+      "NoContract": {
+        "properties": {
+          "fantrax_id": {
+            "type": "string",
+            "title": "Fantrax Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "fantasy_team_id": {
+            "type": "string",
+            "title": "Fantasy Team Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fantrax_id",
+          "name",
+          "fantasy_team_id"
+        ],
+        "title": "NoContract"
+      },
+      "OffseasonYear": {
+        "properties": {
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "after_season": {
+            "type": "string",
+            "title": "After Season"
+          }
+        },
+        "type": "object",
+        "required": [
+          "year",
+          "after_season"
+        ],
+        "title": "OffseasonYear"
       },
       "PickDeal": {
         "properties": {
