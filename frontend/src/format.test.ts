@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtCat, fmtMoney, fmtNum, fmtSigned, ordinal } from "./format";
+import { fmtCat, fmtMoney, fmtNum, fmtSigned, ordinal, positions, possessive } from "./format";
 
 describe("ordinal", () => {
   it.each([
@@ -65,5 +65,24 @@ describe("fmtSigned", () => {
     [null, 2, "–"],
   ])("%s to %s digits is %s", (v, digits, text) => {
     expect(fmtSigned(v, digits)).toBe(text);
+  });
+});
+
+describe("possessive", () => {
+  it.each([
+    ["Whale Emoji", "Whale Emoji’s"],
+    ["Lindy Ruffryders", "Lindy Ruffryders’"],
+  ])("%s is %s", (name, text) => {
+    expect(possessive(name)).toBe(text);
+  });
+});
+
+describe("positions", () => {
+  it.each([
+    [["C", "LW", "F"], "C", "C,LW"],
+    [["F"], "C", "C"],
+    [[], null, ""],
+  ])("%j with position %s is %s", (eligible, position, text) => {
+    expect(positions({ eligible, position })).toBe(text);
   });
 });

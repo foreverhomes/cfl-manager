@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { Forbidden, Unauthorized } from "./api/errors";
-import { dataChanged, onDataChanged, onSignedOut } from "./bridge";
+import { dataChanged, onDataChanged, onOpenPlayer, onSignedOut, openPlayer } from "./bridge";
 import { queryClient } from "./queries/client";
 
 afterEach(() => queryClient.clear());
@@ -33,4 +33,11 @@ it("doesn't call the signed-out listeners for other errors", async () => {
   onSignedOut(listener);
   await failWith(new Forbidden({ message: "No" }));
   expect(listener).not.toHaveBeenCalled();
+});
+
+it("opens the player dialog that the legacy page gave it", () => {
+  const dialog = vi.fn();
+  onOpenPlayer(dialog);
+  openPlayer("f1");
+  expect(dialog).toHaveBeenCalledWith("f1");
 });

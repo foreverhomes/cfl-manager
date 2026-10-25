@@ -30,3 +30,13 @@ export function fmtSigned(v: Num, digits = 2): string {
   if (r === 0) return (0).toFixed(digits);
   return (r > 0 ? "+" : "−") + Math.abs(r).toFixed(digits);
 }
+
+export function possessive(name: string): string {
+  return /s$/i.test(name) ? `${name}’` : `${name}’s`;
+}
+
+export function positions(p: { eligible?: ReadonlyArray<string> | null; position?: string | null }): string {
+  return (p.eligible ?? []).filter((e) => e !== "F").join(",") || p.position || "";
+}
+
+export const TYPE_SHORT: Record<string, string | null> = { STANDARD: null, ELC: "ELC", IN_SEASON_UFA: "In-season UFA" };

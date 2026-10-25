@@ -7,9 +7,8 @@ FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
 account" card was the first React view in the page. F2 has started: the Rules page is a React view
-on its own tab, and the admin changes a rule there. Today's expiring contracts list (the Offseason
-tab) moves next: `GET /offseason` has its response model. The rest of F2 waits for the league phases
-(offseason milestone 1).
+on its own tab, and the admin changes a rule there. The Offseason tab, today's expiring contracts
+list, is a React view too. The rest of F2 waits for the league phases (offseason milestone 1).
 
 ## Why now
 
@@ -125,13 +124,13 @@ rules to `styles.css`. Before you write markup or a component of your own, look 
 
 | Need | Mantine |
 |---|---|
-| Layout | `Stack`, `Group`, `SimpleGrid`, `Grid`, `Flex`, `Box` (`component="section"` and others) |
+| Layout | `Stack`, `Group`, `SimpleGrid`, `Grid`, `Flex`, `Card`, `Box` (`component="section"` and others) |
 | Text and links | `Title`, `Text` (`span`, `inherit`, `c="dimmed"` for muted text), `Anchor` |
 | Tables and lists | `Table` (`Table.Thead`, `Table.Tr`, `Table.Th`, `Table.Td`, …), `List` |
 | Forms | `TextInput`, `NumberInput`, `Select`, `SegmentedControl`, `Switch`, `Checkbox`, `Textarea`, `Button` |
 | Dates | `DatePickerInput`, `DateTimePicker` and the others in `@mantine/dates` |
 | Status | `Alert`, `Loader`, `Skeleton`, `Badge`, `Tooltip` |
-| Overlays | `Modal`, `Popover`, `Menu`, `Drawer` |
+| Overlays | `Modal`, `Popover`, `Menu`, `Drawer`, `Accordion` (for a `<details>`) |
 
 - **The look comes from `theme.ts`.** When a component doesn't match the page, change the theme:
   the component's CSS variables, `defaultProps` or `styles` under `components`. Every view then
@@ -376,6 +375,7 @@ frontend/
     legacy/app.js         was cfl/web/app.js, and shrinks as each tab moves
     bridge.ts             legacy ↔ React, deleted with app.js
     format.ts             fmtMoney, ordinal, fmtCat, ... (moved out of app.js)
+    glossary.ts           what each number means, for the hints (moved out of app.js)
     api/
       generated.ts        never edited by hand
       errors.ts
@@ -479,14 +479,16 @@ export function dataChanged() {
 }
 
 // onSignedOut(listener) is the same, for a query that fails with Unauthorized (the cache is watched).
+// onOpenPlayer(open) takes the legacy player dialog, and openPlayer(id) opens it for a React view.
 ```
 
 ```js
 // src/legacy/app.js
-import { dataChanged, onDataChanged, onSignedOut } from "../bridge";
+import { dataChanged, onDataChanged, onOpenPlayer, onSignedOut } from "../bridge";
 
 onDataChanged(resetCaches);
 onSignedOut(showSignIn);
+onOpenPlayer(openPlayer);
 // renderAccount():  Promise.all([import("../views/mount"), import("../views/account/AccountCard")])
 //                     .then(([{ mountView }, { AccountCard }]) => mountView(byId("account-card"), AccountCard))
 // after an edit:    dataChanged() instead of resetCaches()
@@ -494,10 +496,10 @@ onSignedOut(showSignIn);
 
 `mountView(element, View)` creates one React root per element, once, and wraps it in the shared
 `QueryClient`. So a view keeps its state when its tab shows again. `app.js` loads React and Effect
-with `import()` when a view first needs them. The first load is 38 kB gzipped, and the Account tab
-adds 108 kB. The
-legacy `route()` shows and hides the tab's section as it does now. A React view that opens a
-player's contract calls the legacy `openPlayer()` until Players & cap moves to React.
+with `import()` when a view first needs them. The first load is 38 kB gzipped. The Account tab adds
+173 kB, the Rules tab 213 kB and the Offseason tab 183 kB (measured on October 25, 2026). The legacy
+`route()` shows and hides the tab's section as it does now. A React view opens a player's contract
+with the bridge's `openPlayer()`, which opens the legacy dialog, until Players & cap moves to React.
 
 ### Order
 
@@ -573,7 +575,7 @@ F0 to F4 are what June 2027 needs. F5 can wait a year, as the draft can.
 |---|---|
 | Effect 4 is three weeks old, and Effect marks its HTTP modules unstable. | Effect stays in `src/api/`. Pin the versions, and upgrade the generator with Effect. The generated client passes strict TypeScript, so the fallback over `fetch` isn't needed. |
 | Learning Effect and XState at the same time. | Effect stays in one folder and XState in four machines. Every other screen is plain React and TanStack Query. |
-| Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has three exports and goes with `app.js`. |
+| Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has five exports and goes with `app.js`. |
 | Mantine's CSS is imported one component at a time while the legacy page lives. | A missing import renders the component unstyled, with no error, so `theme.ts` lists every import. Mantine's `styles.css` isn't used, because its baseline restyles the legacy page. After the shell moves, import `styles.layer.css` instead. |
 | The first Node build on Vercel. | F0 proves it on a preview deployment before any other work. |
 | Polling uses Vercel's Hobby plan allowance. | The draft board polls every 30 seconds, only while its tab is visible. Check the usage after the first draft. |
