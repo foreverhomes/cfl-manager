@@ -7,7 +7,8 @@ FastAPI owns every rule and every state machine.
 
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
 account" card was the first React view in the page. F2 has started: the Rules page is a React view
-on its own tab, and the admin changes a rule there. The rest of F2 waits for the league phases
+on its own tab, and the admin changes a rule there. Today's expiring contracts list (the Offseason
+tab) moves next: `GET /offseason` has its response model. The rest of F2 waits for the league phases
 (offseason milestone 1).
 
 ## Why now
