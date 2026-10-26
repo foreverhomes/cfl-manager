@@ -2,14 +2,15 @@
 
 Everything is relative to the league's current season, so the list moves on by itself each year. The
 next offseason is the summer after the current season; later ones follow each season a contract can
-still run. An offseason is named by its year, because free agency is decided on the UFA day (July 1)
-of that year (analysis.contract_end).
+still run. An offseason is named by its year, because free agency is decided on the UFA day of that
+year, under that league year's rules (analysis.contract_end).
 """
 
 from datetime import date
 from typing import Any, Dict, List, Optional
 
 from . import analysis as A
+from . import rules as R
 
 STATUS_ORDER = {"RFA": 0, "UFA": 1, None: 2}   # None: no birth date on file, so the status is unknown
 
@@ -44,5 +45,6 @@ def expiring(ctx: A.Context, year: Optional[int] = None) -> Dict[str, Any]:
             players.append(dict(A.player_summary(p, ctx), final_salary=final))
     players.sort(key=lambda x: (STATUS_ORDER[x["contract_end"]["status"]], -(x["final_salary"] or 0), x["name"]))
     no_contract.sort(key=lambda x: x["name"])
-    return dict(chosen, offseasons=options, ufa_age=ctx.rules["contracts.ufa_age"], players=players,
-                no_contract=no_contract)
+    rules = R.at(ctx.rule_changes, chosen["year"])
+    return dict(chosen, offseasons=options, ufa_age=rules["contracts.ufa_age"],
+                ufa_day=rules["contracts.ufa_day"], players=players, no_contract=no_contract)

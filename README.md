@@ -93,10 +93,12 @@ Before a PR, run `npm run check` in `frontend/` (Biome, TypeScript, then Vitest)
     them, and the evaluation prices the pickup like a trade, including buyouts for the drop.
 - **Offseason** (admin only). Every rostered player whose contract ends after a season, grouped
   into RFAs, UFAs, and players with no birth date (status unknown; click one to add it). Shows each
-  player's age on July 1, contract type, final-season salary and value. Filter by team or status.
+  player's age on the UFA day (a league rule), contract type, final-season salary and value. Filter
+  by team or status.
   It defaults to the next offseason, the summer after the current season. The picker also
-  looks ahead to each later season a contract can run. Everything follows the league's current
-  season, so the list moves on by itself once Fantrax starts a new season. A note under the table
+  looks ahead to each later season a contract can run, each under its own league year's rules (a
+  vote to change the UFA age from 2029 shows in the 2029 offseason). Everything follows the league's
+  current season, so the list moves on by itself once Fantrax starts a new season. A note under the table
   lists rostered players with no contract on file; the list can't place them.
 - **Admin** (admin only). Approve GMs who signed in, link each to their team, change roles, and
   remove access.
@@ -404,7 +406,7 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 | `GET /teams/{id}/picks` | the team's picks in the upcoming drafts, its own picks now elsewhere, and its pick deals |
 | `POST /picks/deals` | move picks: `{"kind": "trade", "team_id": "me", "other_team_id": "...", "send": [{"draft_year": 2027, "round": 1, "original_team_id": "..."}], "receive": [...], "note": "..."}` (`kind`: trade or rfa; `receive` is for trades) |
 | `DELETE /picks/deals/{deal_id}` | undo a pick deal |
-| `GET /offseason?year=2027` | *admin*: rostered players whose contracts end in that offseason (July 1 of `year`), RFAs then UFAs then unknown, plus rostered players with no contract on file. `year` defaults to the next offseason |
+| `GET /offseason?year=2027` | *admin*: rostered players whose contracts end in that offseason (the UFA day of `year`), RFAs then UFAs then unknown, plus rostered players with no contract on file. `year` defaults to the next offseason |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |

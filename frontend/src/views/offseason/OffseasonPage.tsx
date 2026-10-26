@@ -20,7 +20,7 @@ import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { Failed } from "../../api/errors";
 import type { ExpiringContracts, ExpiringPlayer } from "../../api/generated";
 import { openPlayer } from "../../bridge";
-import { fmtMoney, fmtNum, positions, possessive, TYPE_SHORT } from "../../format";
+import { fmtMoney, fmtMonthDay, fmtNum, positions, possessive, TYPE_SHORT } from "../../format";
 import { GLOSSARY } from "../../glossary";
 import { expiringContracts } from "../../queries/offseason";
 import { teams } from "../../queries/teams";
@@ -89,7 +89,7 @@ const columns = (data: ExpiringContracts, oneTeam: boolean): Column[] => [
       ]),
   {
     key: "age_at_expiry",
-    label: "Age July 1",
+    label: `Age ${fmtMonthDay(data.ufa_day)}`,
     value: (p) => p.contract_end.age_at_expiry,
     show: (p) => p.contract_end.age_at_expiry ?? "–",
   },
@@ -206,8 +206,8 @@ export function OffseasonPage() {
             {team === "all" ? "All" : possessive(teamName)} contracts ending after {data.after_season}
           </Title>
           <Text size="xs" c="dimmed">
-            Free agency is decided on July 1, {data.year}: players {data.ufa_age} or older become UFAs, younger players
-            RFAs, and in-season pickups are always UFAs. Click a player to open his contract.
+            Free agency is decided on {fmtMonthDay(data.ufa_day)}, {data.year}: players {data.ufa_age} or older become
+            UFAs, younger players RFAs, and in-season pickups are always UFAs. Click a player to open his contract.
           </Text>
         </Stack>
         <ExpiringTable

@@ -1002,10 +1002,10 @@
                   "type": "null"
                 }
               ],
-              "description": "The offseason's year: RFA or UFA is decided on July 1 of it. Defaults to the next one, after this season",
+              "description": "The offseason's year: RFA or UFA is decided on the UFA day of it. Defaults to the next one, after this season",
               "title": "Year"
             },
-            "description": "The offseason's year: RFA or UFA is decided on July 1 of it. Defaults to the next one, after this season"
+            "description": "The offseason's year: RFA or UFA is decided on the UFA day of it. Defaults to the next one, after this season"
           }
         ],
         "responses": {
@@ -1958,6 +1958,10 @@
             "type": "integer",
             "title": "Ufa Age"
           },
+          "ufa_day": {
+            "type": "string",
+            "title": "Ufa Day"
+          },
           "players": {
             "items": {
               "$ref": "#/components/schemas/ExpiringPlayer"
@@ -1979,6 +1983,7 @@
           "after_season",
           "offseasons",
           "ufa_age",
+          "ufa_day",
           "players",
           "no_contract"
         ],

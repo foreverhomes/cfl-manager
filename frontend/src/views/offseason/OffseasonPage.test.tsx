@@ -39,6 +39,7 @@ const list: ExpiringContracts = {
   year: 2027,
   after_season: "2026/27",
   ufa_age: 27,
+  ufa_day: "06-15",
   offseasons: [
     { year: 2027, after_season: "2026/27" },
     { year: 2028, after_season: "2027/28" },
@@ -108,6 +109,12 @@ it("lists the next offseason's contracts by status, then position, the biggest s
   expect(screen.getByText("3 players · $29 salary")).toBeTruthy();
   expect(screen.getByText(/players 27 or older become UFAs/)).toBeTruthy();
   expect(asked).toEqual([null]);
+});
+
+it("dates free agency by the league's UFA day", async () => {
+  showPage();
+  expect(await screen.findByText(/Free agency is decided on June 15, 2027:/)).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: "Age June 15" })).toBeTruthy();
 });
 
 it("counts each status and its final-season salaries", async () => {

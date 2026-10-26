@@ -71,10 +71,19 @@ def defaults() -> Dict[str, Any]:
 
 def load(conn: Connection, league_id: str, year: int) -> Dict[str, Any]:
     """Every rule's value for a league year: its most recent change from that year or earlier, else its default."""
+    return at(changes(conn, league_id), year)
+
+
+def changes(conn: Connection, league_id: str) -> List[Dict[str, Any]]:
+    """Every saved change, oldest first: at() applies them in that order."""
+    return rows(conn, "SELECT key, from_year, value FROM league_rules WHERE league_id=? ORDER BY id", (league_id,))
+
+
+def at(saved: List[Dict[str, Any]], year: int) -> Dict[str, Any]:
+    """load(), from changes already read."""
     out = defaults()
-    for c in rows(conn, "SELECT key, value FROM league_rules WHERE league_id=? AND from_year<=? ORDER BY id",
-                  (league_id, year)):
-        if c["key"] in RULES:   # a rule removed from the code can still have saved changes
+    for c in saved:
+        if c["from_year"] <= year and c["key"] in RULES:   # a rule removed from the code can still have saved changes
             out[c["key"]] = RULES[c["key"]].default if c["value"] is None else json.loads(c["value"])
     return out
 

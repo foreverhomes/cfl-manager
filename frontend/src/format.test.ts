@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtCat, fmtMoney, fmtNum, fmtSigned, ordinal, positions, possessive } from "./format";
+import { fmtCat, fmtMoney, fmtMonthDay, fmtNum, fmtSigned, ordinal, positions, possessive } from "./format";
 
 describe("ordinal", () => {
   it.each([
@@ -65,6 +65,16 @@ describe("fmtSigned", () => {
     [null, 2, "–"],
   ])("%s to %s digits is %s", (v, digits, text) => {
     expect(fmtSigned(v, digits)).toBe(text);
+  });
+});
+
+describe("fmtMonthDay", () => {
+  it.each([
+    ["07-01", "July 1"],
+    ["06-15", "June 15"],
+    ["12-31", "December 31"],
+  ])("%s is %s", (monthDay, text) => {
+    expect(fmtMonthDay(monthDay)).toBe(text);
   });
 });
 
