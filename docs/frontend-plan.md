@@ -137,6 +137,11 @@ rules to `styles.css`. Before you write markup or a component of your own, look 
   gets the fix. For example, the theme gives `Table` the page's 14px text, its 6px by 8px cells and
   its `--grid` row lines. It gives an input's box and a dropdown the page's `--surface` and
   `--border`.
+- **`theme.ts` imports Mantine's types, not its components.** Write an entry as
+  `Card: {...} satisfies ExtendComponent<CardFactory>`, not `Card.extend({...})`. `extend` only
+  returns its argument, but the import puts the component's code into every React view, because
+  each view loads the theme. On October 25, 2026, this took the Account tab from 178 kB to 132 kB
+  of JS, gzipped.
 - **Each component's `.layer.css` goes into `theme.ts`** with the first view that uses it. A
   component without it renders unstyled, with no error.
 - **The element a view mounts into stays legacy.** `app.js` mounts a view inside an element that

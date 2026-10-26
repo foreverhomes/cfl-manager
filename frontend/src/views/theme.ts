@@ -33,23 +33,24 @@ import "@mantine/core/styles/Badge.layer.css";
 import "@mantine/core/styles/Tooltip.layer.css";
 import "@mantine/core/styles/Accordion.layer.css";
 import "@mantine/dates/styles.layer.css";
-import {
-  Accordion,
-  Avatar,
-  Badge,
-  Card,
-  Checkbox,
-  type CSSVariablesResolver,
-  createTheme,
-  Input,
-  InputWrapper,
-  type MantineColorScheme,
-  type MantineColorSchemeManager,
-  Popover,
-  SegmentedControl,
-  Table,
-  Tooltip,
+import type {
+  AccordionFactory,
+  AvatarFactory,
+  BadgeFactory,
+  CardFactory,
+  CheckboxFactory,
+  CSSVariablesResolver,
+  ExtendComponent,
+  InputFactory,
+  InputWrapperFactory,
+  MantineColorScheme,
+  MantineColorSchemeManager,
+  PopoverFactory,
+  SegmentedControlFactory,
+  TableFactory,
+  TooltipFactory,
 } from "@mantine/core";
+import { createTheme } from "@mantine/core";
 
 // The shades Mantine draws an input's box and a dropdown with, in light and dark. There only, they're the page's.
 const box = {
@@ -67,11 +68,11 @@ export const theme = createTheme({
   radius: { sm: "8px", md: "12px" },
   defaultRadius: "sm",
   components: {
-    Avatar: Avatar.extend({
+    Avatar: {
       vars: () => ({ root: { "--avatar-bg": "var(--ink)", "--avatar-color": "var(--surface)" } }),
-    }),
+    } satisfies ExtendComponent<AvatarFactory>,
     // Like the page's .data-table: 14px text, 6px by 8px cells, --grid between rows, --axis under the header.
-    Table: Table.extend({
+    Table: {
       vars: () => ({
         table: {
           "--table-border-color": "var(--grid)",
@@ -89,16 +90,16 @@ export const theme = createTheme({
           borderBottom: "1px solid var(--axis)",
         },
       },
-    }),
-    Input: Input.extend({ styles: { wrapper: box } }),
+    } satisfies ExtendComponent<TableFactory>,
+    Input: { styles: { wrapper: box } } satisfies ExtendComponent<InputFactory>,
     // Like the page's .field-label.
-    InputWrapper: InputWrapper.extend({
+    InputWrapper: {
       styles: {
         label: { display: "block", fontSize: "12px", fontWeight: 400, color: "var(--ink-2)", marginBottom: "4px" },
       },
-    }),
+    } satisfies ExtendComponent<InputWrapperFactory>,
     // Like the page's .card and .tile.
-    Card: Card.extend({
+    Card: {
       defaultProps: { withBorder: true, padding: 16 },
       styles: {
         root: {
@@ -108,9 +109,9 @@ export const theme = createTheme({
           boxShadow: "var(--shadow)",
         },
       },
-    }),
+    } satisfies ExtendComponent<CardFactory>,
     // Like the page's .segmented: the chosen option in --ink.
-    SegmentedControl: SegmentedControl.extend({
+    SegmentedControl: {
       vars: () => ({
         root: {
           "--sc-color": "var(--ink)",
@@ -129,9 +130,9 @@ export const theme = createTheme({
           padding: 0,
         },
       },
-    }),
+    } satisfies ExtendComponent<SegmentedControlFactory>,
     // Like the page's .pill: a dot, a border and a wash of the color, which is any CSS color.
-    Badge: Badge.extend({
+    Badge: {
       defaultProps: { variant: "dot" },
       vars: (_, { color }) => ({
         root: {
@@ -146,9 +147,9 @@ export const theme = createTheme({
         },
       }),
       styles: { root: { textTransform: "none", fontWeight: 400, verticalAlign: "1px" } },
-    }),
+    } satisfies ExtendComponent<BadgeFactory>,
     // Like the page's .tooltip.
-    Tooltip: Tooltip.extend({
+    Tooltip: {
       defaultProps: { multiline: true, w: 260 },
       vars: () => ({
         tooltip: { "--tooltip-bg": "var(--surface)", "--tooltip-color": "var(--ink)", "--tooltip-radius": "8px" },
@@ -161,18 +162,18 @@ export const theme = createTheme({
           boxShadow: "0 4px 16px rgba(0, 0, 0, 0.14)",
         },
       },
-    }),
+    } satisfies ExtendComponent<TooltipFactory>,
     // Like the page's <details>: a muted line under a rule, which opens a list.
-    Accordion: Accordion.extend({
+    Accordion: {
       styles: {
         item: { borderBottom: 0, borderTop: "1px solid var(--border)" },
         control: { padding: "10px 0 0", background: "transparent", color: "var(--muted)", fontSize: "12px" },
         label: { padding: 0 },
         content: { padding: "8px 0 0" },
       },
-    }),
-    Checkbox: Checkbox.extend({ defaultProps: { radius: 4 }, styles: { input: box } }),
-    Popover: Popover.extend({ styles: { dropdown: box } }),
+    } satisfies ExtendComponent<AccordionFactory>,
+    Checkbox: { defaultProps: { radius: 4 }, styles: { input: box } } satisfies ExtendComponent<CheckboxFactory>,
+    Popover: { styles: { dropdown: box } } satisfies ExtendComponent<PopoverFactory>,
   },
 });
 
