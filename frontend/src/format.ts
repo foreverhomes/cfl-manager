@@ -1,3 +1,5 @@
+import dayjs from "dayjs";
+
 type Num = number | null | undefined;
 
 export function ordinal(n: Num): string {
@@ -30,6 +32,8 @@ export function fmtSigned(v: Num, digits = 2): string {
   if (r === 0) return (0).toFixed(digits);
   return (r > 0 ? "+" : "−") + Math.abs(r).toFixed(digits);
 }
+
+export const fmtMonthDay = (monthDay: string) => dayjs(`2001-${monthDay}`).format("MMMM D");
 
 export function possessive(name: string): string {
   return /s$/i.test(name) ? `${name}’` : `${name}’s`;

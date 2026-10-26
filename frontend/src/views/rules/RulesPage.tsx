@@ -20,7 +20,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { LeagueRule } from "../../api/generated";
-import { fmtMoney } from "../../format";
+import { fmtMoney, fmtMonthDay } from "../../format";
 import { changeRule, rules } from "../../queries/rules";
 
 const AREAS = { contracts: "Contracts and the cap", draft: "Entry draft" };
@@ -40,10 +40,7 @@ function show(kind: string, value: LeagueRule["value"]): string {
   if (value === null) return "Fantrax's"; // only the cap has no value of its own
   if (kind === "money") return fmtMoney(Number(value));
   if (kind === "share") return `${Math.round(Number(value) * 100)}%`;
-  if (kind === "month_day") {
-    const [month, date] = String(value).split("-").map(Number);
-    return new Date(2001, month - 1, date).toLocaleDateString("en-US", { month: "long", day: "numeric" });
-  }
+  if (kind === "month_day") return fmtMonthDay(String(value));
   return String(value);
 }
 

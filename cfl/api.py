@@ -700,7 +700,7 @@ def change_log(team_id: Optional[str] = None,
 
 
 class OffseasonYear(BaseModel):
-    year: int                       # RFA or UFA is decided on July 1 of it
+    year: int                       # RFA or UFA is decided on the UFA day of it
     after_season: str               # the season the contracts end after, e.g. 2026/27
 
 
@@ -741,14 +741,15 @@ class ExpiringContracts(BaseModel):
     year: int
     after_season: str
     offseasons: List[OffseasonYear]  # every offseason a contract on file can end in
-    ufa_age: int
+    ufa_age: int                    # this offseason's league year's, as is ufa_day
+    ufa_day: str                   # MM-DD: the day the UFA age is measured on
     players: List[ExpiringPlayer]
     no_contract: List[NoContract]   # rostered outside the minors, with no contract on file
 
 
 @data.get("/offseason", response_model=ExpiringContracts, dependencies=ADMIN_ONLY)
-def offseason(year: Optional[int] = Query(None, description="The offseason's year: RFA or UFA is decided on July 1 "
-                                                            "of it. Defaults to the next one, after this season"),
+def offseason(year: Optional[int] = Query(None, description="The offseason's year: RFA or UFA is decided on the UFA "
+                                                            "day of it. Defaults to the next one, after this season"),
               conn: Connection = Depends(get_conn)):
     """Rostered players whose contracts end in an offseason, each an RFA or a UFA by league rules."""
     try:

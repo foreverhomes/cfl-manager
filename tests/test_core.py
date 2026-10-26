@@ -931,6 +931,35 @@ def test_the_contract_describes_the_expiring_contracts():
         "#/components/schemas/ExpiringContracts"
 
 
+def test_the_offseason_says_the_league_years_ufa_day(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl import rules as R
+    from cfl.api import app
+    R.change(conn, LEAGUE, "contracts.ufa_day", "06-15", 2026, "Boss")
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+    assert TestClient(app).get("/offseason").json()["ufa_day"] == "06-15"
+
+
+def test_each_offseason_runs_on_its_own_league_years_rules(conn, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from cfl import rules as R
+    from cfl.api import app
+    _two_teams(conn)                                                   # both contracts end after 2028/29
+    conn.execute("UPDATE players SET birth_date='2003-01-01'")         # 26 in the 2029 offseason
+    conn.commit()
+    R.change(conn, LEAGUE, "contracts.ufa_age", 26, 2029, "Boss")
+    R.change(conn, LEAGUE, "contracts.ufa_day", "06-15", 2029, "Boss")
+    monkeypatch.setenv("CFL_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("FANTRAX_LEAGUE_ID", LEAGUE)
+    later = TestClient(app).get("/offseason", params={"year": 2029}).json()
+    assert (later["ufa_age"], later["ufa_day"]) == (26, "06-15")
+    assert [p["contract_end"]["reason"] for p in later["players"]] == ["26 on June 15, 2029"] * 2
+    assert {p["contract_end"]["status"] for p in later["players"]} == {"UFA"}
+    nxt = TestClient(app).get("/offseason").json()                     # 2027: before the changes
+    assert (nxt["year"], nxt["ufa_age"], nxt["ufa_day"]) == (2027, 27, "07-01")
+
+
 def test_bios_sync_fills_birth_dates_and_keeps_manual_ones(conn):
     from cfl.sync import sync_bios
     conn.execute("INSERT INTO teams (id, league_id, name) VALUES ('t1', ?, 'One')", (LEAGUE,))

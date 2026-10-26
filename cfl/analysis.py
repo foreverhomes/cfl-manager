@@ -127,6 +127,7 @@ class Context:
     app_owned: set = field(default_factory=set)               # teams whose contracts live in this app
     buyouts: Dict[str, List[List[float]]] = field(default_factory=dict)   # team -> per-season dead cap
     rules: Dict[str, Any] = field(default_factory=R.defaults)            # this league year's (rules.py)
+    rule_changes: List[Dict[str, Any]] = field(default_factory=list)     # every saved change: R.at() for later years
     _equiv_ranks: Dict[str, float] = field(default_factory=dict, repr=False)
     _market: Optional[Dict[str, float]] = field(default=None, repr=False)
 
@@ -378,9 +379,10 @@ def load_context(conn: Connection, settings: Settings) -> Context:
     roster_info = json.loads(league["roster_info"] or "{}")
     slots = {pos: c.get("maxActive", 0) for pos, c in (roster_info.get("positionConstraints") or {}).items()}
     cur_season, prior_season = stat_seasons(conn, league_id)
+    changes = R.changes(conn, league_id)
     ctx = Context(league_id, league, categories, teams, roster_period, players, slots, cur_season, prior_season,
                   unsupported, roster_cap=roster_info.get("maxTotalPlayers"),
-                  rules=R.load(conn, league_id, league["season_year"]))
+                  rules=R.at(changes, league["season_year"] or date.today().year), rule_changes=changes)
 
     # Salaries: caps from Fantrax, contracts from team salary sheets.
     ctx.salary_caps = {r["id"]: r["salary_cap"] for r in rows(
@@ -808,13 +810,14 @@ def age_on(birth_date: str, on: date) -> int:
 def contract_end(ctx: Context, p: Player) -> Optional[Dict[str, Any]]:
     """What the player becomes when his contract runs out: UFA or RFA, per league rules.
 
-    The contract ends after its last season; free agency is decided by age on the UFA day (July 1)
-    that summer. Returns None for a player with no contract on file.
+    The contract ends after its last season; free agency is decided by age on the UFA day that
+    summer, under that league year's rules. Returns None for a player with no contract on file.
     """
     if p.salary is None or not p.contract_years:
         return None
-    season_year = ctx.league.get("season_year") or date.today().year
-    ufa_day = date.fromisoformat("{}-{}".format(season_year + p.contract_years, ctx.rules["contracts.ufa_day"]))
+    year = (ctx.league.get("season_year") or date.today().year) + p.contract_years
+    rules = R.at(ctx.rule_changes, year)
+    ufa_day = date.fromisoformat("{}-{}".format(year, rules["contracts.ufa_day"]))
     out: Dict[str, Any] = {"after_season": season_label(ctx, p.contract_years - 1), "year": ufa_day.year,
                            "status": None, "age_at_expiry": None, "reason": None}
     if p.contract_type == "IN_SEASON_UFA":
@@ -823,7 +826,7 @@ def contract_end(ctx: Context, p: Player) -> Optional[Dict[str, Any]]:
         out["reason"] = "Birth date unknown"
     else:
         age = age_on(p.birth_date, ufa_day)
-        out.update(status="UFA" if age >= ctx.rules["contracts.ufa_age"] else "RFA", age_at_expiry=age,
+        out.update(status="UFA" if age >= rules["contracts.ufa_age"] else "RFA", age_at_expiry=age,
                    reason="{} on {:%B} {}, {}".format(age, ufa_day, ufa_day.day, ufa_day.year))
     return out
 
