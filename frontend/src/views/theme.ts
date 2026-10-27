@@ -72,24 +72,26 @@ export const theme = createTheme({
       vars: () => ({ root: { "--avatar-bg": "var(--ink)", "--avatar-color": "var(--surface)" } }),
     } satisfies ExtendComponent<AvatarFactory>,
     // Like the page's .data-table: 14px text, 6px by 8px cells, --grid between rows, --axis under the header.
+    // variant="vertical" labels facts instead: no lines, 6px between rows, each label as wide as the longest.
     Table: {
-      vars: () => ({
+      vars: (_, { variant }) => ({
         table: {
           "--table-border-color": "var(--grid)",
-          "--table-vertical-spacing": "6px",
+          "--table-vertical-spacing": variant === "vertical" ? "3px" : "6px",
           "--table-horizontal-spacing": "8px",
         },
       }),
-      styles: {
+      styles: (_, { variant }) => ({
         table: { fontSize: "var(--mantine-font-size-md)" },
         th: {
-          color: "var(--muted)",
-          fontSize: "12px",
-          fontWeight: 500,
           whiteSpace: "nowrap",
-          borderBottom: "1px solid var(--axis)",
+          ...(variant === "vertical"
+            ? { width: "1%", padding: "3px 24px 3px 0", background: "none", color: "var(--ink-2)", fontWeight: 400 }
+            : { color: "var(--muted)", fontSize: "12px", fontWeight: 500, borderBottom: "1px solid var(--axis)" }),
         },
-      },
+        tr: variant === "vertical" ? { borderBottom: 0 } : {},
+        td: variant === "vertical" ? { paddingLeft: 0, fontWeight: 500 } : {},
+      }),
     } satisfies ExtendComponent<TableFactory>,
     Input: { styles: { wrapper: box } } satisfies ExtendComponent<InputFactory>,
     // Like the page's .field-label.

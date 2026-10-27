@@ -1,4 +1,4 @@
-import { Avatar, Button, Group, Stack, Text, Title } from "@mantine/core";
+import { Avatar, Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { signOut } from "../../auth";
 import { me } from "../../queries/me";
@@ -34,12 +34,18 @@ export function AccountCard() {
           </div>
         </Group>
       )}
-      <dl className="account-facts">
-        <dt>Team</dt>
-        <dd>{team}</dd>
-        <dt>Role</dt>
-        <dd>{user.is_admin ? "Admin" : "GM"}</dd>
-      </dl>
+      <Table variant="vertical" mb={18}>
+        <Table.Tbody>
+          <Table.Tr>
+            <Table.Th>Team</Table.Th>
+            <Table.Td>{team}</Table.Td>
+          </Table.Tr>
+          <Table.Tr>
+            <Table.Th>Role</Table.Th>
+            <Table.Td>{user.is_admin ? "Admin" : "GM"}</Table.Td>
+          </Table.Tr>
+        </Table.Tbody>
+      </Table>
       {user.auth ? (
         <Button variant="default" onClick={signOut}>
           Sign out

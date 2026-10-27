@@ -46,15 +46,15 @@ it("shows a GM who they are, their team and their role", async () => {
   });
   expect(await screen.findByText("Pat Quinn")).toBeTruthy();
   expect(screen.getByText("gm@example.com")).toBeTruthy();
-  expect(await screen.findByText("Lindy Ruffryders")).toBeTruthy();
-  expect(screen.getByText("GM")).toBeTruthy();
+  expect(await screen.findByRole("row", { name: "Team Lindy Ruffryders" })).toBeTruthy();
+  expect(screen.getByRole("row", { name: "Role GM" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
 });
 
 it("says there's nothing to sign out of without logins", async () => {
   showCard({ email: "local", name: null, team_id: null, is_admin: true, status: "active", auth: false });
-  expect(await screen.findByText("Admin")).toBeTruthy();
-  expect(screen.getByText("Not linked yet")).toBeTruthy();
+  expect(await screen.findByRole("row", { name: "Role Admin" })).toBeTruthy();
+  expect(screen.getByRole("row", { name: "Team Not linked yet" })).toBeTruthy();
   expect(screen.getByText(/nothing to sign out of/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
 });
