@@ -501,8 +501,10 @@ onOpenPlayer(openPlayer);
 
 `mountView(element, View)` creates one React root per element, once, and wraps it in the shared
 `QueryClient`. So a view keeps its state when its tab shows again. `app.js` loads React and Effect
-with `import()` when a view first needs them. The first load is 38 kB gzipped. The Account tab adds
-173 kB, the Rules tab 213 kB and the Offseason tab 183 kB (measured on October 25, 2026). The legacy
+with `import()` when a view first needs them. The first load is 38 kB of JS, gzipped. The Account
+tab adds 132 kB, the Rules tab 205 kB and the Offseason tab 181 kB (measured on October 26, 2026).
+Anything that `app.js` imports loads with it, so a shared module such as `format.ts` imports no
+library that only a React view needs. The legacy
 `route()` shows and hides the tab's section as it does now. A React view opens a player's contract
 with the bridge's `openPlayer()`, which opens the legacy dialog, until Players & cap moves to React.
 
