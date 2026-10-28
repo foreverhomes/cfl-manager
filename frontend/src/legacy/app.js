@@ -1951,7 +1951,7 @@ function applyRole() {
   if (me.auth) byId("account-link").prepend(avatar(me));
 }
 
-const avatar = (me, cls = "") => h("span", { class: `avatar ${cls}`, "aria-hidden": "true" },
+const avatar = (me) => h("span", { class: "avatar", "aria-hidden": "true" },
   (me.name || me.email).trim().charAt(0).toUpperCase());
 
 function showGate(title, text, extra = []) {
