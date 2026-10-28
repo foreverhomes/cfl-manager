@@ -1,5 +1,3 @@
-import dayjs from "dayjs";
-
 type Num = number | null | undefined;
 
 export function ordinal(n: Num): string {
@@ -33,7 +31,9 @@ export function fmtSigned(v: Num, digits = 2): string {
   return (r > 0 ? "+" : "−") + Math.abs(r).toFixed(digits);
 }
 
-export const fmtMonthDay = (monthDay: string) => dayjs(`2001-${monthDay}`).format("MMMM D");
+// A date-only string is midnight UTC, so the day is formatted in UTC too.
+const monthDayFormat = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
+export const fmtMonthDay = (monthDay: string) => monthDayFormat.format(new Date(`2001-${monthDay}`));
 
 export function possessive(name: string): string {
   return /s$/i.test(name) ? `${name}’` : `${name}’s`;
