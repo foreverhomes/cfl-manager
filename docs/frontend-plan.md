@@ -126,7 +126,7 @@ rules to `styles.css`. Before you write markup or a component of your own, look 
 |---|---|
 | Layout | `Stack`, `Group`, `SimpleGrid`, `Grid`, `Flex`, `Card`, `Box` (`component="section"` and others) |
 | Text and links | `Title`, `Text` (`span`, `inherit`, `c="dimmed"` for muted text), `Anchor` |
-| Tables and lists | `Table` (`Table.Thead`, `Table.Tr`, `Table.Th`, `Table.Td`, …), `List` |
+| Tables and lists | `Table` (`Table.Thead`, `Table.Tr`, `Table.Th`, `Table.Td`, …), `List`. For labelled facts, such as the Account card's team and role, `Table variant="vertical"` with a `Table.Th` label in each row. |
 | Forms | `TextInput`, `NumberInput`, `Select`, `SegmentedControl`, `Switch`, `Checkbox`, `Textarea`, `Button` |
 | Dates | `DatePickerInput`, `DateTimePicker` and the others in `@mantine/dates` |
 | Status | `Alert`, `Loader`, `Skeleton`, `Badge`, `Tooltip` |
@@ -150,8 +150,6 @@ rules to `styles.css`. Before you write markup or a component of your own, look 
 - **Mantine's other packages are new dependencies.** `@mantine/dates` is in (see
   [Decisions](#decisions)). `@mantine/form` and `@mantine/notifications` are separate packages too,
   so ask before you add one.
-- **One exception is left:** the Account card's facts list uses the legacy `account-facts` class.
-  Move it to Mantine when the card next changes.
 
 ### Effect: the API boundary
 
@@ -501,8 +499,8 @@ onOpenPlayer(openPlayer);
 
 `mountView(element, View)` creates one React root per element, once, and wraps it in the shared
 `QueryClient`. So a view keeps its state when its tab shows again. `app.js` loads React and Effect
-with `import()` when a view first needs them. The first load is 38 kB gzipped. The Account tab adds
-173 kB, the Rules tab 213 kB and the Offseason tab 183 kB (measured on October 25, 2026). The legacy
+with `import()` when a view first needs them. The first load is 42 kB of JS, gzipped. The Account
+tab adds 153 kB, the Rules tab 202 kB and the Offseason tab 181 kB (measured on October 26, 2026). The legacy
 `route()` shows and hides the tab's section as it does now. A React view opens a player's contract
 with the bridge's `openPlayer()`, which opens the legacy dialog, until Players & cap moves to React.
 
