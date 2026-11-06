@@ -35,6 +35,13 @@ export function fmtSigned(v: Num, digits = 2): string {
 const monthDayFormat = new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
 export const fmtMonthDay = (monthDay: string) => monthDayFormat.format(new Date(`2001-${monthDay}`));
 
+// h:mm:ss, rounded up, so it reads 0:00:00 only when the time is up.
+export function fmtClock(ms: number): string {
+  const seconds = Math.max(Math.ceil(ms / 1000), 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${Math.floor(seconds / 3600)}:${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
+}
+
 export function possessive(name: string): string {
   return /s$/i.test(name) ? `${name}’` : `${name}’s`;
 }

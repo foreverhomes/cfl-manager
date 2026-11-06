@@ -17,7 +17,7 @@
           <div class="brand-league" id="league-name">Loading league…</div>
         </div>
       </div>
-      <!-- Shown once the app knows who's signed in. Trade builder, Offseason and Admin are the admin's. -->
+      <!-- Shown once the app knows who's signed in. Trade builder, Offseason, Draft and Admin are the admin's. -->
       <nav class="tabs" role="tablist" aria-label="Views" id="tabs" hidden>
         <a class="tab" role="tab" href="#dashboard" id="tab-dashboard">Dashboard</a>
         <a class="tab" role="tab" href="#analysis" id="tab-analysis">Analysis</a>
@@ -26,6 +26,7 @@
         <a class="tab" role="tab" href="#changes" id="tab-changes">Changes</a>
         <a class="tab" role="tab" href="#rules" id="tab-rules">Rules</a>
         <a class="tab" role="tab" href="#offseason" id="tab-offseason" hidden>Offseason</a>
+        <a class="tab" role="tab" href="#draft" id="tab-draft" hidden>Draft</a>
         <a class="tab" role="tab" href="#admin" id="tab-admin" hidden>Admin</a>
       </nav>
       <div class="topbar-actions" id="topbar-actions" hidden>
@@ -241,6 +242,9 @@
 
     <!-- Offseason: contracts that end after a season, as RFAs or UFAs --- -->
     <section id="view-offseason" class="view" hidden></section>
+
+    <!-- Draft: the entry draft's board and the pick on the clock --------- -->
+    <section id="view-draft" class="view" hidden></section>
 
     <!-- Trade builder ---------------------------------------------------- -->
     <section id="view-trade" class="view" hidden>

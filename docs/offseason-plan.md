@@ -14,6 +14,9 @@ Status: in progress. Built so far:
   the rules for a league year, and the admin changes one with `PUT /rules/{key}`. The Rules tab
   shows them to everyone, and the admin changes them there. Each draft has the rounds of its own
   league year.
+- The entry draft's API contract: `GET /draft`, `GET /draft/eligible` and `POST /draft/picks` have
+  their response models, and they answer 404 until the draft's tables exist. The draft room's page
+  is built against them (see [frontend-plan.md](frontend-plan.md)).
 
 The rule questions this plan raised were answered on October 19, 2026 (see [Decisions](#decisions)).
 The answers are also in [rules.md](rules.md) under Clarifications, which the code will cite.
@@ -552,11 +555,25 @@ stateDiagram-v2
   the champion last in each round. The rounds (5) come from the `draft.rounds` setting, and each slot's owner
   comes from pick ownership (`picks.py`), so traded and compensation picks are already in place.
 - **Eligibility:** any player who isn't held by a CFL team and has never been signed in the CFL.
-  The app knows the contracts it has on file, and the CFL Contracts sheet's history fills the gaps.
-- **Each pick is on the clock for 24 hours.** The team on the clock picks any eligible player.
-  When the clock runs out, the app picks for them: from the team's pre-submitted list if they sent
-  one, or else the player taken earliest in this year's NHL draft who is still available (from
-  NHL.com's draft results).
+  Fantrax supplies the pool and the rosters, but not who was ever signed. So the pool is Fantrax's
+  players, minus its rosters, minus this draft's picks (Fantrax lags until the commissioner adds
+  them), minus every player with a contract on file or in the CFL Contracts sheet's history. That
+  history needs a table of its own.
+- **Each pick is on the clock for 24 hours** (the `draft.pick_hours` setting). The team on the
+  clock picks any eligible player. When the clock runs out, the app picks for them: from the team's
+  pre-submitted list if they sent one, or else the player taken earliest in this year's NHL draft
+  who is still available (from NHL.com's draft results).
+- **An auto-selected pick says so.** Its state is `auto`, not `made`, and `auto_source` says where
+  the player came from: `list` or `nhl_draft`. The board marks it.
+- **The next clock starts when the last pick ended:** when it was made or, for an auto-selected
+  pick, at its deadline. It doesn't start when the lazy check ran, so the clock doesn't depend on
+  who loads the page.
+- **Pausing keeps the time left** in `drafts.clock_left_seconds`. Resuming sets a new deadline from
+  it.
+- **NHL.com's draft results have names, not ids.** On November 6, 2026, 208 of the 223 players
+  drafted in 2026 matched Fantrax's list by exact name. The other 15 look like spelling or nickname
+  differences (Egor/Yegor, Benjamin/Ben). So the app saves each match before the draft opens and
+  shows the admin any misses. How soon Fantrax lists new draftees after the NHL draft is unknown.
 - **Admin controls:** pause and resume, undo the last pick, make a pick for a team.
 - **Fantrax:** each pick goes on the to-do list, so the commissioner adds the player to that
   team's minors.
@@ -694,6 +711,7 @@ CREATE TABLE drafts (
     year            INTEGER NOT NULL,
     state           TEXT NOT NULL,      -- scheduled / open / paused / complete
     order_json      TEXT NOT NULL,      -- team ids, first pick to last, in every round
+    clock_left_seconds INTEGER,         -- while paused: what the pick on the clock has left
     PRIMARY KEY (league_id, year)
 );
 
@@ -705,6 +723,7 @@ CREATE TABLE draft_picks (
     original_team_id TEXT NOT NULL,
     team_id         TEXT NOT NULL,      -- who picks (the pick's owner when the draft started)
     state           TEXT NOT NULL,      -- waiting / on_clock / made / auto
+    auto_source     TEXT,               -- list / nhl_draft, when the state is auto
     clock_ends_at   TEXT,
     player_id       TEXT,
     made_by         TEXT,
@@ -742,7 +761,8 @@ showing what's relevant to the current phase:
   - **Your RFAs:** offers on them, with Match or Let go and the time left.
   - **Every offer:** the public thread.
   - **Your signings:** players you've won or matched, each with years to set before the deadline.
-- **Draft:** the board, who's on the clock and the time left, your pick form and your list.
+- **Draft** (a tab of its own, `#draft`, so the time-critical screen has its own link): the board,
+  who's on the clock and the time left, your pick form and your list.
 - **Rules** (a page of its own, all year): every league rule setting, with its current value, its
   default, what it used to be, and its rules.md section. Admins edit here, choosing the league year
   a change starts in.
@@ -767,7 +787,10 @@ Endpoints follow the existing style:
 - `GET /rules?year=2028`: every rule's value for a league year, with defaults and history.
 - `PUT /rules/{key}`: admin. Takes `{"value": ..., "from_year": 2028, "note": "...", "force_reason": null}`;
   a `null` value puts the default back.
-- `GET /draft`, `POST /draft/picks`, `PUT /draft/list`.
+- `GET /draft`, `POST /draft/picks` (with `overall` and `player_id`, so a stale page can't spend the
+  next pick), `PUT /draft/list`.
+- `GET /draft/eligible?q=…&limit=20`: the players the team on the clock can pick, best first, or
+  matching a name.
 - `POST /auction/import`, once it exists.
 
 Each check runs in the API, not just in the page: 409 for a wrong state, 403 for a wrong person,

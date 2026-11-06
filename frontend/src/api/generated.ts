@@ -29,6 +29,10 @@ export type RuleChange = { readonly "from_year": number, readonly "value": Schem
 export const RuleChange = Schema.StructWithRest(Schema.Struct({ "from_year": Schema.Number.annotate({ "title": "From Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "note": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" }), "changed_by": Schema.String.annotate({ "title": "Changed By" }), "changed_at": Schema.String.annotate({ "title": "Changed At" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "RuleChange", "identifier": "RuleChange" })
 export type RuleEdit = { readonly "value": Schema.Json, readonly "from_year": number, readonly "note"?: string | null } & { readonly [x: string]: Schema.Json }
 export const RuleEdit = Schema.StructWithRest(Schema.Struct({ "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "from_year": Schema.Number.annotate({ "title": "From Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "RuleEdit", "identifier": "RuleEdit" })
+export type DraftPlayer = { readonly "fantrax_id": string, readonly "name": string, readonly "position": string | null, readonly "nhl_team": string | null, readonly "nhl_draft_overall": number | null } & { readonly [x: string]: Schema.Json }
+export const DraftPlayer = Schema.StructWithRest(Schema.Struct({ "fantrax_id": Schema.String.annotate({ "title": "Fantrax Id" }), "name": Schema.String.annotate({ "title": "Name" }), "position": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Position" }), "nhl_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Nhl Team" }), "nhl_draft_overall": Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "Nhl Draft Overall" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "DraftPlayer", "identifier": "DraftPlayer" })
+export type NewDraftPick = { readonly "overall": number, readonly "player_id": string } & { readonly [x: string]: Schema.Json }
+export const NewDraftPick = Schema.StructWithRest(Schema.Struct({ "overall": Schema.Number.annotate({ "title": "Overall" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "player_id": Schema.String.annotate({ "title": "Player Id" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "NewDraftPick", "identifier": "NewDraftPick" })
 export type TradeRequest = { readonly "team_id"?: string, readonly "give"?: ReadonlyArray<string>, readonly "other_team_id"?: string | null, readonly "get"?: ReadonlyArray<string>, readonly "lineup"?: string, readonly "spread"?: number } & { readonly [x: string]: Schema.Json }
 export const TradeRequest = Schema.StructWithRest(Schema.Struct({ "team_id": Schema.optionalKey(Schema.String.annotate({ "title": "Team Id", "default": "me" })), "give": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Give", "default": [] })), "other_team_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Other Team Id" })), "get": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Get", "default": [] })), "lineup": Schema.optionalKey(Schema.String.annotate({ "title": "Lineup", "default": "best" })), "spread": Schema.optionalKey(Schema.Number.annotate({ "title": "Spread", "default": 1.5 }).check(Schema.isFinite().annotate({ "expected": "a finite number" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "TradeRequest", "identifier": "TradeRequest" })
 export type NewUser = { readonly "team_id"?: string | null, readonly "role"?: string, readonly "status"?: string, readonly "email": string } & { readonly [x: string]: Schema.Json }
@@ -43,10 +47,14 @@ export type ExpiringPlayer = { readonly "fantrax_id": string, readonly "name": s
 export const ExpiringPlayer = Schema.StructWithRest(Schema.Struct({ "fantrax_id": Schema.String.annotate({ "title": "Fantrax Id" }), "name": Schema.String.annotate({ "title": "Name" }), "nhl_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Nhl Team" }), "position": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Position" }), "eligible": Schema.Array(Schema.String).annotate({ "title": "Eligible" }), "fantasy_team_id": Schema.String.annotate({ "title": "Fantasy Team Id" }), "fantasy_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Fantasy Team" }), "roster_status": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Roster Status" }), "gp_this_season": Schema.Number.annotate({ "title": "Gp This Season" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "gp_last_season": Schema.Number.annotate({ "title": "Gp Last Season" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "value": Schema.Union([Schema.Finite, Schema.Null]).annotate({ "title": "Value" }), "trade_rank": Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "Trade Rank" }), "contract_type": Schema.String.annotate({ "title": "Contract Type" }), "contract_years": Schema.Number.annotate({ "title": "Contract Years" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "contract_end": ContractEnd, "final_salary": Schema.Number.annotate({ "title": "Final Salary" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "ExpiringPlayer", "identifier": "ExpiringPlayer" })
 export type LeagueRule = { readonly "key": string, readonly "label": string, readonly "kind": string, readonly "cite": string, readonly "default": Schema.Json, readonly "value": Schema.Json, readonly "changes": ReadonlyArray<RuleChange> } & { readonly [x: string]: Schema.Json }
 export const LeagueRule = Schema.StructWithRest(Schema.Struct({ "key": Schema.String.annotate({ "title": "Key" }), "label": Schema.String.annotate({ "title": "Label" }), "kind": Schema.String.annotate({ "title": "Kind" }), "cite": Schema.String.annotate({ "title": "Cite" }), "default": Schema.Json.annotate({ "expected": "JSON value", "title": "Default" }), "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "changes": Schema.Array(RuleChange).annotate({ "title": "Changes" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "LeagueRule", "identifier": "LeagueRule" })
+export type DraftPick = { readonly "overall": number, readonly "round": number, readonly "team_id": string, readonly "team_name": string, readonly "original_team_name": string, readonly "state": "waiting" | "on_clock" | "made" | "auto", readonly "auto_source": "list" | "nhl_draft" | null, readonly "player": DraftPlayer | null } & { readonly [x: string]: Schema.Json }
+export const DraftPick = Schema.StructWithRest(Schema.Struct({ "overall": Schema.Number.annotate({ "title": "Overall" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "round": Schema.Number.annotate({ "title": "Round" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "team_id": Schema.String.annotate({ "title": "Team Id" }), "team_name": Schema.String.annotate({ "title": "Team Name" }), "original_team_name": Schema.String.annotate({ "title": "Original Team Name" }), "state": Schema.Literals(["waiting", "on_clock", "made", "auto"]).annotate({ "title": "State" }), "auto_source": Schema.Union([Schema.Literals(["list", "nhl_draft"]), Schema.Null]).annotate({ "title": "Auto Source" }), "player": Schema.Union([DraftPlayer, Schema.Null]) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "DraftPick", "identifier": "DraftPick" })
 export type ExpiringContracts = { readonly "year": number, readonly "after_season": string, readonly "offseasons": ReadonlyArray<OffseasonYear>, readonly "ufa_age": number, readonly "ufa_day": string, readonly "players": ReadonlyArray<ExpiringPlayer>, readonly "no_contract": ReadonlyArray<NoContract> } & { readonly [x: string]: Schema.Json }
 export const ExpiringContracts = Schema.StructWithRest(Schema.Struct({ "year": Schema.Number.annotate({ "title": "Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "after_season": Schema.String.annotate({ "title": "After Season" }), "offseasons": Schema.Array(OffseasonYear).annotate({ "title": "Offseasons" }), "ufa_age": Schema.Number.annotate({ "title": "Ufa Age" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "ufa_day": Schema.String.annotate({ "title": "Ufa Day" }), "players": Schema.Array(ExpiringPlayer).annotate({ "title": "Players" }), "no_contract": Schema.Array(NoContract).annotate({ "title": "No Contract" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "ExpiringContracts", "identifier": "ExpiringContracts" })
 export type LeagueRules = { readonly "year": number, readonly "league_year": number, readonly "can_edit": boolean, readonly "rules": ReadonlyArray<LeagueRule> } & { readonly [x: string]: Schema.Json }
 export const LeagueRules = Schema.StructWithRest(Schema.Struct({ "year": Schema.Number.annotate({ "title": "Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "league_year": Schema.Number.annotate({ "title": "League Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "can_edit": Schema.Boolean.annotate({ "title": "Can Edit" }), "rules": Schema.Array(LeagueRule).annotate({ "title": "Rules" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "LeagueRules", "identifier": "LeagueRules" })
+export type DraftBoard = { readonly "year": number, readonly "state": "scheduled" | "open" | "paused" | "complete", readonly "now": string, readonly "on_clock": number | null, readonly "clock_ends_at": string | null, readonly "clock_left_seconds": number | null, readonly "can_pick": boolean, readonly "picks": ReadonlyArray<DraftPick> } & { readonly [x: string]: Schema.Json }
+export const DraftBoard = Schema.StructWithRest(Schema.Struct({ "year": Schema.Number.annotate({ "title": "Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "state": Schema.Literals(["scheduled", "open", "paused", "complete"]).annotate({ "title": "State" }), "now": Schema.String.annotate({ "title": "Now" }), "on_clock": Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "On Clock" }), "clock_ends_at": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Clock Ends At" }), "clock_left_seconds": Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "Clock Left Seconds" }), "can_pick": Schema.Boolean.annotate({ "title": "Can Pick" }), "picks": Schema.Array(DraftPick).annotate({ "title": "Picks" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "DraftBoard", "identifier": "DraftBoard" })
 // schemas
 export type AuthConfig200 = Schema.Json
 export const AuthConfig200 = Schema.Json.annotate({ "expected": "JSON value" })
@@ -172,6 +180,20 @@ export type ChangeRule200 = LeagueRules
 export const ChangeRule200 = LeagueRules
 export type ChangeRule422 = HTTPValidationError
 export const ChangeRule422 = HTTPValidationError
+export type Draft200 = DraftBoard
+export const Draft200 = DraftBoard
+export type DraftEligibleParams = { readonly "q"?: string, readonly "limit"?: number }
+export const DraftEligibleParams = Schema.Struct({ "q": Schema.optionalKey(Schema.String.annotate({ "title": "Q", "description": "Name search", "default": "" })), "limit": Schema.optionalKey(Schema.Number.annotate({ "title": "Limit", "default": 20 }).check(Schema.isInt().annotate({ "expected": "an integer" }))) })
+export type DraftEligible200 = ReadonlyArray<DraftPlayer>
+export const DraftEligible200 = Schema.Array(DraftPlayer).annotate({ "title": "Response Draft Eligible" })
+export type DraftEligible422 = HTTPValidationError
+export const DraftEligible422 = HTTPValidationError
+export type MakeDraftPickRequestJson = NewDraftPick
+export const MakeDraftPickRequestJson = NewDraftPick
+export type MakeDraftPick200 = DraftBoard
+export const MakeDraftPick200 = DraftBoard
+export type MakeDraftPick422 = HTTPValidationError
+export const MakeDraftPick422 = HTTPValidationError
 export type OverviewParams = { readonly "lineup"?: string }
 export const OverviewParams = Schema.Struct({ "lineup": Schema.optionalKey(Schema.String.annotate({ "title": "Lineup", "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax", "default": "best" })) })
 export type Overview200 = Schema.Json
@@ -557,6 +579,28 @@ export const make = (
     }))
     ))
   ),
+    "draft": (options: Parameters<Cfl["draft"]>[0]) => HttpClientRequest.get("/draft").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(Draft200),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "draftEligible": (options: Parameters<Cfl["draftEligible"]>[0]) => HttpClientRequest.get("/draft/eligible").pipe(
+      HttpClientRequest.setUrlParams({ "q": options?.params?.["q"] as any, "limit": options?.params?.["limit"] as any }),
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(DraftEligible200),
+      "422": decodeError("DraftEligible422", DraftEligible422),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "makeDraftPick": (options: Parameters<Cfl["makeDraftPick"]>[0]) => HttpClientRequest.post("/draft/picks").pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(MakeDraftPick200),
+      "422": decodeError("MakeDraftPick422", MakeDraftPick422),
+      orElse: unexpectedStatus
+    }))
+    ),
     "overview": (options: Parameters<Cfl["overview"]>[0]) => HttpClientRequest.get("/analysis/overview").pipe(
       HttpClientRequest.setUrlParams({ "lineup": options?.params?.["lineup"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -862,6 +906,27 @@ readonly "rules": {
 readonly "changeRule": {
     <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof ChangeRuleRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<ChangeRule200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"ChangeRule422", ChangeRule422>>;
     <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof ChangeRuleRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<ChangeRule200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"ChangeRule422", ChangeRule422>>;
+  }
+  /**
+* The whole board: every pick, who's on the clock, when the clock ends, and the server's time.
+*/
+readonly "draft": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<Draft200, Config>, HttpClientError.HttpClientError | SchemaError>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<Draft200, Config | undefined>, HttpClientError.HttpClientError | SchemaError>;
+  }
+  /**
+* Players the team on the clock can pick: best first, or matching a name.
+*/
+readonly "draftEligible": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof DraftEligibleParams.Encoded | undefined; readonly config: Config }): Effect.Effect<WithOptionalResponse<DraftEligible200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"DraftEligible422", DraftEligible422>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params?: typeof DraftEligibleParams.Encoded | undefined; readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<DraftEligible200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"DraftEligible422", DraftEligible422>>;
+  }
+  /**
+* Make the pick on the clock, and return the board.
+*/
+readonly "makeDraftPick": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof MakeDraftPickRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<MakeDraftPick200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"MakeDraftPick422", MakeDraftPick422>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof MakeDraftPickRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<MakeDraftPick200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"MakeDraftPick422", MakeDraftPick422>>;
   }
   /**
 * Every team's projected category ranks (1 = best) and actual H2H category records.

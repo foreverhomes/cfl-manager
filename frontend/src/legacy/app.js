@@ -376,8 +376,8 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "rules", "offseason", "admin", "account"];
-const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
+const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "rules", "offseason", "draft", "admin", "account"];
+const ADMIN_VIEWS = new Set(["trade", "offseason", "draft", "admin"]);   // the draft is the admin's until its backend lands
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
 function currentView() {
@@ -389,7 +389,7 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = ["players", "changes", "rules", "offseason", "admin", "account"].includes(view);   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "rules", "offseason", "draft", "admin", "account"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     if (v !== "account") byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
@@ -399,6 +399,7 @@ function route() {
   if (view === "rules") { showView("rules-card", () => import("../views/rules/RulesPage").then((m) => m.RulesPage)); return; }
   if (view === "admin") { loadAdmin(); return; }
   if (view === "offseason") { showView("view-offseason", () => import("../views/offseason/OffseasonPage").then((m) => m.OffseasonPage)); return; }
+  if (view === "draft") { showView("view-draft", () => import("../views/draft/DraftPage").then((m) => m.DraftPage)); return; }
   if (!state.team) return;
   if (view === "dashboard") loadDashboard();
   else if (view === "analysis") loadAnalysis();
@@ -1663,7 +1664,7 @@ function afterContractChange(message) {
   else if (view === "trade") loadTrade();
   else if (view === "changes") loadChanges();
   else if (view === "analysis") loadAnalysis();
-  else if (view !== "offseason") loadDashboard();   // dataChanged() reloads the React views
+  else if (view !== "offseason" && view !== "draft") loadDashboard();   // dataChanged() reloads the React views
 }
 
 /* ================================================================ draft picks */
@@ -1940,6 +1941,7 @@ function applyRole() {
   byId("topbar-actions").hidden = false;
   byId("tab-trade").hidden = !me.is_admin;
   byId("tab-offseason").hidden = !me.is_admin;
+  byId("tab-draft").hidden = !me.is_admin;
   byId("tab-admin").hidden = !me.is_admin;
   byId("sync-btn").hidden = !me.is_admin;
   byId("players-sub").textContent = me.is_admin

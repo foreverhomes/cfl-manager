@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
@@ -820,6 +820,66 @@ def change_rule(key: str, edit: RuleEdit, conn: Connection = Depends(get_conn), 
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
     return _rules(conn, edit.from_year, user)
+
+
+# --------------------------------------------------------------------------- entry draft
+
+
+class DraftPlayer(BaseModel):
+    fantrax_id: str
+    name: str
+    position: Optional[str]
+    nhl_team: Optional[str]
+    nhl_draft_overall: Optional[int]    # in this year's NHL draft: the order auto-select uses
+
+
+class DraftPick(BaseModel):
+    overall: int
+    round: int
+    team_id: str                        # who picks
+    team_name: str
+    original_team_name: str             # differs from team_name when the pick was traded
+    state: Literal["waiting", "on_clock", "made", "auto"]
+    auto_source: Optional[Literal["list", "nhl_draft"]]
+    player: Optional[DraftPlayer]
+
+
+class DraftBoard(BaseModel):
+    year: int
+    state: Literal["scheduled", "open", "paused", "complete"]
+    now: str                            # the server's time, so a countdown doesn't use the browser's clock
+    on_clock: Optional[int]             # the overall number of the pick on the clock
+    clock_ends_at: Optional[str]
+    clock_left_seconds: Optional[int]   # while paused
+    can_pick: bool                      # may this user make the pick on the clock
+    picks: List[DraftPick]
+
+
+class NewDraftPick(BaseModel):
+    overall: int                        # which pick this is for, so a stale page can't spend the next one
+    player_id: str
+
+
+def _no_draft() -> HTTPException:
+    return HTTPException(404, detail="No draft yet")
+
+
+@data.get("/draft", response_model=DraftBoard)
+def draft():
+    """The whole board: every pick, who's on the clock, when the clock ends, and the server's time."""
+    raise _no_draft()
+
+
+@data.get("/draft/eligible", response_model=List[DraftPlayer])
+def draft_eligible(q: str = Query("", description="Name search"), limit: int = 20):
+    """Players the team on the clock can pick: best first, or matching a name."""
+    raise _no_draft()
+
+
+@data.post("/draft/picks", response_model=DraftBoard)
+def make_draft_pick(pick: NewDraftPick):
+    """Make the pick on the clock, and return the board."""
+    raise _no_draft()
 
 
 # --------------------------------------------------------------------------- analysis
