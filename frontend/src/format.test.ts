@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { fmtCat, fmtMoney, fmtMonthDay, fmtNum, fmtSigned, ordinal, positions, possessive } from "./format";
+import { fmtCat, fmtClock, fmtMoney, fmtMonthDay, fmtNum, fmtSigned, ordinal, positions, possessive } from "./format";
+
+describe("fmtClock", () => {
+  it.each([
+    [86_400_000, "24:00:00"],
+    [3_661_000, "1:01:01"],
+    [59_001, "0:01:00"],
+    [1, "0:00:01"],
+    [0, "0:00:00"],
+    [-5000, "0:00:00"],
+  ])("%s ms is %s", (ms, text) => {
+    expect(fmtClock(ms)).toBe(text);
+  });
+});
 
 describe("ordinal", () => {
   it.each([

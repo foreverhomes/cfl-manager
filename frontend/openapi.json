@@ -1131,6 +1131,121 @@
         }
       }
     },
+    "/draft": {
+      "get": {
+        "summary": "Draft",
+        "description": "The whole board: every pick, who's on the clock, when the clock ends, and the server's time.",
+        "operationId": "draft",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftBoard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/draft/eligible": {
+      "get": {
+        "summary": "Draft Eligible",
+        "description": "Players the team on the clock can pick: best first, or matching a name.",
+        "operationId": "draft_eligible",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Name search",
+              "default": "",
+              "title": "Q"
+            },
+            "description": "Name search"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DraftPlayer"
+                  },
+                  "title": "Response Draft Eligible"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/draft/picks": {
+      "post": {
+        "summary": "Make Draft Pick",
+        "description": "Make the pick on the clock, and return the board.",
+        "operationId": "make_draft_pick",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewDraftPick"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftBoard"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analysis/overview": {
       "get": {
         "summary": "Overview",
@@ -1937,6 +2052,209 @@
         ],
         "title": "ContractEnd"
       },
+      "DraftBoard": {
+        "properties": {
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "open",
+              "paused",
+              "complete"
+            ],
+            "title": "State"
+          },
+          "now": {
+            "type": "string",
+            "title": "Now"
+          },
+          "on_clock": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Clock"
+          },
+          "clock_ends_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clock Ends At"
+          },
+          "clock_left_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clock Left Seconds"
+          },
+          "can_pick": {
+            "type": "boolean",
+            "title": "Can Pick"
+          },
+          "picks": {
+            "items": {
+              "$ref": "#/components/schemas/DraftPick"
+            },
+            "type": "array",
+            "title": "Picks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "year",
+          "state",
+          "now",
+          "on_clock",
+          "clock_ends_at",
+          "clock_left_seconds",
+          "can_pick",
+          "picks"
+        ],
+        "title": "DraftBoard"
+      },
+      "DraftPick": {
+        "properties": {
+          "overall": {
+            "type": "integer",
+            "title": "Overall"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id"
+          },
+          "team_name": {
+            "type": "string",
+            "title": "Team Name"
+          },
+          "original_team_name": {
+            "type": "string",
+            "title": "Original Team Name"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "on_clock",
+              "made",
+              "auto"
+            ],
+            "title": "State"
+          },
+          "auto_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "list",
+                  "nhl_draft"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Source"
+          },
+          "player": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DraftPlayer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "overall",
+          "round",
+          "team_id",
+          "team_name",
+          "original_team_name",
+          "state",
+          "auto_source",
+          "player"
+        ],
+        "title": "DraftPick"
+      },
+      "DraftPlayer": {
+        "properties": {
+          "fantrax_id": {
+            "type": "string",
+            "title": "Fantrax Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "nhl_team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nhl Team"
+          },
+          "nhl_draft_overall": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nhl Draft Overall"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fantrax_id",
+          "name",
+          "position",
+          "nhl_team",
+          "nhl_draft_overall"
+        ],
+        "title": "DraftPlayer"
+      },
       "ExpiringContracts": {
         "properties": {
           "year": {
@@ -2260,6 +2578,24 @@
           "auth"
         ],
         "title": "Me"
+      },
+      "NewDraftPick": {
+        "properties": {
+          "overall": {
+            "type": "integer",
+            "title": "Overall"
+          },
+          "player_id": {
+            "type": "string",
+            "title": "Player Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "overall",
+          "player_id"
+        ],
+        "title": "NewDraftPick"
       },
       "NewUser": {
         "properties": {

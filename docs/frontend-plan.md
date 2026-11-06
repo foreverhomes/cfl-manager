@@ -8,7 +8,10 @@ FastAPI owns every rule and every state machine.
 Status: accepted on October 20, 2026 (see [Decisions](#decisions)). F0 and F1 are done. The "Your
 account" card was the first React view in the page. F2 has started: the Rules page is a React view
 on its own tab, and the admin changes a rule there. The Offseason tab, today's expiring contracts
-list, is a React view too. The rest of F2 waits for the league phases (offseason milestone 1).
+list, is a React view too. The rest of F2 waits for the league phases (offseason milestone 1). F5's
+draft room started ahead of its milestone on November 6, 2026: an admin-only `#draft` tab with the
+`draftPick` machine, built against the API contract and a mock, because the draft's backend doesn't
+exist yet.
 
 ## Why now
 
@@ -248,7 +251,7 @@ export const draftBoard = queryOptions({
 |---|---|---|
 | `offerSheet` | editing, previewing, ready, blocked, submitting, made, outbid, failed | A preview after each pause in typing, then a submit that can fail in three ways. |
 | `matchDecision` | deciding, confirming, submitting, done, expired | The 24 hours can run out while the owner decides. |
-| `draftPick` | waiting, on_clock, choosing, submitting, picked, missed | The clock or an auto-pick can end the turn during a pick. |
+| `draftPick` | waiting, turn (choosing, confirming, submitting), checking, picked, missed | The clock or an auto-pick can end the turn during a pick. |
 | `phaseTransition` | idle, previewing, confirming, forcing, submitting, done, conflict | A preview, a confirm, an optional reason to force, and a race with another admin. |
 
 The other screens aren't machines: Dashboard, Analysis, Players & cap, Changes, Rules and the trade
@@ -320,6 +323,36 @@ export const offerSheet = setup({
 
 `reenter: true` restarts the 300 ms timer on each change. `dataChanged()` invalidates the queries
 (see [the bridge](#the-bridge)), so the RFA market loads the new high offer.
+
+The draft pick, in [`src/machines/draftPick.ts`](../frontend/src/machines/draftPick.ts):
+
+```mermaid
+stateDiagram-v2
+    [*] --> waiting
+    waiting --> turn: board says it's your pick
+    state turn {
+        [*] --> choosing
+        choosing --> confirming: select
+        confirming --> choosing: back
+        confirming --> submitting: confirm
+        submitting --> choosing: 400, with reasons
+        submitting --> confirming: anything else
+    }
+    turn --> checking: the clock ends, or 409
+    turn --> picked: 200
+    turn --> missed: board says auto
+    checking --> missed: board says auto
+    checking --> turn: still on the clock
+    checking --> waiting: someone else made it
+    picked --> turn: your next pick
+    missed --> turn: your next pick
+```
+
+- **The clock only asks.** At the deadline, the machine refetches the board. `GET /draft` applies a
+  deadline that has passed, and the board says what happened. So a stale timer corrects itself.
+- **The board drives the machine.** `DraftPage` sends each `GET /draft` result as a `BOARD` event.
+- **Search stays outside the machine.** Its results gate nothing, so it's a TanStack query keyed by
+  the debounced text. The machine only hears `SELECT`.
 
 ## The API contract
 
@@ -440,6 +473,11 @@ each path's first segment from `openapi.json`, and a new endpoint needs no proxy
 keeps the browser's `Host` header (no `changeOrigin`), so the API's same-site check passes when
 logins are on locally. `.claude/launch.json` gets a second entry for the Vite server.
 
+**The draft room's mock.** Until the draft's backend lands, `/?mock-draft#draft` on port 5173 runs a
+draft in the browser on a short clock ([`src/views/draft/mock.ts`](../frontend/src/views/draft/mock.ts)).
+It's an MSW worker over the same routes. The dev server serves `dev-public/mockServiceWorker.js`,
+and the build leaves it and the mock out. Delete all three when the backend lands.
+
 ```ts
 // frontend/vite.config.ts
 import react from "@vitejs/plugin-react";
@@ -532,7 +570,8 @@ Move an existing tab when a change to it is due anyway, not on a schedule.
   (MSW 3's name for it) fails a test on any request that it doesn't answer. `renderView()` wraps a
   view in the page's providers, and `src/test-setup.ts` adds the browser parts that Mantine needs.
   jsdom has no layout, so Mantine hides a `Popover`, such as a `Select`'s options: find an option
-  with `{ hidden: true }`.
+  with `{ hidden: true }`. A searchable `Select` takes a change to an unfocused input for the
+  browser's autofill, so focus the input before you type in a test.
 - **The contract:** the pytest test above, and `tsc` over the generated client, check it.
 - **`npm run check`** runs `biome check`, `tsc` and `vitest run`. Run it and `pytest` before each
   PR.
@@ -569,7 +608,7 @@ milestone whose screens it builds.
 | **F2. Offseason hub** | Each Mantine component's CSS import goes into `theme.ts` with the first view that uses it. The phase banner. The admin's transition button with its blockers and Force (`phaseTransition`). The Fantrax to-do list, cap exemptions, and today's expiring contracts list, now in React. The Rules page. | 1. Foundation |
 | **F3. Qualifying** | Your RFAs, with Qualify (years) or Let go, and the cap and bank impact. | 2. Qualifying |
 | **F4. Offer sheets** | The RFA market and the offer form (`offerSheet`). Your RFAs with Match or Let go (`matchDecision`). Every offer, and your signings' years. | 3. Offer sheets |
-| **F5. Draft room** | The board with polling, your pick (`draftPick`), and your list. | 4. Entry draft |
+| **F5. Draft room** | The board with polling, your pick (`draftPick`), and your list. Started on November 6, 2026 against a mock: the list and the admin's controls wait for the backend. | 4. Entry draft |
 | **F6. Existing tabs** | In the [order](#order) above, when each is next changed. | — |
 
 F0 to F4 are what June 2027 needs. F5 can wait a year, as the draft can.
@@ -583,7 +622,7 @@ F0 to F4 are what June 2027 needs. F5 can wait a year, as the draft can.
 | Two frontends share one page during the migration. | They meet only in `bridge.ts`, which has five exports and goes with `app.js`. |
 | Mantine's CSS is imported one component at a time while the legacy page lives. | A missing import renders the component unstyled, with no error, so `theme.ts` lists every import. Mantine's `styles.css` isn't used, because its baseline restyles the legacy page. After the shell moves, import `styles.layer.css` instead. |
 | The first Node build on Vercel. | F0 proves it on a preview deployment before any other work. |
-| Polling uses Vercel's Hobby plan allowance. | The draft board polls every 30 seconds, only while its tab is visible. Check the usage after the first draft. |
+| Polling uses Vercel's Hobby plan allowance. | The draft board polls every 30 seconds while the browser tab is visible. `mountView` keeps a view mounted, so it also polls while a GM is on another of the app's tabs. Check the usage after the first draft. |
 
 ## Decisions
 
@@ -601,6 +640,9 @@ Accepted on October 20, 2026:
 | Component library | Mantine 9, added on October 21, 2026. A spike on the Account card left every legacy tab unchanged in light and dark, and the Account tab adds 25 kB gzipped. |
 | How React views use Mantine | A Mantine component wherever Mantine has one, themed in `theme.ts`. No legacy classes and no new `styles.css` rules in React views. Decided on October 22, 2026. |
 | Dates | `@mantine/dates`, with its peer `dayjs`, added on October 22, 2026 for the Rules page's day of the year. The offseason needs it too: the admin sets the deadline for picking an offer sheet signing's years. It's pinned to `@mantine/core`'s version, which its peer dependency requires, so upgrade the Mantine packages together. With the Rules page's one `DatePickerInput`, it added 7.4 kB of JS to that page and 3.2 kB to the views' CSS, gzipped. |
+| XState | `xstate` and `@xstate/react`, added on November 6, 2026 with `draftPick`. Only the draft view imports them: the first load stays 38 kB gzipped, and the Draft tab adds 184 kB. |
+| Draft room's place | A `#draft` tab of its own, not a section of the Offseason hub, so the time-critical screen has its own link. It's admin-only until the backend lands. |
+| API shapes before a backend | Pydantic models and routes that answer 404, then `npm run api`, so Python stays the one source of the shapes. |
 
 ### Not in this plan
 

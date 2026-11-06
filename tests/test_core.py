@@ -931,6 +931,29 @@ def test_the_contract_describes_the_expiring_contracts():
         "#/components/schemas/ExpiringContracts"
 
 
+def test_the_contract_describes_the_draft_room():
+    from cfl.api import app
+    spec = app.openapi()
+    def schema(method, path): return spec["paths"][path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert schema("get", "/draft")["$ref"] == "#/components/schemas/DraftBoard"
+    assert schema("get", "/draft/eligible")["items"]["$ref"] == "#/components/schemas/DraftPlayer"
+    assert schema("post", "/draft/picks")["$ref"] == "#/components/schemas/DraftBoard"
+    assert spec["components"]["schemas"]["DraftPick"]["properties"]["state"]["enum"] == \
+        ["waiting", "on_clock", "made", "auto"]
+
+
+@pytest.mark.parametrize("method, path, body", [
+    ("get", "/draft", None),
+    ("get", "/draft/eligible", None),
+    ("post", "/draft/picks", {"overall": 1, "player_id": "p1"}),
+])
+def test_the_draft_routes_say_there_is_no_draft_yet(method, path, body):
+    from fastapi.testclient import TestClient
+    from cfl.api import app
+    res = TestClient(app).request(method, path, json=body)
+    assert (res.status_code, res.json()["detail"]) == (404, "No draft yet")
+
+
 def test_the_offseason_says_the_league_years_ufa_day(conn, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from cfl import rules as R
