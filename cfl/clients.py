@@ -99,21 +99,29 @@ class NHLStatsClient:
     """NHL.com stats REST API (api.nhle.com/stats/rest). Public, no auth."""
 
     REGULAR_SEASON = 2
+    PAGE_SIZE = 100  # the API caps every response at 100 rows, whatever limit asks for
 
     def __init__(self):
         self.http = _Http("https://api.nhle.com/stats/rest/en")
         self.web = _Http("https://api-web.nhle.com/v1")
 
     def _report(self, report: str, season_id: int) -> List[Dict[str, Any]]:
-        data = self.http.get(
-            report,
-            {
-                "limit": -1,
-                "start": 0,
-                "cayenneExp": "seasonId={} and gameTypeId={}".format(season_id, self.REGULAR_SEASON),
-            },
-        )
-        return data.get("data", [])
+        """Every row of a stats report, fetched page by page in a stable playerId order."""
+        rows: List[Dict[str, Any]] = []
+        while True:
+            data = self.http.get(
+                report,
+                {
+                    "limit": self.PAGE_SIZE,
+                    "start": len(rows),
+                    "sort": "playerId",
+                    "cayenneExp": "seasonId={} and gameTypeId={}".format(season_id, self.REGULAR_SEASON),
+                },
+            )
+            page = data.get("data", [])
+            rows.extend(page)
+            if not page or len(rows) >= data.get("total", len(rows)):
+                return rows
 
     def skater_stats(self, season_id: int) -> List[Dict[str, Any]]:
         """Skater summary joined with the 'realtime' report (hits, blocks)."""
