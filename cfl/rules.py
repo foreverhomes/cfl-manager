@@ -34,6 +34,7 @@ KINDS: Dict[str, Tuple[Callable[[Any], bool], str]] = {
     "count": (lambda v: type(v) is int and v >= 1, "a whole number of 1 or more"),
     "share": (lambda v: _number(v) and 0 < v <= 1, "a share above 0, up to 1"),
     "month_day": (_month_day, "a day of the year, as MM-DD"),
+    "bool": (lambda v: isinstance(v, bool), "yes or no"),
 }
 
 
@@ -62,6 +63,12 @@ RULES = {r.key: r for r in [
          "Buyouts and Releases"),
     Rule("draft.rounds", 5, "count", "Entry draft rounds", "Entry Draft"),
     Rule("draft.drafts_shown", 3, "count", "Drafts shown and tradeable", "Entry Draft"),
+    Rule("ufa.bid_hours", 24, "count", "Hours a bid must stand to win", "In-season Free-agent Acquisitions"),
+    Rule("ufa.min_bid", 1.0, "money", "Lowest bid", "In-season Free-agent Acquisitions",
+         lambda v: None if v > 0 else "more than $0"),
+    Rule("ufa.min_raise", 1.0, "money", "Smallest raise over the high bid", "In-season Free-agent Acquisitions",
+         lambda v: None if v > 0 else "more than $0"),
+    Rule("ufa.withdraw", False, "bool", "Bids can be withdrawn", "In-season Free-agent Acquisitions"),
 ]}
 
 

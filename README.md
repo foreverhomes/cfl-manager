@@ -407,6 +407,11 @@ signed-in user's team (locally, `FANTRAX_MY_TEAM_ID`).
 | `POST /picks/deals` | move picks: `{"kind": "trade", "team_id": "me", "other_team_id": "...", "send": [{"draft_year": 2027, "round": 1, "original_team_id": "..."}], "receive": [...], "note": "..."}` (`kind`: trade or rfa; `receive` is for trades) |
 | `DELETE /picks/deals/{deal_id}` | undo a pick deal |
 | `GET /offseason?year=2027` | *admin*: rostered players whose contracts end in that offseason (the UFA day of `year`), RFAs then UFAs then unknown, plus rostered players with no contract on file. `year` defaults to the next offseason |
+| `GET /ufa-bids` | this season's in-season UFA bids, newest first, and pickups that got no winning bid (see [docs/in-season-plan.md](docs/in-season-plan.md)) |
+| `GET /free-agents?q=zach` | players on no CFL team whose names match, for the bid form |
+| `GET /ufa-bids/preview?player_id=...&salary=5` | what a bid would do: the lowest salary that beats the high bid, the cap space after it, and what stops it |
+| `POST /ufa-bids` | bid: `{"player_id": "...", "salary": 5, "team_id": "me"}`. 400 with the reasons the rules refuse it, 409 when another bid came first. The admin can add `"force_reason"` to allow a refused bid |
+| `POST /ufa-bids/{id}/withdraw`, `POST /ufa-bids/{id}/void` | take back a pending bid, if the `ufa.withdraw` rule allows it; *admin*: void a pending or won bid (`{"reason": "..."}`) |
 | `GET /analysis/overview` | every team's projected rank per category, plus actual H2H records |
 | `GET /analysis/teams/me/profile` | your category strengths and weaknesses, need weights, valued roster |
 | `GET /analysis/teams/me/targets?source=fa` | *admin* (as are all `targets` queries): free agents ranked by simulated gain, each with its best drop (see below) |

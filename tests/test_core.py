@@ -1180,7 +1180,8 @@ def test_every_sync_ends_by_marking_pickups_then_recording_player_changes(conn, 
     results = sync.sync_all(conn, settings, ["standings"])
     assert [(r["resource"], r["status"]) for r in results] == [
         ("standings", "ok"), ("pickups", "ok"), ("changes", "ok")]
-    assert [r["detail"] for r in results[1:]] == [{"marked": []}, {"baseline": True, "changes": 0}]
+    assert [r["detail"] for r in results[1:]] == [{"marked": [], "signed": [], "cancelled": []},
+                                                    {"baseline": True, "changes": 0}]
 
 
 def test_a_failed_sync_step_is_logged_and_the_next_one_still_runs(conn):
@@ -1809,6 +1810,8 @@ def test_a_rule_change_cant_start_before_this_league_year(conn):
     ("contracts.ufa_day", "7-1", "MM-DD"),
     ("contracts.buyout_share", 0, "above 0, up to 1"),
     ("contracts.elc_salary", -1, r"\$0 or more"),
+    ("ufa.min_raise", 0, r"more than \$0"),                      # a tie can't replace the high bid
+    ("ufa.withdraw", 1, "yes or no"),
 ])
 def test_a_rule_change_must_fit_its_rule(conn, key, value, problem):
     from cfl import rules as R
@@ -1918,3 +1921,239 @@ def test_a_rule_change_the_rules_refuse_says_why(conn, tmp_path, monkeypatch, ke
     boss, _ = _rules_users(conn, monkeypatch, tmp_path)
     res = boss.put("/rules/" + key, json=change)
     assert (res.status_code, detail in res.json()["detail"]) == (status, True)
+
+
+# --------------------------------------------------------------------------- in-season UFA bids
+
+T0 = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
+FROZEN = "Rosters are frozen for the playoffs. Only the admin can allow a bid, to replace an injured player"
+
+
+def _free_agents(conn):
+    """Brad Marchand (f3) and Pavel Zacha (f4), on no team."""
+    for fid, name in (("f3", "Marchand, Brad"), ("f4", "Zacha, Pavel")):
+        _player(conn, fid, name, "BOS", "C")
+        conn.execute("INSERT INTO league_players VALUES (?, ?, 'C', 'T')", (LEAGUE, fid))
+    conn.commit()
+
+
+def _bid_league(conn, tmp_path):
+    """_two_teams and _free_agents. Each team's cap is $220, so t1 has $212 of space and t2 $215."""
+    _two_teams(conn)
+    _free_agents(conn)
+    return _bid_ctx(conn, tmp_path)
+
+
+def _bid_ctx(conn, tmp_path):
+    return A.load_context(conn, Settings(LEAGUE, None, tmp_path / "unused.db", 0.5, 5, tmp_path / "none.json"))
+
+
+def _bids(conn):
+    from cfl.db import rows
+    return [(b["team_id"], b["player_id"], b["salary"], b["state"])
+            for b in rows(conn, "SELECT * FROM ufa_bids ORDER BY created_at, salary")]
+
+
+def test_the_high_bid_wins_once_its_hours_pass(conn, tmp_path):
+    from cfl import bids as B
+    ctx = _bid_league(conn, tmp_path)
+    bid = B.place(conn, ctx, "t1", "f3", 3, "Gm", now=T0)
+    assert bid["deadline"] == "2026-11-03T12:00:00+00:00"
+
+    B.settle(conn, LEAGUE, T0 + timedelta(hours=23, minutes=59))
+    assert _bids(conn) == [("t1", "f3", 3, "pending")]
+    B.settle(conn, LEAGUE, T0 + timedelta(hours=24))
+    assert _bids(conn) == [("t1", "f3", 3, "won")]
+    assert [(e["trigger"], e["from_state"], e["to_state"], e["actor"]) for e in _events(conn)] == [
+        ("bid", None, "pending", "Gm"), ("win", "pending", "won", "deadline")]
+
+
+def test_a_higher_bid_outbids_the_high_bid_and_starts_its_own_hours(conn, tmp_path):
+    from cfl import bids as B
+    ctx = _bid_league(conn, tmp_path)
+    first = B.place(conn, ctx, "t1", "f3", 3, "Gm", now=T0)
+    second = B.place(conn, ctx, "t2", "f3", 4, "Rival", now=T0 + timedelta(hours=10))
+
+    B.settle(conn, LEAGUE, T0 + timedelta(hours=24))                   # the first bid's deadline
+    assert _bids(conn) == [("t1", "f3", 3, "outbid"), ("t2", "f3", 4, "pending")]
+    assert second["deadline"] == "2026-11-03T22:00:00+00:00"
+    outbid = next(e for e in _events(conn) if e["trigger"] == "outbid")
+    assert (outbid["entity_id"], outbid["actor"], json.loads(outbid["detail"])) == (first["id"], "Rival", {"by": second["id"]})
+
+
+@pytest.mark.parametrize("team, player, salary, reason", [
+    ("t2", "f3", 3.5, "A bid on Brad Marchand must be at least $4"),       # $1 more than the high bid
+    ("t2", "f4", 0.5, "A bid on Pavel Zacha must be at least $1"),
+    ("t1", "f3", 9, "One has the high bid on Brad Marchand already"),
+    ("t2", "f2", 5, "Jimmy Snuggerud is on Two"),
+    ("t1", "f4", 210, "One has $209 of cap space left for a $210 bid"),     # $212, less its $3 bid on f3
+])
+def test_a_bid_the_rules_refuse_says_why_and_saves_nothing(conn, tmp_path, team, player, salary, reason):
+    from cfl import bids as B
+    from cfl.fsm import Blocked
+    ctx = _bid_league(conn, tmp_path)
+    B.place(conn, ctx, "t1", "f3", 3, "Gm", now=T0)
+
+    with pytest.raises(Blocked) as refused:
+        B.place(conn, ctx, team, player, salary, "Gm", now=T0)
+
+    assert refused.value.reasons == [reason]
+    assert _bids(conn) == [("t1", "f3", 3, "pending")]
+
+
+@pytest.mark.parametrize("now, reason", [
+    (datetime(2026, 10, 3, 12, tzinfo=timezone.utc), "Bids open when the season starts"),
+    (datetime(2027, 3, 15, 19, tzinfo=timezone.utc), FROZEN),             # 15:00 in Toronto: period 21 starts
+    (datetime(2027, 4, 5, 12, tzinfo=timezone.utc), "The season is over"),
+])
+def test_bids_are_open_only_in_the_regular_season_unless_the_admin_allows_one(conn, tmp_path, now, reason):
+    from cfl import bids as B
+    from cfl.fsm import Blocked
+    conn.execute("UPDATE league SET start_date='2026-10-04', end_date='2027-04-04', playoffs=? WHERE id=?",
+                 ('{"lastRegularSeasonPeriod": 20, "firstPlayoffPeriod": 21}', LEAGUE))
+    conn.execute("INSERT INTO periods VALUES (?, 'scoring', 21, '2027-03-15T15:00:00.0-0400', "
+                 "'2027-03-22T18:59:59.0-0400')", (LEAGUE,))
+    ctx = _bid_league(conn, tmp_path)
+    B.place(conn, ctx, "t1", "f3", 3, "Gm", now=datetime(2027, 3, 15, 18, 59, tzinfo=timezone.utc))   # the last minute
+
+    with pytest.raises(Blocked) as refused:
+        B.place(conn, ctx, "t2", "f4", 3, "Gm", now=now)
+    assert refused.value.reasons == [reason]
+
+    B.place(conn, ctx, "t2", "f4", 3, "Boss", force_reason="Replaces the injured Snuggerud", now=now)
+    forced = _events(conn)[-1]
+    assert (forced["trigger"], forced["forced_reason"], json.loads(forced["detail"])) == (
+        "bid", "Replaces the injured Snuggerud", {"overrode": [reason]})
+
+
+def test_when_two_teams_make_the_first_bid_at_once_only_one_is_pending(conn, tmp_path, monkeypatch):
+    from cfl import bids as B
+    from cfl.fsm import Conflict
+    ctx = _bid_league(conn, tmp_path)
+    monkeypatch.setattr(B, "high_bid", lambda conn, league_id, player_id: None)   # both found no bid yet
+    B.place(conn, ctx, "t1", "f3", 3, "Gm", now=T0)
+
+    with pytest.raises(Conflict, match="Another bid on Brad Marchand came first"):
+        B.place(conn, ctx, "t2", "f3", 5, "Rival", now=T0)
+    assert _bids(conn) == [("t1", "f3", 3, "pending")]
+
+
+def test_a_bid_can_be_withdrawn_only_while_the_rules_allow_it_and_it_hasnt_won(conn, tmp_path):
+    from cfl import bids as B
+    from cfl import rules as R
+    from cfl.fsm import Blocked, Conflict
+    ctx = _bid_league(conn, tmp_path)
+    first = B.place(conn, ctx, "t1", "f3", 3, "Gm", now=T0)
+    with pytest.raises(Blocked, match="Bids can't be withdrawn"):
+        B.withdraw(conn, ctx, first, "Gm", now=T0)
+
+    R.change(conn, LEAGUE, "ufa.withdraw", True, 2026, "Boss")
+    ctx = _bid_ctx(conn, tmp_path)
+    assert B.withdraw(conn, ctx, first, "Gm", now=T0) == "withdrawn"
+    late = B.place(conn, ctx, "t1", "f4", 3, "Gm", now=T0)
+    with pytest.raises(Conflict, match="it's won"):
+        B.withdraw(conn, ctx, late, "Gm", now=T0 + timedelta(hours=24))
+
+
+def test_the_admin_voids_a_bid_with_a_reason_until_it_is_signed(conn, tmp_path):
+    from cfl import bids as B
+    from cfl.fsm import Conflict
+    ctx = _bid_league(conn, tmp_path)
+    bid = B.place(conn, ctx, "t1", "f3", 3, "Gm", now=T0)
+
+    assert B.void(conn, ctx, bid, "Boss", "Bid on the wrong player", now=T0 + timedelta(hours=30)) == "voided"
+    assert json.loads(_events(conn)[-1]["detail"]) == {"reason": "Bid on the wrong player"}
+    conn.execute("UPDATE ufa_bids SET state='signed'")
+    conn.commit()
+    with pytest.raises(Conflict, match="it's signed"):
+        B.void(conn, ctx, bid, "Boss", "Too late")
+
+
+def test_a_sync_signs_won_bids_and_cancels_bids_on_players_another_team_took(conn, tmp_path):
+    from cfl import bids as B
+    from cfl import contracts as C
+    ctx = _bid_league(conn, tmp_path)
+    B.place(conn, ctx, "t1", "f3", 6, "Gm", now=T0)                                  # won a day later
+    B.place(conn, ctx, "t2", "f4", 2, "Rival", now=datetime.now(timezone.utc))      # still pending
+    conn.execute("UPDATE league SET start_date='2026-10-04', end_date='2027-04-04' WHERE id=?", (LEAGUE,))
+    upsert(conn, "app_state", [{"key": "changes:" + LEAGUE, "updated_at": "x", "value": json.dumps(
+        {"season_year": 2026, "players": {"f3": _entry(None), "f4": _entry(None)}})}], ["key"])
+    conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f3', 'C', 'ACTIVE'), (?, 1, 't1', 'f4', 'C', 'ACTIVE')",
+                 (LEAGUE, LEAGUE))                                                   # t1 added both in Fantrax
+    conn.commit()
+
+    result = C.mark_pickups(conn, _bid_ctx(conn, tmp_path), date(2026, 11, 3))
+
+    assert result == {"signed": ["Brad Marchand"], "cancelled": ["Pavel Zacha"], "marked": ["Pavel Zacha"]}
+    assert [b[3] for b in _bids(conn)] == ["signed", "cancelled"]
+    players = _bid_ctx(conn, tmp_path).players
+    assert [(players[f].salary, players[f].contract_type) for f in ("f3", "f4")] == [
+        (6, "IN_SEASON_UFA"), (C.PICKUP_SALARY, "IN_SEASON_UFA")]                    # Zacha: no winning bid
+
+
+def test_a_gm_bids_for_their_own_team_and_everyone_sees_the_high_bid(conn, tmp_path, monkeypatch):
+    boss, gm = _rules_users(conn, monkeypatch, tmp_path)
+    _free_agents(conn)
+    assert gm.get("/ufa-bids/preview", params={"player_id": "f3", "salary": 3}).json() == {
+        "min_salary": 1, "cap_space": 209, "reasons": []}
+
+    board = gm.post("/ufa-bids", json={"player_id": "f3", "salary": 3}).json()
+
+    (bid,) = board["bids"]
+    assert (bid["player_name"], bid["team_name"], bid["salary"], bid["state"], bid["created_by"], bid["on_team_id"]) == (
+        "Brad Marchand", "One", 3, "pending", "Gm", None)
+    assert (board["team_id"], board["min_bid"], board["min_raise"], board["can_withdraw"]) == ("t1", 1, 1, False)
+    assert boss.get("/ufa-bids").json()["bids"] == board["bids"]
+    assert gm.post("/ufa-bids", json={"player_id": "f4", "salary": 3, "team_id": "t2"}).status_code == 403
+    assert gm.post("/ufa-bids", json={"player_id": "nobody", "salary": 3}).status_code == 404
+    assert gm.get("/free-agents", params={"q": "zach"}).json() == [
+        {"player_id": "f4", "name": "Pavel Zacha", "position": "C", "nhl_team": "BOS"}]
+    assert gm.get("/free-agents", params={"q": "snug"}).json() == []                  # he's on Two
+
+
+def test_a_refused_bid_says_why_and_one_that_loses_a_race_is_a_conflict(conn, tmp_path, monkeypatch):
+    from cfl import bids as B
+    boss, gm = _rules_users(conn, monkeypatch, tmp_path)
+    _free_agents(conn)
+    gm.post("/ufa-bids", json={"player_id": "f3", "salary": 3})
+    why = ["One has the high bid on Brad Marchand already"]
+
+    res = gm.post("/ufa-bids", json={"player_id": "f3", "salary": 5})
+    assert (res.status_code, res.json()) == (400, {"detail": {"code": "blocked", "reasons": why}})
+    assert gm.get("/ufa-bids/preview", params={"player_id": "f3", "salary": 5}).json()["reasons"] == why
+
+    monkeypatch.setattr(B, "high_bid", lambda conn, league_id, player_id: None)
+    res = boss.post("/ufa-bids", json={"player_id": "f3", "salary": 5, "team_id": "t2"})
+    assert (res.status_code, res.json()["detail"]["code"]) == (409, "conflict")
+
+
+def test_only_the_bidding_gm_withdraws_a_bid_and_only_the_admin_voids_one(conn, tmp_path, monkeypatch):
+    from cfl import rules as R
+    boss, gm = _rules_users(conn, monkeypatch, tmp_path)
+    _free_agents(conn)
+    R.change(conn, LEAGUE, "ufa.withdraw", True, 2026, "Boss")
+    ids = {b["player_id"]: b["id"] for b in gm.post("/ufa-bids", json={"player_id": "f3", "salary": 3}).json()["bids"]}
+    ids.update({b["player_id"]: b["id"] for b in boss.post(
+        "/ufa-bids", json={"player_id": "f4", "salary": 3, "team_id": "t2"}).json()["bids"]})
+    states = lambda board: {b["player_id"]: b["state"] for b in board["bids"]}   # noqa: E731
+
+    assert gm.post("/ufa-bids/{}/withdraw".format(ids["f4"])).status_code == 403   # t2's bid
+    assert gm.post("/ufa-bids/{}/void".format(ids["f3"]), json={"reason": "Oops"}).status_code == 403
+    assert boss.post("/ufa-bids/{}/void".format(ids["f4"]), json={"reason": " "}).status_code == 400
+    assert gm.post("/ufa-bids/nope/withdraw").status_code == 404
+    assert states(gm.post("/ufa-bids/{}/withdraw".format(ids["f3"])).json()) == {"f3": "withdrawn", "f4": "pending"}
+    assert states(boss.post("/ufa-bids/{}/void".format(ids["f4"]), json={"reason": "Wrong player"}).json()) == {
+        "f3": "withdrawn", "f4": "voided"}
+
+
+def test_the_board_lists_pickups_that_have_only_the_placeholder_contract(conn, tmp_path, monkeypatch):
+    from cfl import contracts as C
+    boss, gm = _rules_users(conn, monkeypatch, tmp_path)
+    _free_agents(conn)
+    conn.execute("INSERT INTO roster_items VALUES (?, 1, 't1', 'f3', 'C', 'ACTIVE')", (LEAGUE,))
+    conn.commit()
+    for fid in ("f3", "f1"):                              # t1's sheet has f1's salary, so he isn't waiting for one
+        C.save_override(conn, LEAGUE, fid, [C.PICKUP_SALARY], "IN_SEASON_UFA", A.PICKUP_NOTE)
+
+    assert gm.get("/ufa-bids").json()["unbid_pickups"] == [
+        {"player_id": "f3", "player_name": "Brad Marchand", "team_id": "t1", "team_name": "One"}]

@@ -4,8 +4,8 @@ A plan for running in-season free agent bids in the app instead of in the forum 
 players who are on no CFL team. The highest bid after 24 hours wins. The add stays in Fantrax, and
 the next sync gives the player his contract at the winning bid.
 
-Status: draft. The app has none of it yet. The league must answer the [questions](#questions-for-the-league)
-before milestone 2.
+Status: built, milestones 1–5. The app uses the proposed answers to the
+[questions](#questions-for-the-league) until the league decides them. Most of them are settings.
 
 ## The rules
 
@@ -57,8 +57,11 @@ stateDiagram-v2
 
 **Bid.** Any GM can bid on a player who is on no Fantrax team. Guards:
 
-- Bids are open. The phase is `in_season`, and no phase row also counts as `in_season`. In the
-  playoffs, the admin can force a bid with a reason, for example "replaces the injured X".
+- Bids are open: today is between Fantrax's start and end dates for the season, and the playoffs
+  haven't started. The playoffs start with the scoring period that Fantrax's playoff settings
+  call `firstPlayoffPeriod`. In the playoffs, the admin can force a bid with a reason, for example
+  "replaces the injured X". When the offseason's `league_phase` exists, bids also need the
+  `in_season` phase.
 - The salary is at least `ufa.min_bid`. It is also at least `ufa.min_raise` more than the pending
   bid, if there is one.
 - The team doesn't already hold the pending bid.
@@ -72,8 +75,7 @@ The bid stores its deadline.
 gets a 409. When no bid exists yet, this index refuses the second insert:
 
 ```sql
-CREATE UNIQUE INDEX IF NOT EXISTS ufa_bids_one_pending ON ufa_bids (league_id, player_id)
-    WHERE state = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ufa_bids_pending ON ufa_bids(league_id, player_id) WHERE state = 'pending';
 ```
 
 SQLite and Postgres both support partial indexes.
@@ -92,12 +94,13 @@ The app can't write to Fantrax, because its API is read-only. So the sync connec
 the Fantrax add. `mark_pickups` changes in two ways:
 
 ```python
-for p in picked:
-    bid = won_bid(conn, ctx.league_id, p.fantrax_id, p.team_id)
-    salary, note = (bid["salary"], "Won UFA bid") if bid else (PICKUP_SALARY, A.PICKUP_NOTE)
-    save_override(conn, ctx.league_id, p.fantrax_id, [salary], "IN_SEASON_UFA", note)
-    if bid:
-        BIDS.fire(conn, {"league_id": ctx.league_id, "id": bid["id"]}, "sign", "sync")
+# cfl/contracts.py, mark_pickups
+B.settle(conn, ctx.league_id)
+for bid in rows(conn, "SELECT * FROM ufa_bids WHERE league_id=? AND state='won'", (ctx.league_id,)):
+    p = ctx.players.get(bid["player_id"])
+    if p and p.team_id == bid["team_id"]:
+        save_override(conn, ctx.league_id, p.fantrax_id, [bid["salary"]], "IN_SEASON_UFA", B.WON_NOTE)
+        B.BIDS.fire(conn, B.key(bid), "sign", "sync")
 ```
 
 - **A pickup with a won bid** for his new team gets a 1-year contract at the bid's salary, and the
@@ -152,6 +155,7 @@ Endpoints follow the existing style:
 
 - `GET /ufa-bids`: open bids, won bids not yet added in Fantrax, and this season's results. It
   includes `now`, so countdowns use the server's clock.
+- `GET /free-agents?q=…`: players on no CFL team whose names match, for the bid form.
 - `GET /ufa-bids/preview?player_id=…&salary=…`: the guard's reasons and the team's cap space after
   the bid. It saves nothing.
 - `POST /ufa-bids`: 400 with the guard's reasons, or 409 when a higher bid came first.
@@ -159,14 +163,17 @@ Endpoints follow the existing style:
 
 Pages:
 
-- **Players & cap:** a Bid button on each free agent. `GET /players?status=fa` already lists them.
-- **UFA bids** (a new page for everyone): each open bid with the high bid, its team and the time
-  left. Your won bids to add in Fantrax. Bids are public, as forum posts were.
-- **Admin,** on the same page: pickups with no winning bid, won bids whose player is on another
-  team, and Void.
+- **UFA bids** (a new tab for everyone): each open bid with the high bid, its team and the time
+  left. Won bids, with what's left to do in Fantrax. Earlier bids this season. Bids are public, as
+  forum posts were.
+- **New bid** finds a free agent by name. **Raise** on an open bid starts at the lowest bid that
+  beats it. The form shows the preview after each pause in typing.
+- **Admin,** on the same page: a team to bid for, a reason to allow a refused bid, Void, and the
+  pickups with no winning bid.
 
-The bid form is the `offerSheet` machine from [frontend-plan.md](frontend-plan.md), with a
-different preview and submit. Build one machine for both.
+The bid form uses `useState` and `useMutation`, as the Rules page's form does. The frontend plan's
+`offerSheet` machine fits it, but `xstate` isn't a dependency yet. When it is, one machine can serve
+both forms.
 
 ## Testing
 
@@ -191,9 +198,8 @@ Each milestone is one or two small PRs:
 3. **Sync.** `mark_pickups` uses the won bid, cancels pending bids, and lists pickups with no bid.
 4. **Page.** The UFA bids page, the Bid button and the bid form. After this milestone, the league
    can stop using the forum thread.
-5. **Playoffs.** The freeze guard. It needs the date the CFL playoffs start. `league.playoffs`,
-   synced from Fantrax, possibly has it, but nobody checked it yet. This must land before the
-   playoffs in spring 2027.
+5. **Playoffs.** The freeze guard. `league.playoffs`, synced from Fantrax, gives the first playoff
+   period (21 in 2026-27, which starts on March 15, 2027), and `periods` gives its start.
 
 ## Questions for the league
 

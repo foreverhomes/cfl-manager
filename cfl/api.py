@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from . import analysis as A
 from . import auth
+from . import bids as B
 from . import changes
 from . import contracts as C
 from . import offseason as O
@@ -23,6 +24,7 @@ from . import rules as R
 from .auth import User
 from .config import Settings, get_settings
 from .db import Connection, connect, row, rows, transaction
+from .fsm import Blocked, Conflict
 from .sync import RESOURCES, _logged, current_period, league_season, now_iso, sync_all
 
 app = FastAPI(
@@ -68,6 +70,17 @@ def get_conn() -> Iterator[Connection]:
 @app.exception_handler(A.NotSynced)
 def _not_synced(_, exc: A.NotSynced):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+# A state machine's refusals (fsm.py), in the shapes the frontend's api/client.ts reads.
+@app.exception_handler(Blocked)
+def _blocked(_, exc: Blocked):
+    return JSONResponse(status_code=400, content={"detail": {"code": "blocked", "reasons": exc.reasons}})
+
+
+@app.exception_handler(Conflict)
+def _conflict(_, exc: Conflict):
+    return JSONResponse(status_code=409, content={"detail": {"code": "conflict", "error": str(exc)}})
 
 
 # --------------------------------------------------------------------------- who's asking
@@ -772,7 +785,7 @@ class RuleChange(BaseModel):
 class LeagueRule(BaseModel):
     key: str
     label: str
-    kind: str                       # money / count / share / month_day
+    kind: str                       # money / count / share / month_day / bool
     cite: str                       # the docs/rules.md section it comes from
     default: Any                    # the cap's is null: Fantrax's, else $220
     value: Any                      # in the league year asked about
@@ -820,6 +833,164 @@ def change_rule(key: str, edit: RuleEdit, conn: Connection = Depends(get_conn), 
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
     return _rules(conn, edit.from_year, user)
+
+
+# --------------------------------------------------------------------------- in-season UFA bids
+
+
+class UfaBid(BaseModel):
+    id: str
+    player_id: str
+    player_name: str
+    position: Optional[str]
+    nhl_team: Optional[str]
+    team_id: str                    # the bidding team
+    team_name: str
+    salary: float
+    state: str                      # pending / outbid / won / signed / withdrawn / cancelled / voided
+    deadline: str                   # when a pending bid wins
+    created_by: str
+    created_at: str
+    on_team_id: Optional[str]       # the CFL team he's on in Fantrax now
+
+
+class UnbidPickup(BaseModel):
+    player_id: str
+    player_name: str
+    team_id: str
+    team_name: str
+
+
+class UfaBids(BaseModel):
+    now: str                        # the server's clock, for countdowns
+    team_id: Optional[str]          # the signed-in GM's team
+    min_bid: float
+    min_raise: float                # over the high bid
+    can_withdraw: bool              # the ufa.withdraw rule
+    bids: List[UfaBid]              # this season's, newest first
+    unbid_pickups: List[UnbidPickup]   # picked up with no winning bid: their contracts have a placeholder salary
+
+
+def _ufa_bids(conn: Connection, ctx: A.Context, user: User) -> Dict:
+    B.settle(conn, ctx.league_id)
+    out = []
+    for b in rows(conn, "SELECT * FROM ufa_bids WHERE league_id=? AND season_year=? ORDER BY created_at DESC, "
+                        "salary DESC", (ctx.league_id, ctx.league["season_year"])):
+        p = ctx.players.get(b["player_id"])
+        out.append(dict(b, player_name=p.name if p else b["player_id"], position=p and p.position,
+                        nhl_team=p and p.nhl_team, team_name=ctx.teams.get(b["team_id"], b["team_id"]),
+                        on_team_id=p and p.team_id))
+    pickups = [ctx.players.get(o["player_id"]) for o in rows(
+        conn, "SELECT player_id FROM contract_overrides WHERE league_id=? AND note=? AND season_year=?",
+        (ctx.league_id, A.PICKUP_NOTE, ctx.league["season_year"]))]
+    unbid = [{"player_id": p.fantrax_id, "player_name": p.name, "team_id": p.team_id, "team_name": ctx.teams[p.team_id]}
+             for p in pickups if p and p.team_id and p.contract_source != "sheet"]   # a sheet has his salary
+    return {"now": now_iso(), "team_id": user.team_id, "min_bid": ctx.rules["ufa.min_bid"],
+            "min_raise": ctx.rules["ufa.min_raise"], "can_withdraw": ctx.rules["ufa.withdraw"], "bids": out,
+            "unbid_pickups": sorted(unbid, key=lambda x: x["player_name"])}
+
+
+def _bidder(ctx: A.Context, team_id: str, user: User) -> str:
+    team_id = _team(ctx, team_id, user)
+    if not auth.can_edit_team(user, team_id):
+        raise HTTPException(403, detail="Only {}'s GM or the admin can bid for it".format(ctx.teams[team_id]))
+    return team_id
+
+
+def _bid_or_404(conn: Connection, bid_id: str) -> Dict:
+    bid = row(conn, "SELECT * FROM ufa_bids WHERE league_id=? AND id=?", (get_settings().league_id, bid_id))
+    if bid is None:
+        raise HTTPException(404, detail="No UFA bid {}".format(bid_id))
+    return bid
+
+
+@data.get("/ufa-bids", response_model=UfaBids)
+def ufa_bids(conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """This season's in-season UFA bids, newest first, and the pickups that got no winning bid."""
+    return _ufa_bids(conn, _ctx(conn, get_settings()), user)
+
+
+class FreeAgent(BaseModel):
+    player_id: str
+    name: str
+    position: Optional[str]
+    nhl_team: Optional[str]
+
+
+@data.get("/free-agents", response_model=List[FreeAgent])
+def free_agents(q: str = Query(..., min_length=2, description="Part of a name"),
+                conn: Connection = Depends(get_conn)):
+    """Players on no CFL team whose names match, for the bid form: at most 20, by Fantrax ADP."""
+    ctx = _ctx(conn, get_settings())
+    found = sorted((p for p in ctx.players.values() if not p.team_id and q.lower() in p.name.lower()),
+                   key=lambda p: (p.adp is None, p.adp or 0, p.name))
+    return [{"player_id": p.fantrax_id, "name": p.name, "position": p.position, "nhl_team": p.nhl_team}
+            for p in found[:20]]
+
+
+class UfaBidPreview(BaseModel):
+    min_salary: float               # the lowest bid that beats the high bid
+    cap_space: Optional[float]      # the team's cap space after the bid, less its other open bids
+    reasons: List[str]              # what stops the bid now; empty: nothing does
+
+
+@data.get("/ufa-bids/preview", response_model=UfaBidPreview)
+def preview_ufa_bid(player_id: str, salary: float, team_id: str = "me", conn: Connection = Depends(get_conn),
+                    user: User = Depends(current_user)):
+    """What a bid would do, without saving it. It runs the same checks as making the bid."""
+    ctx = _ctx(conn, get_settings())
+    try:
+        return B.preview(conn, ctx, _bidder(ctx, team_id, user), player_id, salary)
+    except LookupError as exc:
+        raise HTTPException(404, detail=str(exc))
+
+
+class NewUfaBid(BaseModel):
+    player_id: str
+    salary: float
+    team_id: str = "me"
+    force_reason: Optional[str] = None  # admin only: allows a bid the rules refuse, e.g. a playoff injury
+
+
+@data.post("/ufa-bids", response_model=UfaBids)
+def make_ufa_bid(bid: NewUfaBid, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Bid on a player on no CFL team. The highest bid for 24 hours wins him. 400 with the reasons the
+    rules refuse the bid, and 409 when another bid came first."""
+    ctx = _ctx(conn, get_settings())
+    team_id = _bidder(ctx, bid.team_id, user)
+    if bid.force_reason and not user.is_admin:
+        raise HTTPException(403, detail="Only the admin can allow a bid the rules refuse")
+    try:
+        B.place(conn, ctx, team_id, bid.player_id, bid.salary, user.name or user.email, bid.force_reason)
+    except LookupError as exc:
+        raise HTTPException(404, detail=str(exc))
+    return _ufa_bids(conn, ctx, user)
+
+
+@data.post("/ufa-bids/{bid_id}/withdraw", response_model=UfaBids)
+def withdraw_ufa_bid(bid_id: str, conn: Connection = Depends(get_conn), user: User = Depends(current_user)):
+    """Take back a pending bid, if the ufa.withdraw rule allows it. For the bidding team's GM or the admin."""
+    ctx = _ctx(conn, get_settings())
+    bid = _bid_or_404(conn, bid_id)
+    if not auth.can_edit_team(user, bid["team_id"]):
+        raise HTTPException(403, detail="Only {}'s GM or the admin can withdraw its bid".format(ctx.teams[bid["team_id"]]))
+    B.withdraw(conn, ctx, bid, user.name or user.email)
+    return _ufa_bids(conn, ctx, user)
+
+
+class UfaBidVoid(BaseModel):
+    reason: str
+
+
+@data.post("/ufa-bids/{bid_id}/void", response_model=UfaBids, dependencies=ADMIN_ONLY)
+def void_ufa_bid(bid_id: str, void: UfaBidVoid, conn: Connection = Depends(get_conn),
+                 user: User = Depends(current_user)):
+    """Cancel a pending or won bid, for example one on the wrong player. Takes a reason."""
+    if not void.reason.strip():
+        raise HTTPException(400, detail="Say why the bid is void")
+    ctx = _ctx(conn, get_settings())
+    B.void(conn, ctx, _bid_or_404(conn, bid_id), user.name or user.email, void.reason.strip())
+    return _ufa_bids(conn, ctx, user)
 
 
 # --------------------------------------------------------------------------- analysis

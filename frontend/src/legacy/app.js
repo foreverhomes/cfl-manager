@@ -376,7 +376,7 @@ async function runSync(mode) {
   }
 }
 
-const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "rules", "offseason", "admin", "account"];
+const VIEWS = ["dashboard", "analysis", "trade", "players", "changes", "bids", "rules", "offseason", "admin", "account"];
 const ADMIN_VIEWS = new Set(["trade", "offseason", "admin"]);
 const isAdmin = () => Boolean(state.me && state.me.is_admin);
 
@@ -389,13 +389,14 @@ function route() {
   if (!state.me || state.me.status !== "active") return;
   const view = currentView();
   byId("view-signin").hidden = true;
-  byId("team-field").hidden = ["players", "changes", "rules", "offseason", "admin", "account"].includes(view);   // they pick teams their own way
+  byId("team-field").hidden = ["players", "changes", "bids", "rules", "offseason", "admin", "account"].includes(view);   // they pick teams their own way
   for (const v of VIEWS) {
     byId(`view-${v}`).hidden = v !== view;
     if (v !== "account") byId(`tab-${v}`).setAttribute("aria-selected", String(v === view));
   }
   byId("account-link").setAttribute("aria-current", view === "account" ? "page" : "false");   // in the header, not a tab
   if (view === "account") { renderAccount(); return; }
+  if (view === "bids") { showView("view-bids", () => import("../views/bids/UfaBidsPage").then((m) => m.UfaBidsPage)); return; }
   if (view === "rules") { showView("rules-card", () => import("../views/rules/RulesPage").then((m) => m.RulesPage)); return; }
   if (view === "admin") { loadAdmin(); return; }
   if (view === "offseason") { showView("view-offseason", () => import("../views/offseason/OffseasonPage").then((m) => m.OffseasonPage)); return; }
