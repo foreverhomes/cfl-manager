@@ -23,7 +23,7 @@ import type { LeagueRule } from "../../api/generated";
 import { fmtMoney, fmtMonthDay } from "../../format";
 import { changeRule, rules } from "../../queries/rules";
 
-const AREAS = { contracts: "Contracts and the cap", draft: "Entry draft" };
+const AREAS = { contracts: "Contracts and the cap", draft: "Entry draft", ufa: "In-season UFA bids" };
 const WRITTEN_RULES = "https://github.com/foreverhomes/cfl-manager/blob/main/docs/rules.md";
 
 const season = (year: number) => `${year}/${String((year + 1) % 100).padStart(2, "0")}`;
@@ -38,6 +38,7 @@ const anchor = (heading: string) =>
 
 function show(kind: string, value: LeagueRule["value"]): string {
   if (value === null) return "Fantrax's"; // only the cap has no value of its own
+  if (kind === "bool") return value ? "Yes" : "No";
   if (kind === "money") return fmtMoney(Number(value));
   if (kind === "share") return `${Math.round(Number(value) * 100)}%`;
   if (kind === "month_day") return fmtMonthDay(String(value));
@@ -153,6 +154,7 @@ function RuleRow({ rule, canEdit, leagueYear }: { rule: LeagueRule; canEdit: boo
 
 function RuleForm({ rule, leagueYear, onSaved }: { rule: LeagueRule; leagueYear: number; onSaved: () => void }) {
   const [value, setValue] = useState(typed(rule.kind, rule.value));
+  const [on, setOn] = useState(rule.value === true);
   const [from, setFrom] = useState<string | null>(String(leagueYear));
   const [note, setNote] = useState("");
   const [toDefault, setToDefault] = useState(false);
@@ -167,7 +169,7 @@ function RuleForm({ rule, leagueYear, onSaved }: { rule: LeagueRule; leagueYear:
       component="form"
       onSubmit={(event) => {
         event.preventDefault();
-        const sent = rule.kind === "share" ? Number(value) / 100 : value;
+        const sent = rule.kind === "share" ? Number(value) / 100 : rule.kind === "bool" ? on : value;
         save.mutate({ value: toDefault ? null : sent, from_year: Number(from), note }, { onSuccess: onSaved });
       }}
     >
@@ -184,6 +186,13 @@ function RuleForm({ rule, leagueYear, onSaved }: { rule: LeagueRule; leagueYear:
           getDayAriaLabel={(date) => show(rule.kind, date.slice(5))}
           minDate="2001-01-01"
           maxDate="2001-12-31"
+        />
+      ) : rule.kind === "bool" ? (
+        <Checkbox
+          label={rule.label}
+          checked={on}
+          disabled={toDefault}
+          onChange={(event) => setOn(event.currentTarget.checked)}
         />
       ) : (
         <NumberInput {...box} {...INPUTS[rule.kind]} onChange={setValue} />

@@ -48,6 +48,7 @@ const page: LeagueRules = {
     rule("contracts.free_release_max", "Highest salary released for free", "money", "Buyouts and Releases", 3),
     rule("contracts.buyout_share", "Share of the salary a buyout costs", "share", "Buyouts and Releases", 0.29),
     rule("draft.rounds", "Entry draft rounds", "count", "Entry Draft", 5),
+    rule("ufa.withdraw", "Bids can be withdrawn", "bool", "In-season Free-agent Acquisitions", false),
   ],
 };
 const admin: LeagueRules = { ...page, can_edit: true };
@@ -93,6 +94,8 @@ it("shows each rule's value in its own terms, under its area", async () => {
   expect(row("released for free").getByText("$3")).toBeTruthy();
   expect(row("buyout costs").getByText("29%")).toBeTruthy();
   expect(row("Entry draft rounds").getByText("5")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "In-season UFA bids" })).toBeTruthy();
+  expect(row("Bids can be withdrawn").getByText("No")).toBeTruthy();
 });
 
 it("shows a changed rule's default and every change, newest first", async () => {
@@ -182,6 +185,17 @@ it("picks a day of the year from a calendar, and sends it as MM-DD", async () =>
 
   await waitForElementToBeRemoved(() => screen.queryByRole("dialog"));
   expect(sent).toMatchObject([{ value: "07-15" }]);
+});
+
+it("turns a yes-or-no rule on with a checkbox", async () => {
+  const sent = recordChanges();
+  showPage(() => HttpResponse.json(admin));
+  const form = await openForm("Bids can be withdrawn");
+  fireEvent.click(form.getByRole("checkbox", { name: "Bids can be withdrawn" }));
+  fireEvent.click(form.getByRole("button", { name: "Save" }));
+
+  await waitForElementToBeRemoved(() => screen.queryByRole("dialog"));
+  expect(sent).toMatchObject([{ key: "ufa.withdraw", value: true }]);
 });
 
 it("puts a rule's default back", async () => {

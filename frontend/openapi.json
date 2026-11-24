@@ -1131,6 +1131,258 @@
         }
       }
     },
+    "/ufa-bids": {
+      "get": {
+        "summary": "Ufa Bids",
+        "description": "This season's in-season UFA bids, newest first, and the pickups that got no winning bid.",
+        "operationId": "ufa_bids",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfaBids"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Make Ufa Bid",
+        "description": "Bid on a player on no CFL team. The highest bid for 24 hours wins him. 400 with the reasons the\nrules refuse the bid, and 409 when another bid came first.",
+        "operationId": "make_ufa_bid",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUfaBid"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfaBids"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/free-agents": {
+      "get": {
+        "summary": "Free Agents",
+        "description": "Players on no CFL team whose names match, for the bid form: at most 20, by Fantrax ADP.",
+        "operationId": "free_agents",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "description": "Part of a name",
+              "title": "Q"
+            },
+            "description": "Part of a name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FreeAgent"
+                  },
+                  "title": "Response Free Agents"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ufa-bids/preview": {
+      "get": {
+        "summary": "Preview Ufa Bid",
+        "description": "What a bid would do, without saving it. It runs the same checks as making the bid.",
+        "operationId": "preview_ufa_bid",
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Player Id"
+            }
+          },
+          {
+            "name": "salary",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number",
+              "title": "Salary"
+            }
+          },
+          {
+            "name": "team_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "me",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfaBidPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ufa-bids/{bid_id}/withdraw": {
+      "post": {
+        "summary": "Withdraw Ufa Bid",
+        "description": "Take back a pending bid, if the ufa.withdraw rule allows it. For the bidding team's GM or the admin.",
+        "operationId": "withdraw_ufa_bid",
+        "parameters": [
+          {
+            "name": "bid_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bid Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfaBids"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ufa-bids/{bid_id}/void": {
+      "post": {
+        "summary": "Void Ufa Bid",
+        "description": "Cancel a pending or won bid, for example one on the wrong player. Takes a reason.",
+        "operationId": "void_ufa_bid",
+        "parameters": [
+          {
+            "name": "bid_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bid Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UfaBidVoid"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UfaBids"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/analysis/overview": {
       "get": {
         "summary": "Overview",
@@ -2121,6 +2373,48 @@
         ],
         "title": "ExpiringPlayer"
       },
+      "FreeAgent": {
+        "properties": {
+          "player_id": {
+            "type": "string",
+            "title": "Player Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "nhl_team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nhl Team"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_id",
+          "name",
+          "position",
+          "nhl_team"
+        ],
+        "title": "FreeAgent"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2260,6 +2554,40 @@
           "auth"
         ],
         "title": "Me"
+      },
+      "NewUfaBid": {
+        "properties": {
+          "player_id": {
+            "type": "string",
+            "title": "Player Id"
+          },
+          "salary": {
+            "type": "number",
+            "title": "Salary"
+          },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id",
+            "default": "me"
+          },
+          "force_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Force Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_id",
+          "salary"
+        ],
+        "title": "NewUfaBid"
       },
       "NewUser": {
         "properties": {
@@ -2606,6 +2934,230 @@
         },
         "type": "object",
         "title": "TradeRequest"
+      },
+      "UfaBid": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "player_id": {
+            "type": "string",
+            "title": "Player Id"
+          },
+          "player_name": {
+            "type": "string",
+            "title": "Player Name"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "nhl_team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nhl Team"
+          },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id"
+          },
+          "team_name": {
+            "type": "string",
+            "title": "Team Name"
+          },
+          "salary": {
+            "type": "number",
+            "title": "Salary"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "deadline": {
+            "type": "string",
+            "title": "Deadline"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "on_team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Team Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "player_id",
+          "player_name",
+          "position",
+          "nhl_team",
+          "team_id",
+          "team_name",
+          "salary",
+          "state",
+          "deadline",
+          "created_by",
+          "created_at",
+          "on_team_id"
+        ],
+        "title": "UfaBid"
+      },
+      "UfaBidPreview": {
+        "properties": {
+          "min_salary": {
+            "type": "number",
+            "title": "Min Salary"
+          },
+          "cap_space": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap Space"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min_salary",
+          "cap_space",
+          "reasons"
+        ],
+        "title": "UfaBidPreview"
+      },
+      "UfaBidVoid": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "UfaBidVoid"
+      },
+      "UfaBids": {
+        "properties": {
+          "now": {
+            "type": "string",
+            "title": "Now"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "min_bid": {
+            "type": "number",
+            "title": "Min Bid"
+          },
+          "min_raise": {
+            "type": "number",
+            "title": "Min Raise"
+          },
+          "can_withdraw": {
+            "type": "boolean",
+            "title": "Can Withdraw"
+          },
+          "bids": {
+            "items": {
+              "$ref": "#/components/schemas/UfaBid"
+            },
+            "type": "array",
+            "title": "Bids"
+          },
+          "unbid_pickups": {
+            "items": {
+              "$ref": "#/components/schemas/UnbidPickup"
+            },
+            "type": "array",
+            "title": "Unbid Pickups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "now",
+          "team_id",
+          "min_bid",
+          "min_raise",
+          "can_withdraw",
+          "bids",
+          "unbid_pickups"
+        ],
+        "title": "UfaBids"
+      },
+      "UnbidPickup": {
+        "properties": {
+          "player_id": {
+            "type": "string",
+            "title": "Player Id"
+          },
+          "player_name": {
+            "type": "string",
+            "title": "Player Name"
+          },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id"
+          },
+          "team_name": {
+            "type": "string",
+            "title": "Team Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "player_id",
+          "player_name",
+          "team_id",
+          "team_name"
+        ],
+        "title": "UnbidPickup"
       },
       "UserAccess": {
         "properties": {

@@ -260,6 +260,21 @@ CREATE TABLE IF NOT EXISTS machine_events (
     at              TEXT NOT NULL
 );
 
+-- In-season UFA bids (see bids.py). A player has at most one pending bid: the high bid.
+CREATE TABLE IF NOT EXISTS ufa_bids (
+    id              TEXT PRIMARY KEY,
+    league_id       TEXT NOT NULL,
+    season_year     INTEGER NOT NULL,   -- the season the contract is for
+    player_id       TEXT NOT NULL,
+    team_id         TEXT NOT NULL,      -- the bidding team
+    salary          REAL NOT NULL,
+    state           TEXT NOT NULL,      -- pending / outbid / won / signed / withdrawn / cancelled / voided
+    deadline        TEXT NOT NULL,      -- ufa.bid_hours after the bid
+    created_by      TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ufa_bids_pending ON ufa_bids(league_id, player_id) WHERE state = 'pending';
+
 -- Changes to league rule settings (each rule and its default are in rules.py). A rule's value for a
 -- league year is its most recent change with from_year at or before that year.
 CREATE TABLE IF NOT EXISTS league_rules (

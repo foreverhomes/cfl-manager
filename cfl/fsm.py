@@ -86,11 +86,10 @@ class Machine:
             raise ValueError("A {} has no move called {}".format(self.name, trigger))
         where = " AND ".join("{} = ?".format(c) for c in self.key_columns)
         params = [key[c] for c in self.key_columns]
-        entity = ":".join(str(key[c]) for c in self.key_columns if c != "league_id") or key["league_id"]
         with transaction(conn):
             current = row(conn, "SELECT * FROM {} WHERE {}".format(self.table, where), params)
             if current is None:
-                raise LookupError("No {} {}".format(_words(self.name), entity))
+                raise LookupError("No {} {}".format(_words(self.name), self._entity(key)))
             if current["state"] not in t.source:
                 raise Conflict("Can't {} this {}: it's {}".format(_words(trigger), _words(self.name),
                                                                     _words(current["state"])))
@@ -105,8 +104,17 @@ class Machine:
             detail = dict((effects(conn, current) if effects else None) or {})
             if reasons:
                 detail["overrode"] = reasons
-            conn.execute("INSERT INTO machine_events (league_id, machine, entity_id, trigger, from_state, to_state, "
-                         "actor, forced_reason, detail, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                         (key["league_id"], self.name, entity, trigger, current["state"], t.dest, actor,
-                          forced if reasons else None, json.dumps(detail) if detail else None, now_iso()))
+            self.log(conn, key, trigger, current["state"], t.dest, actor, forced if reasons else None, detail)
         return t.dest
+
+    def log(self, conn: Connection, key: Dict[str, Any], trigger: str, from_state: Optional[str], to_state: str,
+            actor: str, forced_reason: Optional[str] = None, detail: Optional[Dict[str, Any]] = None) -> None:
+        """Write one move to machine_events, in the caller's transaction. fire() logs its own moves. A caller
+        that inserts a row in its first state logs that with no from_state."""
+        conn.execute("INSERT INTO machine_events (league_id, machine, entity_id, trigger, from_state, to_state, "
+                     "actor, forced_reason, detail, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (key["league_id"], self.name, self._entity(key), trigger, from_state, to_state, actor,
+                      forced_reason, json.dumps(detail) if detail else None, now_iso()))
+
+    def _entity(self, key: Dict[str, Any]) -> str:
+        return ":".join(str(key[c]) for c in self.key_columns if c != "league_id") or key["league_id"]

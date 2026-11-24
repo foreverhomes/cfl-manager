@@ -867,6 +867,7 @@ Answered on October 19, 2026, and written into [rules.md](rules.md):
 - **Prospect claims.** Once an unsigned prospect plays the game that crosses the threshold (120
   games, or 60 for goalies) and isn't on his team's roster, a rival GM can claim him and sign him
   to an ELC. That happens during the regular season, so it's a separate in-season feature.
+- **In-season UFA bids.** See [in-season-plan.md](in-season-plan.md).
 - **An automatic raise for qualified RFAs** based on how they rank. That would be a rule change;
   it's noted in rules.md as an idea.
 - **The auction import,** for now (see [Free agent auction](#free-agent-auction)).

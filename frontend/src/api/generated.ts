@@ -29,6 +29,18 @@ export type RuleChange = { readonly "from_year": number, readonly "value": Schem
 export const RuleChange = Schema.StructWithRest(Schema.Struct({ "from_year": Schema.Number.annotate({ "title": "From Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "note": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" }), "changed_by": Schema.String.annotate({ "title": "Changed By" }), "changed_at": Schema.String.annotate({ "title": "Changed At" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "RuleChange", "identifier": "RuleChange" })
 export type RuleEdit = { readonly "value": Schema.Json, readonly "from_year": number, readonly "note"?: string | null } & { readonly [x: string]: Schema.Json }
 export const RuleEdit = Schema.StructWithRest(Schema.Struct({ "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "from_year": Schema.Number.annotate({ "title": "From Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "RuleEdit", "identifier": "RuleEdit" })
+export type UfaBid = { readonly "id": string, readonly "player_id": string, readonly "player_name": string, readonly "position": string | null, readonly "nhl_team": string | null, readonly "team_id": string, readonly "team_name": string, readonly "salary": number, readonly "state": string, readonly "deadline": string, readonly "created_by": string, readonly "created_at": string, readonly "on_team_id": string | null } & { readonly [x: string]: Schema.Json }
+export const UfaBid = Schema.StructWithRest(Schema.Struct({ "id": Schema.String.annotate({ "title": "Id" }), "player_id": Schema.String.annotate({ "title": "Player Id" }), "player_name": Schema.String.annotate({ "title": "Player Name" }), "position": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Position" }), "nhl_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Nhl Team" }), "team_id": Schema.String.annotate({ "title": "Team Id" }), "team_name": Schema.String.annotate({ "title": "Team Name" }), "salary": Schema.Number.annotate({ "title": "Salary" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), "state": Schema.String.annotate({ "title": "State" }), "deadline": Schema.String.annotate({ "title": "Deadline" }), "created_by": Schema.String.annotate({ "title": "Created By" }), "created_at": Schema.String.annotate({ "title": "Created At" }), "on_team_id": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "On Team Id" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "UfaBid", "identifier": "UfaBid" })
+export type UnbidPickup = { readonly "player_id": string, readonly "player_name": string, readonly "team_id": string, readonly "team_name": string } & { readonly [x: string]: Schema.Json }
+export const UnbidPickup = Schema.StructWithRest(Schema.Struct({ "player_id": Schema.String.annotate({ "title": "Player Id" }), "player_name": Schema.String.annotate({ "title": "Player Name" }), "team_id": Schema.String.annotate({ "title": "Team Id" }), "team_name": Schema.String.annotate({ "title": "Team Name" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "UnbidPickup", "identifier": "UnbidPickup" })
+export type NewUfaBid = { readonly "player_id": string, readonly "salary": number, readonly "team_id"?: string, readonly "force_reason"?: string | null } & { readonly [x: string]: Schema.Json }
+export const NewUfaBid = Schema.StructWithRest(Schema.Struct({ "player_id": Schema.String.annotate({ "title": "Player Id" }), "salary": Schema.Number.annotate({ "title": "Salary" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), "team_id": Schema.optionalKey(Schema.String.annotate({ "title": "Team Id", "default": "me" })), "force_reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Force Reason" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "NewUfaBid", "identifier": "NewUfaBid" })
+export type FreeAgent = { readonly "player_id": string, readonly "name": string, readonly "position": string | null, readonly "nhl_team": string | null } & { readonly [x: string]: Schema.Json }
+export const FreeAgent = Schema.StructWithRest(Schema.Struct({ "player_id": Schema.String.annotate({ "title": "Player Id" }), "name": Schema.String.annotate({ "title": "Name" }), "position": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Position" }), "nhl_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Nhl Team" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "FreeAgent", "identifier": "FreeAgent" })
+export type UfaBidPreview = { readonly "min_salary": number, readonly "cap_space": number | null, readonly "reasons": ReadonlyArray<string> } & { readonly [x: string]: Schema.Json }
+export const UfaBidPreview = Schema.StructWithRest(Schema.Struct({ "min_salary": Schema.Number.annotate({ "title": "Min Salary" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), "cap_space": Schema.Union([Schema.Finite, Schema.Null]).annotate({ "title": "Cap Space" }), "reasons": Schema.Array(Schema.String).annotate({ "title": "Reasons" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "UfaBidPreview", "identifier": "UfaBidPreview" })
+export type UfaBidVoid = { readonly "reason": string } & { readonly [x: string]: Schema.Json }
+export const UfaBidVoid = Schema.StructWithRest(Schema.Struct({ "reason": Schema.String.annotate({ "title": "Reason" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "UfaBidVoid", "identifier": "UfaBidVoid" })
 export type TradeRequest = { readonly "team_id"?: string, readonly "give"?: ReadonlyArray<string>, readonly "other_team_id"?: string | null, readonly "get"?: ReadonlyArray<string>, readonly "lineup"?: string, readonly "spread"?: number } & { readonly [x: string]: Schema.Json }
 export const TradeRequest = Schema.StructWithRest(Schema.Struct({ "team_id": Schema.optionalKey(Schema.String.annotate({ "title": "Team Id", "default": "me" })), "give": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Give", "default": [] })), "other_team_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Other Team Id" })), "get": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Get", "default": [] })), "lineup": Schema.optionalKey(Schema.String.annotate({ "title": "Lineup", "default": "best" })), "spread": Schema.optionalKey(Schema.Number.annotate({ "title": "Spread", "default": 1.5 }).check(Schema.isFinite().annotate({ "expected": "a finite number" }))) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "TradeRequest", "identifier": "TradeRequest" })
 export type NewUser = { readonly "team_id"?: string | null, readonly "role"?: string, readonly "status"?: string, readonly "email": string } & { readonly [x: string]: Schema.Json }
@@ -43,6 +55,8 @@ export type ExpiringPlayer = { readonly "fantrax_id": string, readonly "name": s
 export const ExpiringPlayer = Schema.StructWithRest(Schema.Struct({ "fantrax_id": Schema.String.annotate({ "title": "Fantrax Id" }), "name": Schema.String.annotate({ "title": "Name" }), "nhl_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Nhl Team" }), "position": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Position" }), "eligible": Schema.Array(Schema.String).annotate({ "title": "Eligible" }), "fantasy_team_id": Schema.String.annotate({ "title": "Fantasy Team Id" }), "fantasy_team": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Fantasy Team" }), "roster_status": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Roster Status" }), "gp_this_season": Schema.Number.annotate({ "title": "Gp This Season" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "gp_last_season": Schema.Number.annotate({ "title": "Gp Last Season" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "value": Schema.Union([Schema.Finite, Schema.Null]).annotate({ "title": "Value" }), "trade_rank": Schema.Union([Schema.Number.check(Schema.isInt().annotate({ "expected": "an integer" })), Schema.Null]).annotate({ "title": "Trade Rank" }), "contract_type": Schema.String.annotate({ "title": "Contract Type" }), "contract_years": Schema.Number.annotate({ "title": "Contract Years" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "contract_end": ContractEnd, "final_salary": Schema.Number.annotate({ "title": "Final Salary" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "ExpiringPlayer", "identifier": "ExpiringPlayer" })
 export type LeagueRule = { readonly "key": string, readonly "label": string, readonly "kind": string, readonly "cite": string, readonly "default": Schema.Json, readonly "value": Schema.Json, readonly "changes": ReadonlyArray<RuleChange> } & { readonly [x: string]: Schema.Json }
 export const LeagueRule = Schema.StructWithRest(Schema.Struct({ "key": Schema.String.annotate({ "title": "Key" }), "label": Schema.String.annotate({ "title": "Label" }), "kind": Schema.String.annotate({ "title": "Kind" }), "cite": Schema.String.annotate({ "title": "Cite" }), "default": Schema.Json.annotate({ "expected": "JSON value", "title": "Default" }), "value": Schema.Json.annotate({ "expected": "JSON value", "title": "Value" }), "changes": Schema.Array(RuleChange).annotate({ "title": "Changes" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "LeagueRule", "identifier": "LeagueRule" })
+export type UfaBids = { readonly "now": string, readonly "team_id": string | null, readonly "min_bid": number, readonly "min_raise": number, readonly "can_withdraw": boolean, readonly "bids": ReadonlyArray<UfaBid>, readonly "unbid_pickups": ReadonlyArray<UnbidPickup> } & { readonly [x: string]: Schema.Json }
+export const UfaBids = Schema.StructWithRest(Schema.Struct({ "now": Schema.String.annotate({ "title": "Now" }), "team_id": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Team Id" }), "min_bid": Schema.Number.annotate({ "title": "Min Bid" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), "min_raise": Schema.Number.annotate({ "title": "Min Raise" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), "can_withdraw": Schema.Boolean.annotate({ "title": "Can Withdraw" }), "bids": Schema.Array(UfaBid).annotate({ "title": "Bids" }), "unbid_pickups": Schema.Array(UnbidPickup).annotate({ "title": "Unbid Pickups" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "UfaBids", "identifier": "UfaBids" })
 export type ExpiringContracts = { readonly "year": number, readonly "after_season": string, readonly "offseasons": ReadonlyArray<OffseasonYear>, readonly "ufa_age": number, readonly "ufa_day": string, readonly "players": ReadonlyArray<ExpiringPlayer>, readonly "no_contract": ReadonlyArray<NoContract> } & { readonly [x: string]: Schema.Json }
 export const ExpiringContracts = Schema.StructWithRest(Schema.Struct({ "year": Schema.Number.annotate({ "title": "Year" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "after_season": Schema.String.annotate({ "title": "After Season" }), "offseasons": Schema.Array(OffseasonYear).annotate({ "title": "Offseasons" }), "ufa_age": Schema.Number.annotate({ "title": "Ufa Age" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "ufa_day": Schema.String.annotate({ "title": "Ufa Day" }), "players": Schema.Array(ExpiringPlayer).annotate({ "title": "Players" }), "no_contract": Schema.Array(NoContract).annotate({ "title": "No Contract" }) }), [Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" }))]).annotate({ "title": "ExpiringContracts", "identifier": "ExpiringContracts" })
 export type LeagueRules = { readonly "year": number, readonly "league_year": number, readonly "can_edit": boolean, readonly "rules": ReadonlyArray<LeagueRule> } & { readonly [x: string]: Schema.Json }
@@ -172,6 +186,36 @@ export type ChangeRule200 = LeagueRules
 export const ChangeRule200 = LeagueRules
 export type ChangeRule422 = HTTPValidationError
 export const ChangeRule422 = HTTPValidationError
+export type UfaBids200 = UfaBids
+export const UfaBids200 = UfaBids
+export type MakeUfaBidRequestJson = NewUfaBid
+export const MakeUfaBidRequestJson = NewUfaBid
+export type MakeUfaBid200 = UfaBids
+export const MakeUfaBid200 = UfaBids
+export type MakeUfaBid422 = HTTPValidationError
+export const MakeUfaBid422 = HTTPValidationError
+export type FreeAgentsParams = { readonly "q": string }
+export const FreeAgentsParams = Schema.Struct({ "q": Schema.String.annotate({ "title": "Q", "description": "Part of a name" }).check(Schema.isMinCodePoints(2).annotate({ "expected": "a string with at least 2 code points" })) })
+export type FreeAgents200 = ReadonlyArray<FreeAgent>
+export const FreeAgents200 = Schema.Array(FreeAgent).annotate({ "title": "Response Free Agents" })
+export type FreeAgents422 = HTTPValidationError
+export const FreeAgents422 = HTTPValidationError
+export type PreviewUfaBidParams = { readonly "player_id": string, readonly "salary": number, readonly "team_id"?: string }
+export const PreviewUfaBidParams = Schema.Struct({ "player_id": Schema.String.annotate({ "title": "Player Id" }), "salary": Schema.Number.annotate({ "title": "Salary" }).check(Schema.isFinite().annotate({ "expected": "a finite number" })), "team_id": Schema.optionalKey(Schema.String.annotate({ "title": "Team Id", "default": "me" })) })
+export type PreviewUfaBid200 = UfaBidPreview
+export const PreviewUfaBid200 = UfaBidPreview
+export type PreviewUfaBid422 = HTTPValidationError
+export const PreviewUfaBid422 = HTTPValidationError
+export type WithdrawUfaBid200 = UfaBids
+export const WithdrawUfaBid200 = UfaBids
+export type WithdrawUfaBid422 = HTTPValidationError
+export const WithdrawUfaBid422 = HTTPValidationError
+export type VoidUfaBidRequestJson = UfaBidVoid
+export const VoidUfaBidRequestJson = UfaBidVoid
+export type VoidUfaBid200 = UfaBids
+export const VoidUfaBid200 = UfaBids
+export type VoidUfaBid422 = HTTPValidationError
+export const VoidUfaBid422 = HTTPValidationError
 export type OverviewParams = { readonly "lineup"?: string }
 export const OverviewParams = Schema.Struct({ "lineup": Schema.optionalKey(Schema.String.annotate({ "title": "Lineup", "description": "best = daily best lineups from non-minors/IR players over the rest-of-season NHL schedule; active = only players currently ACTIVE in Fantrax", "default": "best" })) })
 export type Overview200 = Schema.Json
@@ -557,6 +601,55 @@ export const make = (
     }))
     ))
   ),
+    "ufaBids": (options: Parameters<Cfl["ufaBids"]>[0]) => HttpClientRequest.get("/ufa-bids").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(UfaBids200),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "makeUfaBid": (options: Parameters<Cfl["makeUfaBid"]>[0]) => HttpClientRequest.post("/ufa-bids").pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(MakeUfaBid200),
+      "422": decodeError("MakeUfaBid422", MakeUfaBid422),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "freeAgents": (options: Parameters<Cfl["freeAgents"]>[0]) => HttpClientRequest.get("/free-agents").pipe(
+      HttpClientRequest.setUrlParams({ "q": options.params["q"] as any }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(FreeAgents200),
+      "422": decodeError("FreeAgents422", FreeAgents422),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "previewUfaBid": (options: Parameters<Cfl["previewUfaBid"]>[0]) => HttpClientRequest.get("/ufa-bids/preview").pipe(
+      HttpClientRequest.setUrlParams({ "player_id": options.params["player_id"] as any, "salary": options.params["salary"] as any, "team_id": options.params["team_id"] as any }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(PreviewUfaBid200),
+      "422": decodeError("PreviewUfaBid422", PreviewUfaBid422),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "withdrawUfaBid": (bidId, options: Parameters<Cfl["withdrawUfaBid"]>[1]) => __makePathRequest(HttpClientRequest.post, [bidId], () => "/ufa-bids/" + __encodePathParam(bidId) + "/withdraw").pipe(
+    Effect.flatMap((request) => request.pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(WithdrawUfaBid200),
+      "422": decodeError("WithdrawUfaBid422", WithdrawUfaBid422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "voidUfaBid": (bidId, options: Parameters<Cfl["voidUfaBid"]>[1]) => __makePathRequest(HttpClientRequest.post, [bidId], () => "/ufa-bids/" + __encodePathParam(bidId) + "/void").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(VoidUfaBid200),
+      "422": decodeError("VoidUfaBid422", VoidUfaBid422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "overview": (options: Parameters<Cfl["overview"]>[0]) => HttpClientRequest.get("/analysis/overview").pipe(
       HttpClientRequest.setUrlParams({ "lineup": options?.params?.["lineup"] as any }),
       withResponse(options?.config)(HttpClientResponse.matchStatus({
@@ -862,6 +955,49 @@ readonly "rules": {
 readonly "changeRule": {
     <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof ChangeRuleRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<ChangeRule200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"ChangeRule422", ChangeRule422>>;
     <Config extends OperationConfig | undefined = undefined>(key: string, options: { readonly payload: typeof ChangeRuleRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<ChangeRule200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"ChangeRule422", ChangeRule422>>;
+  }
+  /**
+* This season's in-season UFA bids, newest first, and the pickups that got no winning bid.
+*/
+readonly "ufaBids": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<UfaBids200, Config>, HttpClientError.HttpClientError | SchemaError>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<UfaBids200, Config | undefined>, HttpClientError.HttpClientError | SchemaError>;
+  }
+  /**
+* Bid on a player on no CFL team. The highest bid for 24 hours wins him. 400 with the reasons the
+* rules refuse the bid, and 409 when another bid came first.
+*/
+readonly "makeUfaBid": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof MakeUfaBidRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<MakeUfaBid200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"MakeUfaBid422", MakeUfaBid422>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly payload: typeof MakeUfaBidRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<MakeUfaBid200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"MakeUfaBid422", MakeUfaBid422>>;
+  }
+  /**
+* Players on no CFL team whose names match, for the bid form: at most 20, by Fantrax ADP.
+*/
+readonly "freeAgents": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof FreeAgentsParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<FreeAgents200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"FreeAgents422", FreeAgents422>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof FreeAgentsParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<FreeAgents200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"FreeAgents422", FreeAgents422>>;
+  }
+  /**
+* What a bid would do, without saving it. It runs the same checks as making the bid.
+*/
+readonly "previewUfaBid": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof PreviewUfaBidParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<PreviewUfaBid200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"PreviewUfaBid422", PreviewUfaBid422>>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly params: typeof PreviewUfaBidParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<PreviewUfaBid200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"PreviewUfaBid422", PreviewUfaBid422>>;
+  }
+  /**
+* Take back a pending bid, if the ufa.withdraw rule allows it. For the bidding team's GM or the admin.
+*/
+readonly "withdrawUfaBid": {
+    <Config extends OperationConfig | undefined = undefined>(bidId: string, options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<WithdrawUfaBid200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"WithdrawUfaBid422", WithdrawUfaBid422>>;
+    <Config extends OperationConfig | undefined = undefined>(bidId: string, options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<WithdrawUfaBid200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"WithdrawUfaBid422", WithdrawUfaBid422>>;
+  }
+  /**
+* Cancel a pending or won bid, for example one on the wrong player. Takes a reason.
+*/
+readonly "voidUfaBid": {
+    <Config extends OperationConfig | undefined = undefined>(bidId: string, options: { readonly payload: typeof VoidUfaBidRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<VoidUfaBid200, Config>, HttpClientError.HttpClientError | SchemaError | CflError<"VoidUfaBid422", VoidUfaBid422>>;
+    <Config extends OperationConfig | undefined = undefined>(bidId: string, options: { readonly payload: typeof VoidUfaBidRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<VoidUfaBid200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | CflError<"VoidUfaBid422", VoidUfaBid422>>;
   }
   /**
 * Every team's projected category ranks (1 = best) and actual H2H category records.

@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import analysis as A
+from . import bids as B
 from . import changes
 from . import rules as R
 from .db import Connection, row, rows, transaction, upsert
@@ -47,17 +48,28 @@ def save_override(conn: Connection, league_id: str, player_id: str, salaries: Se
 
 
 def mark_pickups(conn: Connection, ctx: A.Context, today: Optional[date] = None) -> Dict[str, Any]:
-    """Give each player picked up in season with no contract the rules' 1-year in-season UFA deal. A pickup
-    was on no team in the last change-log snapshot; minors players are left alone (unsigned prospects)."""
+    """Give each won UFA bid's player, once he's on the winner's roster, the rules' 1-year in-season UFA deal
+    at the bid, and cancel pending bids on players already on a team. Then give each other player picked up
+    in season with no contract that deal at a placeholder salary. A pickup was on no team in the last
+    change-log snapshot; minors players are left alone (unsigned prospects)."""
+    B.settle(conn, ctx.league_id)
+    signed = {}
+    for bid in rows(conn, "SELECT * FROM ufa_bids WHERE league_id=? AND state='won'", (ctx.league_id,)):
+        p = ctx.players.get(bid["player_id"])
+        if p and p.team_id == bid["team_id"]:
+            save_override(conn, ctx.league_id, p.fantrax_id, [bid["salary"]], "IN_SEASON_UFA", B.WON_NOTE)
+            B.BIDS.fire(conn, B.key(bid), "sign", "sync")
+            signed[p.fantrax_id] = p.name
+    out = {"marked": [], "signed": sorted(signed.values()), "cancelled": B.cancel_taken(conn, ctx)}
     old, day = changes.previous(conn, ctx), (today or date.today()).isoformat()
     start, end = ctx.league["start_date"], ctx.league["end_date"]
     if old is None or not (start and end and start <= day <= end):
-        return {"marked": []}
+        return out
     picked = [p for p in ctx.players.values() if p.team_id and p.salary is None and p.roster_status != "MINORS"
-              and old.get(p.fantrax_id, changes.NOTHING)["team_id"] is None]
+              and p.fantrax_id not in signed and old.get(p.fantrax_id, changes.NOTHING)["team_id"] is None]
     for p in picked:
         save_override(conn, ctx.league_id, p.fantrax_id, [PICKUP_SALARY], "IN_SEASON_UFA", A.PICKUP_NOTE)
-    return {"marked": sorted(p.name for p in picked)}
+    return dict(out, marked=sorted(p.name for p in picked))
 
 
 def delete_override(conn: Connection, league_id: str, player_id: str) -> bool:
